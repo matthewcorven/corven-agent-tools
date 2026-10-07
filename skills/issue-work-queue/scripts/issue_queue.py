@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 
@@ -51,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--project",
         default=None,
-        help="GitHub Projects V2 number. When set, additionally reports drift between the board's Status field and the queue state as an opt-in diagnostic (never affects readiness).",
+        help="GitHub Projects V2 number. When set (or declared in the repo's .github/issue-queue.json), additionally reports drift between the board's Status field and the queue state as an opt-in diagnostic (never affects readiness).",
     )
     parser.add_argument(
         "--project-owner",
@@ -217,6 +218,60 @@ def parse_project_items(data: Dict[str, object], repo: str) -> Dict[int, Optiona
 def fetch_project_items(project: str, owner: str, repo: str, limit: int) -> Dict[int, Optional[str]]:
     output = run_gh(["project", "item-list", project, "--owner", owner, "--limit", str(limit), "--format", "json"])
     return parse_project_items(json.loads(output), repo)
+
+
+def find_repo_config(start: Optional[object] = None) -> Optional[str]:
+    """Locate `.github/issue-queue.json` from `start` (cwd by default) upward, stopping at the repo root.
+
+    The first directory containing `.git` is treated as the repo root and is
+    still checked for the config, but the walk never escapes the repository.
+    """
+    current = Path(start) if start is not None else Path.cwd()
+    current = current.resolve()
+    for directory in [current, *current.parents]:
+        candidate = directory / ".github" / "issue-queue.json"
+        if candidate.is_file():
+            return str(candidate)
+        if (directory / ".git").exists():
+            return None
+    return None
+
+
+def parse_project_config(data: object, source: str) -> Optional[Dict[str, Optional[str]]]:
+    """Validate a parsed issue-queue config. Returns None when it declares no project.
+
+    Raises ValueError on malformed content so callers can surface the problem
+    (this is a diagnostic — errors must be visible but never fatal to the queue).
+    """
+    if not isinstance(data, dict):
+        raise ValueError(f"{source}: config must be a JSON object")
+
+    project = data.get("project")
+    if project is None:
+        return None
+
+    project_text = str(project).strip()
+    if not project_text.isdigit():
+        raise ValueError(f"{source}: 'project' must be a project number, got {project!r}")
+
+    owner = data.get("owner")
+    if owner is not None and not (isinstance(owner, str) and owner.strip()):
+        raise ValueError(f"{source}: 'owner' must be a non-empty string when present")
+
+    return {"project": project_text, "owner": owner.strip() if isinstance(owner, str) else None}
+
+
+def load_project_config(start: Optional[object] = None) -> Optional[Dict[str, Optional[str]]]:
+    """Load the repo's `.github/issue-queue.json`, or None when the repo declares no board."""
+    path = find_repo_config(start)
+    if path is None:
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{path}: {exc}") from exc
+    return parse_project_config(data, path)
 
 
 def build_board_drift(
@@ -518,7 +573,14 @@ def format_status_text(result: Dict[str, object]) -> str:
 
 
 def format_board_text(board: Dict[str, object]) -> List[str]:
-    header = f"Board drift (project #{board.get('project')} @{board.get('owner')}):"
+    project = board.get("project")
+    location = ""
+    if project is not None:
+        location = f" (project #{project}"
+        if board.get("owner"):
+            location += f" @{board['owner']}"
+        location += ")"
+    header = f"Board drift{location}:"
     if board.get("error"):
         return [header, f"- unavailable: {board['error']}"]
 
@@ -569,16 +631,37 @@ def main() -> int:
         "blocked": blocked,
     }
 
-    if args.project:
-        # Opt-in diagnostic: compare the board's Status field against
-        # queue-derived expectations. Never feeds back into readiness.
-        project_owner = args.project_owner or repo.split("/")[0]
-        board_result: Dict[str, object] = {"project": args.project, "owner": project_owner}
+    # Board drift diagnostic: project from the --project flag, else the repo's
+    # .github/issue-queue.json (repo declares, tool reads — the agent never has
+    # to know the number). Never feeds back into readiness; failures degrade to
+    # board.error so the core queue always renders.
+    project = args.project
+    project_owner = args.project_owner
+    config_error: Optional[str] = None
+    if project is None:
         try:
-            board_statuses = fetch_project_items(args.project, project_owner, repo, args.limit)
-            board_result.update(build_board_drift(visible_summaries, board_statuses, linked_open_issue_numbers))
-        except Exception as exc:
-            board_result["error"] = str(exc)
+            project_config = load_project_config()
+        except ValueError as exc:
+            project_config = None
+            config_error = str(exc)
+        if project_config is not None:
+            project = project_config.get("project")
+            if project_owner is None:
+                project_owner = project_config.get("owner")
+
+    if project is not None or config_error is not None:
+        board_result: Dict[str, object] = {}
+        if project is not None:
+            owner = project_owner or repo.split("/")[0]
+            board_result["project"] = project
+            board_result["owner"] = owner
+            try:
+                board_statuses = fetch_project_items(project, owner, repo, args.limit)
+                board_result.update(build_board_drift(visible_summaries, board_statuses, linked_open_issue_numbers))
+            except Exception as exc:
+                board_result["error"] = str(exc)
+        else:
+            board_result["error"] = f"invalid issue-queue config: {config_error}"
         queue_result["board"] = board_result
 
     if args.mode == "status":

@@ -1,6 +1,8 @@
 import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
@@ -12,7 +14,9 @@ from issue_queue import (
     expected_board_status,
     filter_summaries_by_label,
     is_issue_available,
+    load_project_config,
     matches_label_filter,
+    parse_project_config,
     parse_project_items,
 )
 
@@ -120,6 +124,51 @@ class IssueQueueTests(unittest.TestCase):
         self.assertEqual({"missing_status", "unexpected_status"}, kinds)
         self.assertEqual(0, result["drift_count"])
         self.assertEqual(2, result["informational_count"])
+
+    def test_parse_project_config_accepts_numbers_and_strings(self) -> None:
+        self.assertEqual({"project": "3", "owner": None}, parse_project_config({"project": 3}, "cfg"))
+        self.assertEqual(
+            {"project": "12", "owner": "acme"},
+            parse_project_config({"project": "12", "owner": "acme"}, "cfg"),
+        )
+        self.assertIsNone(parse_project_config({"owner": "acme"}, "cfg"))
+
+        with self.assertRaises(ValueError):
+            parse_project_config({"project": "abc"}, "cfg")
+        with self.assertRaises(ValueError):
+            parse_project_config(["project", 3], "cfg")
+
+    def test_load_project_config_finds_repo_file_from_nested_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / ".git").mkdir()
+            (root_path / ".github").mkdir()
+            (root_path / ".github" / "issue-queue.json").write_text('{"project": 3}', encoding="utf-8")
+            nested = root_path / "src" / "app"
+            nested.mkdir(parents=True)
+
+            self.assertEqual({"project": "3", "owner": None}, load_project_config(nested))
+
+    def test_load_project_config_stops_at_git_root(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / ".github").mkdir()
+            (root_path / ".github" / "issue-queue.json").write_text('{"project": 7}', encoding="utf-8")
+            repo = root_path / "repo"
+            (repo / ".git").mkdir(parents=True)
+            (repo / "src").mkdir()
+
+            self.assertIsNone(load_project_config(repo / "src"))
+
+    def test_load_project_config_raises_on_malformed_file(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / ".git").mkdir()
+            (root_path / ".github").mkdir()
+            (root_path / ".github" / "issue-queue.json").write_text("{not json", encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                load_project_config(root_path)
 
 
 if __name__ == "__main__":

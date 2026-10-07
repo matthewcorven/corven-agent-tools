@@ -48,7 +48,16 @@ The issue-queue helper's output **must take precedence over raw `gh issue list`*
 
 With `--project <number>` (GitHub Projects V2), the helper additionally **reports drift** between the board's `Status` field and queue-derived expectations — as a diagnostic for the receiving AI model to act on. It classifies each mismatch (`done_but_open`, `closed_not_done`, `work_started_board_stale`, plus informational kinds), flags open queue issues missing from the board, and never feeds back into readiness: the queue stays authoritative, the board is a view that can drift.
 
+**The repo declares its board, the tool reads it.** Drop a `.github/issue-queue.json` at the repo root so agents never have to know the project number:
+
+```json
+{ "project": 3 }
+```
+
+When `--project` is omitted the helper discovers that file automatically (walking up from the current directory, stopping at the repo root). Precedence: explicit `--project` flag → repo config → no board section. Optional `"owner"` key overrides the default (repository owner); a malformed config surfaces as `board.error` without breaking the queue.
+
 ```shell
+# equivalent — flag wins over config when both are present
 python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --project 3 --format text
 ```
 

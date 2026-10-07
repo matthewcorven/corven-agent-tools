@@ -42,6 +42,8 @@ python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --for
 | `--label` | repeatable | `squad` | `squad` matches the base label plus `squad:{member}` labels; repeat for multiple (AND) |
 | `--format` | `json`, `text` | `json` | |
 | `--limit` | int | `1000` | Max issues fetched from GitHub |
+| `--project` | number | repo's `.github/issue-queue.json` | GitHub Projects V2 number; enables the board-drift diagnostic |
+| `--project-owner` | login | repository owner | Owner of the project |
 
 ## Readiness semantics
 
@@ -54,6 +56,14 @@ python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --for
 ## Board drift diagnostic (opt-in `--project`)
 
 Pass `--project <number>` (GitHub Projects V2) to additionally compare the board's `Status` field against queue-derived expectations.
+
+**You don't need to know the project number.** A repo declares it once in `.github/issue-queue.json`:
+
+```json
+{ "project": 3 }
+```
+
+When `--project` is omitted, the helper reads that file from the current working directory upward (stopping at the repo root — it never escapes the repository). Precedence: **explicit `--project` flag → repo config → no board section**. The repo owns its own board context, so agents get the diagnostic automatically without having to be told the number. An optional `"owner"` key overrides the default owner (the repository owner). A malformed config degrades to `board.error` — visible in the output, but never fatal to the queue.
 
 **This is a diagnostic only.** It never changes readiness, and per the precedence rule the queue output remains authoritative — the board is a view that can drift, and these entries exist so a receiving agent can see *where* it drifted and act on it.
 
