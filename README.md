@@ -38,11 +38,19 @@ python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --for
 python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --format text --mode status
 ```
 
-Flags: `--mode {queue,status}` · `--repo owner/repo` · `--state {all,open}` · `--label` (repeatable, default `squad`) · `--format {text,json}` · `--limit N`.
+Flags: `--mode {queue,status}` · `--repo owner/repo` · `--state {all,open}` · `--label` (repeatable, default `squad`) · `--format {text,json}` · `--limit N` · `--project N` (optional board-drift diagnostic) · `--project-owner login`.
 
 ### The precedence rule
 
 The issue-queue helper's output **must take precedence over raw `gh issue list`**. Agents must never infer readiness, ordering, or blockers from `gh issue list` or ad hoc label scans; raw GitHub queries are follow-up only, after the helper identifies the specific issue or PR to inspect.
+
+### Board drift diagnostic
+
+With `--project <number>` (GitHub Projects V2), the helper additionally **reports drift** between the board's `Status` field and queue-derived expectations — as a diagnostic for the receiving AI model to act on. It classifies each mismatch (`done_but_open`, `closed_not_done`, `work_started_board_stale`, plus informational kinds), flags open queue issues missing from the board, and never feeds back into readiness: the queue stays authoritative, the board is a view that can drift.
+
+```shell
+python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --project 3 --format text
+```
 
 ## Authoring issues for the queue
 

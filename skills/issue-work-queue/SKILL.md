@@ -51,6 +51,31 @@ python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --for
 - References are issue numbers (`#123`, `123`) or task ids (`7.4`, parsed from `[Task X.Y]` titles). `none` / `n/a` sections mean no dependencies.
 - Output sections: `Next available`, `Available`, `Blocked` (with `depends on` / `blocked by` reasons).
 
+## Board drift diagnostic (opt-in `--project`)
+
+Pass `--project <number>` (GitHub Projects V2) to additionally compare the board's `Status` field against queue-derived expectations.
+
+**This is a diagnostic only.** It never changes readiness, and per the precedence rule the queue output remains authoritative — the board is a view that can drift, and these entries exist so a receiving agent can see *where* it drifted and act on it.
+
+Expected-status derivation: CLOSED → `Done`; OPEN with a linked open PR → `In Progress`; otherwise → `Todo` (the board has no Blocked state, so blocked work is expected to sit in `Todo`).
+
+| kind | meaning | informational |
+| --- | --- | --- |
+| `done_but_open` | Board says Done but the issue is still OPEN | no |
+| `closed_not_done` | Issue CLOSED but the board card wasn't moved to Done | no |
+| `work_started_board_stale` | Linked open PR exists but the board still shows Todo | no |
+| `in_progress_without_pr` | Board shows In Progress with no linked open PR (may be pre-PR work) | yes |
+| `missing_status` | Board item has no Status value | yes |
+| `unexpected_status` | Board status outside the Todo/In Progress/Done model | yes |
+
+Plus `not_on_board`: open queue issues absent from the project (informational).
+
+`--project-owner` defaults to the repository owner. If the project query fails, the output carries `board.error` and the queue still renders — the diagnostic never breaks the core queue.
+
+```bash
+python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --project 3 --format text
+```
+
 ## Authoring issues
 
 ```markdown

@@ -48,6 +48,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--label", action="append", default=None, help="Label to include. Repeat for multiple labels. Defaults to squad.")
     parser.add_argument("--format", choices=["json", "text"], default="json", help="Output format (default: json).")
     parser.add_argument("--limit", type=int, default=1000, help="Maximum issues to fetch from GitHub (default: 1000).")
+    parser.add_argument(
+        "--project",
+        default=None,
+        help="GitHub Projects V2 number. When set, additionally reports drift between the board's Status field and the queue state as an opt-in diagnostic (never affects readiness).",
+    )
+    parser.add_argument(
+        "--project-owner",
+        default=None,
+        help="Owner (user or organization) of the project. Defaults to the repository owner from --repo.",
+    )
     return parser.parse_args()
 
 
@@ -153,9 +163,11 @@ def fetch_pull_requests(repo: str, state: str, limit: int) -> List[Dict[str, obj
     return json.loads(run_gh(command_args))
 
 
-def collect_linked_issue_numbers(pull_requests: List[Dict[str, object]]) -> Set[int]:
+def collect_linked_issue_numbers(pull_requests: List[Dict[str, object]], state: Optional[str] = None) -> Set[int]:
     linked_issue_numbers: Set[int] = set()
     for pull_request in pull_requests:
+        if state is not None and pull_request.get("state") != state:
+            continue
         for reference in pull_request.get("closingIssuesReferences") or []:
             if not isinstance(reference, dict):
                 continue
@@ -168,6 +180,130 @@ def collect_linked_issue_numbers(pull_requests: List[Dict[str, object]]) -> Set[
 
 def is_issue_available(summary: Dict[str, object], linked_issue_numbers: Set[int]) -> bool:
     return summary.get("state") == "OPEN" and not summary.get("is_blocked") and int(summary["number"]) not in linked_issue_numbers
+
+
+def expected_board_status(summary: Dict[str, object], linked_open_issue_numbers: Set[int]) -> str:
+    """Queue-derived expectation for the board's Status field.
+
+    CLOSED -> Done; OPEN with a linked open PR -> In Progress; otherwise -> Todo.
+    The board has no Blocked state, so blocked work is expected to sit in Todo.
+    """
+    if summary.get("state") != "OPEN":
+        return "Done"
+    if int(summary["number"]) in linked_open_issue_numbers:
+        return "In Progress"
+    return "Todo"
+
+
+def parse_project_items(data: Dict[str, object], repo: str) -> Dict[int, Optional[str]]:
+    """Map issue number -> board Status for project items belonging to `repo` (case-insensitive)."""
+    normalized_repo = (repo or "").lower()
+    statuses: Dict[int, Optional[str]] = {}
+    for item in data.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, dict):
+            continue
+        if str(content.get("repository") or "").lower() != normalized_repo:
+            continue
+        number = content.get("number")
+        if number is None:
+            continue
+        statuses[int(number)] = item.get("status")
+    return statuses
+
+
+def fetch_project_items(project: str, owner: str, repo: str, limit: int) -> Dict[int, Optional[str]]:
+    output = run_gh(["project", "item-list", project, "--owner", owner, "--limit", str(limit), "--format", "json"])
+    return parse_project_items(json.loads(output), repo)
+
+
+def build_board_drift(
+    visible_summaries: List[Dict[str, object]],
+    board_statuses: Dict[int, Optional[str]],
+    linked_open_issue_numbers: Set[int],
+) -> Dict[str, object]:
+    """Compare the board's Status field against queue-derived expectations.
+
+    Diagnostic only: entries here never change readiness. They tell the
+    receiving agent exactly where the board and the queue disagree, and
+    which side to trust (the queue — see the precedence rule in SKILL.md).
+    """
+    drift: List[Dict[str, object]] = []
+    not_on_board: List[Dict[str, object]] = []
+
+    for summary in visible_summaries:
+        number = int(summary["number"])
+        title = str(summary.get("title") or "")
+        expected = expected_board_status(summary, linked_open_issue_numbers)
+
+        if number not in board_statuses:
+            if summary.get("state") == "OPEN":
+                not_on_board.append({"number": number, "title": title, "expected_status": expected})
+            continue
+
+        actual = board_statuses[number]
+        if actual == expected:
+            continue
+
+        if actual is None:
+            kind, informational, hint = (
+                "missing_status",
+                True,
+                "Board item has no Status value; set one so the card is interpretable.",
+            )
+        elif actual == "Done" and expected != "Done":
+            kind, informational, hint = (
+                "done_but_open",
+                False,
+                "Board says Done but the issue is still OPEN; verify the work finished or move the card back.",
+            )
+        elif expected == "Done":
+            kind, informational, hint = (
+                "closed_not_done",
+                False,
+                f"Issue is CLOSED but the board still shows {actual}; the card is stale.",
+            )
+        elif expected == "In Progress":
+            kind, informational, hint = (
+                "work_started_board_stale",
+                False,
+                f"A linked open PR exists but the board shows {actual}; move the card to In Progress.",
+            )
+        elif actual == "In Progress":
+            kind, informational, hint = (
+                "in_progress_without_pr",
+                True,
+                "Board shows In Progress but there is no linked open PR; work may be pre-PR. Informational only.",
+            )
+        else:
+            kind, informational, hint = (
+                "unexpected_status",
+                True,
+                f"Board status '{actual}' is outside the queue's Todo/In Progress/Done model; informational.",
+            )
+
+        drift.append(
+            {
+                "number": number,
+                "title": title,
+                "board_status": actual,
+                "expected_status": expected,
+                "kind": kind,
+                "informational": informational,
+                "hint": hint,
+            }
+        )
+
+    drift_count = sum(1 for entry in drift if not entry["informational"])
+    return {
+        "drift": drift,
+        "drift_count": drift_count,
+        "informational_count": len(drift) - drift_count,
+        "not_on_board": not_on_board,
+        "not_on_board_count": len(not_on_board),
+    }
 
 
 def build_issue_index(issues: List[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
@@ -309,6 +445,11 @@ def format_queue_text(result: Dict[str, object]) -> str:
     else:
         lines.append("- none")
 
+    board = result.get("board")
+    if board:
+        lines.append("")
+        lines.extend(format_board_text(board))
+
     return "\n".join(lines)
 
 
@@ -368,7 +509,38 @@ def format_status_text(result: Dict[str, object]) -> str:
     else:
         lines.append("- none")
 
+    board = result.get("board")
+    if board:
+        lines.append("")
+        lines.extend(format_board_text(board))
+
     return "\n".join(lines)
+
+
+def format_board_text(board: Dict[str, object]) -> List[str]:
+    header = f"Board drift (project #{board.get('project')} @{board.get('owner')}):"
+    if board.get("error"):
+        return [header, f"- unavailable: {board['error']}"]
+
+    lines = [header]
+    drift = board.get("drift") or []
+    if drift:
+        for entry in drift:
+            board_status = entry.get("board_status") or "unset"
+            marker = "; informational" if entry.get("informational") else ""
+            lines.append(
+                f"- #{entry['number']} {entry['title']} — board: {board_status}, "
+                f"expected: {entry['expected_status']} [{entry['kind']}{marker}] {entry['hint']}"
+            )
+    else:
+        lines.append("- none")
+
+    not_on_board = board.get("not_on_board") or []
+    if not_on_board:
+        numbers = ", ".join(f"#{entry['number']}" for entry in not_on_board)
+        lines.append(f"- Open queue issues not on the board ({len(not_on_board)}): {numbers}")
+
+    return lines
 
 
 def main() -> int:
@@ -384,6 +556,7 @@ def main() -> int:
     visible_summaries = filter_summaries_by_label(summaries, issue_graph, labels)
     pull_requests = fetch_pull_requests(repo, "all", args.limit)
     linked_issue_numbers = collect_linked_issue_numbers(pull_requests)
+    linked_open_issue_numbers = collect_linked_issue_numbers(pull_requests, "OPEN")
     available = [issue for issue in visible_summaries if is_issue_available(issue, linked_issue_numbers)]
     blocked = [issue for issue in visible_summaries if issue["state"] == "OPEN" and issue["is_blocked"]]
 
@@ -395,6 +568,18 @@ def main() -> int:
         "available": available,
         "blocked": blocked,
     }
+
+    if args.project:
+        # Opt-in diagnostic: compare the board's Status field against
+        # queue-derived expectations. Never feeds back into readiness.
+        project_owner = args.project_owner or repo.split("/")[0]
+        board_result: Dict[str, object] = {"project": args.project, "owner": project_owner}
+        try:
+            board_statuses = fetch_project_items(args.project, project_owner, repo, args.limit)
+            board_result.update(build_board_drift(visible_summaries, board_statuses, linked_open_issue_numbers))
+        except Exception as exc:
+            board_result["error"] = str(exc)
+        queue_result["board"] = board_result
 
     if args.mode == "status":
         # Board counts are always computed from OPEN issues only. When the fetch state is
