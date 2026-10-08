@@ -47,7 +47,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--label", action="append", default=None, help="Label to include. Repeat for multiple labels. Defaults to squad.")
-    parser.add_argument("--format", choices=["json", "text"], default="json", help="Output format (default: json).")
+    parser.add_argument(
+        "--format",
+        choices=["json", "text", "ascii", "mermaid", "markdown-mermaid"],
+        default="json",
+        help=(
+            "Output format (default: json). 'text' is the plain queue view; "
+            "'ascii', 'mermaid', and 'markdown-mermaid' render the dependency graph as a flow diagram "
+            "(tiered ASCII, bare Mermaid source, or a Markdown document with an embedded Mermaid block)."
+        ),
+    )
     parser.add_argument("--limit", type=int, default=1000, help="Maximum issues to fetch from GitHub (default: 1000).")
     parser.add_argument(
         "--project",
@@ -605,6 +614,317 @@ def format_board_text(board: Dict[str, object]) -> List[str]:
     return lines
 
 
+# ---------------------------------------------------------------------------
+# Flow diagram formats (ascii / mermaid / markdown-mermaid)
+#
+# All three render the same dependency graph so agents and humans can pick the
+# representation that fits the moment: tiered ASCII for terminals and logs,
+# bare Mermaid for piping into a renderer, and a Markdown document with an
+# embedded Mermaid block for GitHub / VS Code preview.
+# ---------------------------------------------------------------------------
+
+_FLOW_NODE_KINDS = ("ready", "in-progress", "open", "blocked", "done", "missing")
+
+_FLOW_CLASS_DEFS = {
+    "ready": "fill:#d4edda,stroke:#198754,color:#000",
+    "in-progress": "fill:#cfe2ff,stroke:#0d6efd,color:#000",
+    "open": "fill:#f8f9fa,stroke:#6c757d,color:#000",
+    "blocked": "fill:#f8d7da,stroke:#dc3545,color:#000",
+    "done": "fill:#e9ecef,stroke:#adb5bd,color:#000",
+    "missing": "fill:#fff3cd,stroke:#ffc107,color:#000,stroke-dasharray: 5 5",
+}
+
+
+def build_flow_graph(
+    visible_summaries: List[Dict[str, object]],
+    available: List[Dict[str, object]],
+    blocked: List[Dict[str, object]],
+    issue_index: Dict[str, Dict[str, object]],
+) -> Dict[str, object]:
+    """Build the dependency graph for the flow diagram formats.
+
+    Nodes are open issues in scope plus every referenced node (satisfied
+    CLOSED referents, out-of-scope OPEN referents, and missing references).
+    Edges point from a referent to the issue that references it — the
+    direction work must flow.
+    """
+    ready_numbers = {int(summary["number"]) for summary in available}
+    blocked_numbers = {int(summary["number"]) for summary in blocked}
+    linked_progress = {
+        int(summary["number"])
+        for summary in visible_summaries
+        if summary.get("state") == "OPEN"
+        and int(summary["number"]) not in ready_numbers
+        and int(summary["number"]) not in blocked_numbers
+    }
+
+    nodes: Dict[str, Dict[str, object]] = {}
+    edges: List[Dict[str, str]] = []
+    edge_seen: Set[tuple] = set()
+
+    def add_node(node_id: str, label: str, kind: str, number: Optional[int] = None) -> None:
+        existing = nodes.get(node_id)
+        if existing is None:
+            nodes[node_id] = {"id": node_id, "label": label, "kind": kind, "number": number}
+        elif existing["kind"] in ("missing", "done", "open") and kind not in ("missing",):
+            # A real in-scope node always beats the placeholder created by a reference.
+            existing.update(label=label, kind=kind, number=number)
+
+    def add_edge(source: str, target: str) -> None:
+        key = (source, target)
+        if key not in edge_seen:
+            edge_seen.add(key)
+            edges.append({"from": source, "to": target})
+
+    def open_kind(number: int) -> str:
+        if number in ready_numbers:
+            return "ready"
+        if number in blocked_numbers:
+            return "blocked"
+        return "in-progress" if number in linked_progress else "open"
+
+    for summary in visible_summaries:
+        if summary.get("state") != "OPEN":
+            continue
+        number = int(summary["number"])
+        add_node(f"n{number}", f"#{number} {summary['title']}", open_kind(number), number)
+
+        for reference in list(summary.get("depends_on") or []) + list(summary.get("blocked_by") or []):
+            resolved = resolve_reference(reference, issue_index)
+            if resolved is not None:
+                referent_number = int(resolved["number"])
+                if resolved.get("state") == "OPEN":
+                    source_kind = open_kind(referent_number)
+                else:
+                    source_kind = "done"
+                add_node(
+                    f"n{referent_number}",
+                    f"#{referent_number} {resolved.get('title') or ''}".rstrip(),
+                    source_kind,
+                    referent_number,
+                )
+            else:
+                source_id = "m_" + re.sub(r"[^0-9A-Za-z]+", "_", reference)
+                add_node(source_id, f"{reference} (missing)", "missing")
+            add_edge(source_id if resolved is None else f"n{referent_number}", f"n{number}")
+
+    return {"nodes": list(nodes.values()), "edges": edges}
+
+
+def compute_flow_tiers(flow: Dict[str, object]) -> tuple:
+    """Assign each node a tier: 0 = no open dependencies, n = waits on tier n-1.
+
+    Returns (tiers, cyclic) where cyclic holds node ids caught in a dependency
+    cycle — they are reported separately instead of being tiered, so a cycle
+    can never hide inside the layout.
+    """
+    node_ids = {node["id"] for node in flow["nodes"]}
+    incoming: Dict[str, List[str]] = {node_id: [] for node_id in node_ids}
+    for edge in flow["edges"]:
+        if edge["to"] in incoming and edge["from"] in node_ids:
+            incoming[edge["to"]].append(edge["from"])
+
+    tiers: Dict[str, int] = {}
+    cyclic: Set[str] = set()
+
+    def tier_of(node_id: str, trail: tuple) -> int:
+        if node_id in tiers:
+            return tiers[node_id]
+        if node_id in trail:
+            # Every node from the first occurrence onward is on the cycle.
+            on_cycle = trail[trail.index(node_id):] + (node_id,)
+            cyclic.update(on_cycle)
+            return 0
+        sources = [
+            source
+            for source in incoming[node_id]
+            if _node_kind(flow, source) not in ("missing", "done")
+        ]
+        if not sources:
+            tiers[node_id] = 0
+            return 0
+        depth = 1 + max(tier_of(source, trail + (node_id,)) for source in sources)
+        tiers[node_id] = depth
+        return depth
+
+    for node in flow["nodes"]:
+        if node["kind"] != "missing":
+            tier_of(node["id"], ())
+
+    return tiers, cyclic
+
+
+def _node_kind(flow: Dict[str, object], node_id: str) -> str:
+    for node in flow["nodes"]:
+        if node["id"] == node_id:
+            return str(node["kind"])
+    return "open"
+
+
+def _flow_reason(issue: Dict[str, object]) -> str:
+    reasons = []
+    if issue.get("unresolved_dependencies"):
+        deps = ", ".join(_format_reference(entry) for entry in issue["unresolved_dependencies"])
+        reasons.append(f"needs {deps}")
+    if issue.get("unresolved_blockers"):
+        blockers = ", ".join(_format_reference(entry) for entry in issue["unresolved_blockers"])
+        reasons.append(f"blocked by {blockers}")
+    return "; ".join(reasons)
+
+
+def format_flow_ascii(result: Dict[str, object], flow: Dict[str, object]) -> str:
+    lines = [f"Repository: {result['repo']}", f"State: {result['state']}", ""]
+    if result.get("mode") == "status":
+        lines.append(
+            f"Counts: {result['available_count']} available · {result['blocked_count']} blocked · "
+            f"{result['open_pr_count']} open PRs"
+        )
+        lines.append("")
+
+    node_by_id = {node["id"]: node for node in flow["nodes"]}
+    summaries_by_number = {
+        int(summary["number"]): summary
+        for summary in list(result.get("available") or []) + list(result.get("blocked") or [])
+    }
+
+    # Tier listing shows open work only. Satisfied (CLOSED) referents stay in the
+    # mermaid graph for context but never appear as actionable tiers here.
+    open_nodes = [node for node in flow["nodes"] if node["kind"] not in ("missing", "done")]
+    if not open_nodes:
+        lines.append("Dependency flow: no open issues in scope.")
+        return "\n".join(lines)
+
+    tiers, cyclic = compute_flow_tiers(flow)
+    grouped: Dict[str, List[Dict[str, object]]] = {}
+    for node in open_nodes:
+        label = "Cyclic" if node["id"] in cyclic else f"Tier {tiers.get(node['id'], 0)}"
+        grouped.setdefault(label, []).append(node)
+
+    ordered_labels = sorted(
+        (label for label in grouped if label.startswith("Tier ")),
+        key=lambda label: int(label.split()[1]),
+    )
+    if "Cyclic" in grouped:
+        ordered_labels.append("Cyclic")
+
+    lines.append("Dependency flow (each tier waits on the tiers above it):")
+    lines.append("")
+    for index, label in enumerate(ordered_labels):
+        lines.append(f"{label}:")
+        for node in sorted(grouped[label], key=lambda item: item["number"] or 0):
+            line = f"- {node['label']}"
+            summary = summaries_by_number.get(node["number"]) if node.get("number") is not None else None
+            if summary is not None:
+                reason = _flow_reason(summary)
+                if reason:
+                    line += f" ({reason})"
+            elif node["id"] in cyclic:
+                line += " (dependency cycle — resolve the loop)"
+            lines.append(line)
+        if index < len(ordered_labels) - 1:
+            lines.append("")
+            lines.append("    ↓")
+            lines.append("")
+
+    missing_edges: Dict[str, List[str]] = {}
+    for edge in flow["edges"]:
+        source = node_by_id.get(edge["from"])
+        if source is not None and source["kind"] == "missing":
+            target = node_by_id.get(edge["to"])
+            missing_edges.setdefault(str(source["label"]), []).append(str(target["label"]) if target else edge["to"])
+    if missing_edges:
+        lines.append("")
+        lines.append("Missing references (fix or delete these in the issue body):")
+        for reference, targets in sorted(missing_edges.items()):
+            lines.append(f"- {reference} ← {', '.join(sorted(targets))}")
+
+    lines.append("")
+    lines.append(
+        "Legend: ready = no open dependencies · in-progress = linked open PR · "
+        "blocked = waits on issues above · done = satisfied (CLOSED) dependency · dashed = missing reference"
+    )
+    return "\n".join(lines)
+
+
+def _mermaid_label(text: str) -> str:
+    return str(text).replace('"', "'").replace("\n", " ").strip()
+
+
+def format_flow_mermaid(result: Dict[str, object], flow: Dict[str, object]) -> str:
+    lines = ["flowchart TD"]
+    repo = result["repo"]
+    for node in flow["nodes"]:
+        label = _mermaid_label(node["label"])
+        if node.get("number") is not None:
+            url = f"https://github.com/{repo}/issues/{node['number']}"
+            lines.append(f'    {node["id"]}["{label}"]("{url}")')
+        else:
+            lines.append(f'    {node["id"]}["{label}"]')
+    for edge in flow["edges"]:
+        lines.append(f'    {edge["from"]} --> {edge["to"]}')
+    for kind in _FLOW_NODE_KINDS:
+        lines.append(f"    classDef {kind.replace('-', '_')} {_FLOW_CLASS_DEFS[kind]}")
+    for node in flow["nodes"]:
+        lines.append(f'    class {node["id"]} {str(node["kind"]).replace("-", "_")}')
+    return "\n".join(lines)
+
+
+def format_flow_markdown(result: Dict[str, object], flow: Dict[str, object]) -> str:
+    lines = [f"# Dependency flow — {result['repo']}", ""]
+    lines.append(f"- State: {result['state']}")
+    lines.append(f"- Generated: {result['generated_at']}")
+    if result.get("mode") == "status":
+        lines.append(
+            f"- Counts: {result['available_count']} available · {result['blocked_count']} blocked · "
+            f"{result['open_pr_count']} open PRs · {result['draft_pr_count']} draft"
+        )
+    next_available = result.get("next_available")
+    if next_available:
+        lines.append(f"- Next available: #{next_available['number']} {next_available['title']}")
+    else:
+        lines.append("- Next available: none")
+    lines.append("")
+
+    lines.append("## Flow")
+    lines.append("")
+    lines.append("```mermaid")
+    lines.append(format_flow_mermaid(result, flow))
+    lines.append("```")
+    lines.append("")
+    lines.append(
+        "Node colors: green = ready · blue = in progress (linked open PR) · gray = open, out of queue view · "
+        "red = blocked · light gray = satisfied (CLOSED) dependency · dashed yellow = missing reference. "
+        "Arrows point from a dependency to the issue it blocks."
+    )
+
+    lines.append("")
+    lines.append("## Ready")
+    available = result.get("available") or []
+    if available:
+        for issue in available:
+            lines.append(f"- #{issue['number']} {issue['title']}")
+    else:
+        lines.append("- none")
+
+    lines.append("")
+    lines.append("## Blocked")
+    blocked = result.get("blocked") or []
+    if blocked:
+        for issue in blocked:
+            reason = _flow_reason(issue)
+            suffix = f" ({reason})" if reason else ""
+            lines.append(f"- #{issue['number']} {issue['title']}{suffix}")
+    else:
+        lines.append("- none")
+
+    board = result.get("board")
+    if board:
+        lines.append("")
+        lines.extend(format_board_text(board))
+
+    return "\n".join(lines)
+
+
 def main() -> int:
     args = parse_args()
     repo = args.repo or get_repo_name()
@@ -691,6 +1011,14 @@ def main() -> int:
 
     if args.format == "json":
         print(json.dumps(result, indent=2))
+    elif args.format in ("ascii", "mermaid", "markdown-mermaid"):
+        flow = build_flow_graph(visible_summaries, available, blocked, issue_index)
+        if args.format == "ascii":
+            print(format_flow_ascii(result, flow))
+        elif args.format == "mermaid":
+            print(format_flow_mermaid(result, flow))
+        else:
+            print(format_flow_markdown(result, flow))
     else:
         formatter = format_status_text if args.mode == "status" else format_queue_text
         print(formatter(result))

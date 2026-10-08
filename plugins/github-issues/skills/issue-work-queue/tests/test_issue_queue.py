@@ -8,11 +8,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from issue_queue import (
     build_board_drift,
+    build_flow_graph,
     build_issue_index,
     build_issue_summaries,
     collect_linked_issue_numbers,
+    compute_flow_tiers,
     expected_board_status,
     filter_summaries_by_label,
+    format_flow_ascii,
+    format_flow_markdown,
+    format_flow_mermaid,
     is_issue_available,
     load_project_config,
     matches_label_filter,
@@ -169,6 +174,118 @@ class IssueQueueTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 load_project_config(root_path)
+
+    # ------------------------------------------------------------------
+    # Flow diagram formats
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _flow_fixture() -> tuple:
+        issues = [
+            {"number": 1, "title": "Design", "body": "", "state": "CLOSED", "labels": []},
+            {"number": 5, "title": "API", "body": "## Depends On\n1", "state": "OPEN", "labels": []},
+            {"number": 7, "title": "UI", "body": "## Depends On\n#5", "state": "OPEN", "labels": []},
+            {"number": 9, "title": "Docs", "body": "", "state": "OPEN", "labels": []},
+            {"number": 15, "title": "Ghost", "body": "## Depends On\n#99", "state": "OPEN", "labels": []},
+        ]
+        index = build_issue_index(issues)
+        summaries = build_issue_summaries(issues, index)
+        available = [s for s in summaries if s["state"] == "OPEN" and not s["is_blocked"]]
+        blocked = [s for s in summaries if s["state"] == "OPEN" and s["is_blocked"]]
+        result = {
+            "repo": "acme/demo",
+            "state": "all",
+            "generated_at": "2026-10-08T00:00:00+00:00",
+            "next_available": available[0] if available else None,
+            "available": available,
+            "blocked": blocked,
+            "mode": "queue",
+        }
+        return result, build_flow_graph(summaries, available, blocked, index)
+
+    def test_build_flow_graph_kinds_and_edges(self) -> None:
+        _, flow = self._flow_fixture()
+        kinds = {node["id"]: node["kind"] for node in flow["nodes"]}
+        self.assertEqual("done", kinds["n1"])
+        # #5 depends on CLOSED #1 -> satisfied -> ready.
+        self.assertEqual("ready", kinds["n5"])
+        # #7 depends on OPEN #5 -> blocked.
+        self.assertEqual("blocked", kinds["n7"])
+        self.assertEqual("ready", kinds["n9"])
+        self.assertEqual("missing", kinds["m_99"])
+
+        edges = {(edge["from"], edge["to"]) for edge in flow["edges"]}
+        self.assertIn(("n1", "n5"), edges)
+        self.assertIn(("n5", "n7"), edges)
+        self.assertIn(("m_99", "n15"), edges)
+
+    def test_compute_flow_tiers_orders_by_dependency_depth(self) -> None:
+        _, flow = self._flow_fixture()
+        tiers, cyclic = compute_flow_tiers(flow)
+        self.assertEqual(0, tiers["n9"])
+        self.assertEqual(0, tiers["n15"])
+        # Satisfied (done) references do not push ready work down a tier.
+        self.assertEqual(0, tiers["n5"])
+        self.assertEqual(1, tiers["n7"])
+        self.assertEqual(set(), cyclic)
+
+    def test_compute_flow_tiers_flags_every_cycle_member(self) -> None:
+        issues = [
+            {"number": 1, "title": "A", "body": "## Depends On\n#2", "state": "OPEN", "labels": []},
+            {"number": 2, "title": "B", "body": "## Depends On\n#1", "state": "OPEN", "labels": []},
+        ]
+        index = build_issue_index(issues)
+        summaries = build_issue_summaries(issues, index)
+        flow = build_flow_graph(summaries, [], summaries, index)
+
+        _, cyclic = compute_flow_tiers(flow)
+        self.assertEqual({"n1", "n2"}, cyclic)
+
+    def test_format_flow_ascii_tiers_and_missing_section(self) -> None:
+        result, flow = self._flow_fixture()
+        output = format_flow_ascii(result, flow)
+
+        self.assertIn("Tier 0:", output)
+        self.assertIn("- #9 Docs", output)
+        self.assertIn("- #5 API", output)
+        self.assertIn("Tier 1:", output)
+        self.assertIn("- #7 UI (needs #5)", output)
+        self.assertIn("99 (missing) ← #15 Ghost", output)
+        # Satisfied CLOSED referents never appear as actionable tiers.
+        self.assertNotIn("- #1 Design", output)
+
+    def test_format_flow_mermaid_emits_classes_and_links(self) -> None:
+        result, flow = self._flow_fixture()
+        output = format_flow_mermaid(result, flow)
+
+        self.assertTrue(output.startswith("flowchart TD"))
+        self.assertIn('n9["#9 Docs"]("https://github.com/acme/demo/issues/9")', output)
+        self.assertIn("n1 --> n5", output)
+        self.assertIn("classDef missing", output)
+        self.assertIn("class m_99 missing", output)
+        self.assertIn("class n1 done", output)
+
+    def test_format_flow_mermaid_escapes_quotes_in_titles(self) -> None:
+        issues = [{"number": 3, "title": 'Say "hi"', "body": "", "state": "OPEN", "labels": []}]
+        index = build_issue_index(issues)
+        summaries = build_issue_summaries(issues, index)
+        flow = build_flow_graph(summaries, summaries, [], index)
+        result = {"repo": "a/b", "state": "all", "generated_at": "x", "available": summaries, "blocked": [], "mode": "queue"}
+
+        output = format_flow_mermaid(result, flow)
+        self.assertIn("Say 'hi'", output)
+        self.assertNotIn('"Say', output.split("flowchart TD", 1)[1].split("\n", 1)[1])
+
+    def test_format_flow_markdown_embeds_mermaid_block_and_lists(self) -> None:
+        result, flow = self._flow_fixture()
+        output = format_flow_markdown(result, flow)
+
+        self.assertIn("# Dependency flow — acme/demo", output)
+        self.assertIn("```mermaid", output)
+        self.assertIn("## Ready", output)
+        self.assertIn("- #9 Docs", output)
+        self.assertIn("## Blocked", output)
+        self.assertIn("- #7 UI (needs #5)", output)
 
 
 if __name__ == "__main__":

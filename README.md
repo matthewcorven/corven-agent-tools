@@ -50,7 +50,17 @@ python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --for
 python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --format text --mode status
 ```
 
-Flags: `--mode {queue,status}` · `--repo owner/repo` · `--state {all,open}` · `--label` (repeatable, default `squad`) · `--format {text,json}` · `--limit N` · `--project N` (optional board-drift diagnostic) · `--project-owner login`.
+Flags: `--mode {queue,status}` · `--repo owner/repo` · `--state {all,open}` · `--label` (repeatable, default `squad`) · `--format {json,text,ascii,mermaid,markdown-mermaid}` · `--limit N` · `--project N` (optional board-drift diagnostic) · `--project-owner login`.
+
+### Flow diagram formats
+
+`--format ascii`, `--format mermaid`, and `--format markdown-mermaid` render the dependency graph as a flow diagram — tiered plain text for terminals, a bare Mermaid `flowchart` for any renderer, or a Markdown document with an embedded Mermaid block for GitHub/VS Code preview. Same queue computation as `text`/`json`; only the presentation changes.
+
+```shell
+python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --format ascii
+python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --format mermaid
+python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --format markdown-mermaid
+```
 
 ### The precedence rule
 

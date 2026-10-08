@@ -32,6 +32,14 @@ python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --for
 
 # Member-scoped queue
 python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --format text --label squad:{member}
+
+# Dependency flow diagram — pick the representation that fits the moment:
+#   ascii            tiered plain text (terminals, logs, plain-text chat)
+#   mermaid          bare Mermaid source (pipe into any renderer)
+#   markdown-mermaid Markdown doc with an embedded Mermaid block (GitHub / VS Code preview)
+python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --format ascii
+python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --format mermaid
+python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --format markdown-mermaid
 ```
 
 | Flag | Values | Default | Notes |
@@ -40,7 +48,7 @@ python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --for
 | `--repo` | `owner/repo` | current repo (via `gh repo view`) | Errors if the repo cannot be detected — always pass `--repo` in scripts |
 | `--state` | `all`, `open` | `all` | CLOSED issues resolve references as satisfied but never appear in output lists |
 | `--label` | repeatable | `squad` | `squad` matches the base label plus `squad:{member}` labels; repeat for multiple (AND) |
-| `--format` | `json`, `text` | `json` | |
+| `--format` | `json`, `text`, `ascii`, `mermaid`, `markdown-mermaid` | `json` | `ascii`/`mermaid`/`markdown-mermaid` render the dependency graph as a flow diagram (see [Flow diagram formats](#flow-diagram-formats)) |
 | `--limit` | int | `1000` | Max issues fetched from GitHub |
 | `--project` | number | repo's `.github/issue-queue.json` | GitHub Projects V2 number; enables the board-drift diagnostic |
 | `--project-owner` | login | repository owner | Owner of the project |
@@ -52,6 +60,16 @@ python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --for
 - A reference whose issue does not exist in any state is flagged `(missing)` in text output so broken references cannot hide.
 - References are issue numbers (`#123`, `123`) or task ids (`7.4`, parsed from `[Task X.Y]` titles). `none` / `n/a` sections mean no dependencies.
 - Output sections: `Next available`, `Available`, `Blocked` (with `depends on` / `blocked by` reasons).
+
+## Flow diagram formats
+
+`--format ascii`, `--format mermaid`, and `--format markdown-mermaid` render the same dependency graph so agents can pick the representation that fits the consumer: the model's own reasoning, a terminal, or a human-visible surface.
+
+- `ascii` — tiered plain text: Tier 0 is ready work, each following tier waits on the tiers above it. Dependency cycles are listed separately under `Cyclic:` (never silently tiered). Missing references get their own section. Works anywhere plain text renders.
+- `mermaid` — a bare `flowchart TD` block with per-kind node classes (green ready, blue in-progress, red blocked, gray done, dashed yellow missing) and links to the GitHub issues. Pipe it into a renderer, or paste it into any surface that renders Mermaid.
+- `markdown-mermaid` — a complete Markdown document: metadata header, the Mermaid diagram in a fenced block, a color legend, and the Ready/Blocked lists. Paste directly into GitHub comments, issues, or a `.md` file for human readers.
+
+All three are derived from the same queue computation as `text`/`json` — readiness semantics, precedence, and the board-drift diagnostic are unchanged; the format only changes the presentation. Diagram kinds map to queue state: `ready` = available, `in-progress` = linked open PR, `blocked` = unresolved references, `done` = satisfied (CLOSED) referent shown for graph context, `missing` = broken reference.
 
 ## Board drift diagnostic (opt-in `--project`)
 
