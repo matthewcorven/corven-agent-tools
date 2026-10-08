@@ -6,44 +6,34 @@ A GitHub Copilot **Agent Plugins 1.0** plugin (the v1 open plugin format — not
 
 | Component | Location | Purpose |
 | --- | --- | --- |
-| `issue-work-queue` skill | `skills/issue-work-queue/SKILL.md` | Portable rules for a dependency-driven work queue: issue bodies' `## Depends On` / `## Blocked By` sections are the source of truth, and **the queue helper takes precedence over raw `gh issue list`** |
-| Queue helper | `skills/issue-work-queue/scripts/issue_queue.py` | Computes the ready-vs-blocked queue (`queue` mode) and board counts (`status` mode) via the `gh` CLI |
-| Unit tests | `skills/issue-work-queue/tests/test_issue_queue.py` | Stdlib `unittest` suite, run in CI |
+| `issue-work-queue` skill | `plugins/corven-dev/skills/issue-work-queue/SKILL.md` | Portable rules for a dependency-driven work queue: issue bodies' `## Depends On` / `## Blocked By` sections are the source of truth, and **the queue helper takes precedence over raw `gh issue list`** |
+| Queue helper | `plugins/corven-dev/skills/issue-work-queue/scripts/issue_queue.py` | Computes the ready-vs-blocked queue (`queue` mode) and board counts (`status` mode) via the `gh` CLI |
+| Unit tests | `plugins/corven-dev/skills/issue-work-queue/tests/test_issue_queue.py` | Stdlib `unittest` suite, run in CI |
 
 Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/).
 
 ## Install
 
-This repository is both a directly-installable plugin and a marketplace (it ships `.github/plugin/marketplace.json`). **Install via the marketplace** — direct repo/URL/path installs are deprecated in Copilot CLI and will stop working in a future release.
+Register the marketplace once, then install the plugin:
 
 ```shell
 copilot plugin marketplace add matthewcorven/corven-dev-copilot-plugin
-copilot plugin install corven-dev@corven-dev
+copilot plugin install corven-dev@corven-copilot-tools
 ```
 
-The install source must be `plugin-name@marketplace-name` — a bare `corven-dev` is rejected with `Invalid plugin spec`. Here the marketplace name and the plugin name are both `corven-dev`, hence the doubled `corven-dev@corven-dev`.
+The install source must be the qualified `plugin@marketplace` form — a bare `corven-dev` is rejected with `Invalid plugin spec`. The marketplace is named `corven-copilot-tools`; the plugin inside it is `corven-dev`.
 
-> **Note:** the marketplace name equals the plugin name, so `corven-dev` alone is ambiguous. `copilot plugin uninstall corven-dev` removes the *direct* install; use `corven-dev@corven-dev` for the marketplace install.
+> **Upgrading from v1.x?** v1 registered the marketplace as `corven-dev` (same name as the plugin). Run `copilot plugin marketplace remove corven-dev --force`, then the two commands above.
 
-<details>
-<summary>Deprecated: direct install from the repository</summary>
-
-```shell
-copilot plugin install matthewcorven/corven-dev-copilot-plugin
-```
-
-This creates a second, distinct install identity (`marketplace: ""`) alongside the marketplace one (`corven-dev@corven-dev`), so both can appear in `copilot plugin list` at once. Prefer the marketplace route above.
-</details>
-
-You can also enable it declaratively in `.github/copilot/settings.json` (repository-level) or `~/.copilot/settings.json` (user-level). The `enabledPlugins` key must be the qualified `corven-dev@corven-dev`, and a non-default marketplace must also be registered under `extraKnownMarketplaces`:
+You can also enable it declaratively in `.github/copilot/settings.json` (repository-level) or `~/.copilot/settings.json` (user-level). The `enabledPlugins` key must be the qualified `corven-dev@corven-copilot-tools`, and a non-default marketplace must also be registered under `extraKnownMarketplaces`:
 
 ```json
 {
   "enabledPlugins": {
-    "corven-dev@corven-dev": true
+    "corven-dev@corven-copilot-tools": true
   },
   "extraKnownMarketplaces": {
-    "corven-dev": {
+    "corven-copilot-tools": {
       "source": {
         "source": "github",
         "repo": "matthewcorven/corven-dev-copilot-plugin"
@@ -101,20 +91,21 @@ References resolve to issue numbers or `[Task X.Y]` ids parsed from issue titles
 ## Repository layout
 
 ```text
-corven-dev-copilot-plugin/
-├── plugin.json                       # Agent Plugins 1.0 manifest ($schema → v1, not legacy)
-├── skills/issue-work-queue/
-│   ├── SKILL.md
-│   ├── scripts/issue_queue.py
-│   └── tests/test_issue_queue.py
+corven-dev-copilot-plugin/                 # marketplace: corven-copilot-tools
 ├── .github/plugin/marketplace.json
-└── .github/workflows/test.yml
+└── plugins/
+    └── corven-dev/                        # plugin: corven-dev@corven-copilot-tools
+        ├── plugin.json                    # Agent Plugins 1.0 manifest ($schema → v1, not legacy)
+        └── skills/issue-work-queue/
+            ├── SKILL.md
+            ├── scripts/issue_queue.py
+            └── tests/test_issue_queue.py
 ```
 
 ## Development
 
 ```shell
-python3 -m unittest discover -s skills/issue-work-queue/tests -v
+python3 -m unittest discover -s plugins/corven-dev/skills/issue-work-queue/tests -v
 ```
 
 ## License

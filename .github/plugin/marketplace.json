@@ -1,17 +1,17 @@
 {
-  "name": "corven-dev",
+  "name": "corven-copilot-tools",
   "owner": {
     "name": "Matthew Corven"
   },
   "metadata": {
     "description": "Corven dev tooling plugins",
-    "version": "1.2.0"
+    "version": "2.0.0"
   },
   "plugins": [
     {
       "name": "corven-dev",
-      "source": ".",
-      "version": "1.2.0",
+      "source": "plugins/corven-dev",
+      "version": "2.0.0",
       "description": "issue-work-queue skill: dependency-driven GitHub issue queue with a ready-vs-blocked helper",
       "keywords": ["github-issues", "dependency-graph", "work-queue"]
     }
