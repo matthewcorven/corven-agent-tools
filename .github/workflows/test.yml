@@ -14,3 +14,54 @@ jobs:
           python-version: "3.12"
       - name: Run issue-work-queue unit tests
         run: python3 -m unittest discover -s plugins/github-issues/skills/issue-work-queue/tests -v
+
+  frontmatter:
+    # GitHub renders SKILL.md frontmatter with a strict YAML parser; a plain
+    # scalar containing ': ' fails there with "mapping values are not allowed
+    # in this context". Parse every frontmatter block with a real YAML parser
+    # so the regression cannot reach a push.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML
+        run: pip install pyyaml
+      - name: Validate SKILL.md frontmatter parses as YAML
+        run: |
+          python3 - <<'EOF'
+          import glob
+          import re
+          import sys
+
+          import yaml
+
+          failed = False
+          files = sorted(glob.glob("plugins/*/skills/*/SKILL.md"))
+          if not files:
+              print("no SKILL.md files found")
+              sys.exit(1)
+          for path in files:
+              text = open(path, encoding="utf-8").read()
+              match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+              if not match:
+                  print(f"FAIL {path}: missing frontmatter block")
+                  failed = True
+                  continue
+              try:
+                  data = yaml.safe_load(match.group(1))
+              except yaml.YAMLError as exc:
+                  print(f"FAIL {path}: {exc}")
+                  failed = True
+                  continue
+              ok = True
+              for key in ("name", "description"):
+                  if not isinstance(data, dict) or not isinstance(data.get(key), str) or not data[key].strip():
+                      print(f"FAIL {path}: frontmatter '{key}' must be a non-empty string")
+                      failed = True
+                      ok = False
+              if ok:
+                  print(f"ok   {path}")
+          sys.exit(1 if failed else 0)
+          EOF

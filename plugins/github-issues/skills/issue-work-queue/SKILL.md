@@ -1,6 +1,12 @@
 ---
 name: issue-work-queue
-description: Dependency-driven GitHub issue queue. Use when choosing the next issue to work on, reporting queue or board status, answering "what's ready", "what's next", "what's blocked", or when issue bodies contain "## Depends On" or "## Blocked By" sections. Runs the bundled issue_queue.py helper, whose output MUST take precedence over raw `gh issue list`. DO NOT USE FOR: creating issues, triage/label assignment, PR creation, or release planning.
+description: >-
+  Dependency-driven GitHub issue queue. Use when choosing the next issue to work
+  on, reporting queue or board status, answering "what's ready", "what's next",
+  "what's blocked", or when issue bodies contain "## Depends On" or "## Blocked
+  By" sections. Runs the bundled issue_queue.py helper, whose output MUST take
+  precedence over raw `gh issue list`. DO NOT USE FOR: creating issues,
+  triage/label assignment, PR creation, or release planning.
 ---
 
 # Issue Work Queue
