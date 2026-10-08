@@ -14,20 +14,44 @@ Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cl
 
 ## Install
 
-Direct from GitHub (Copilot CLI):
+This repository is both a directly-installable plugin and a marketplace (it ships `.github/plugin/marketplace.json`). **Install via the marketplace** — direct repo/URL/path installs are deprecated in Copilot CLI and will stop working in a future release.
+
+```shell
+copilot plugin marketplace add matthewcorven/corven-dev-copilot-plugin
+copilot plugin install corven-dev@corven-dev
+```
+
+The install source must be `plugin-name@marketplace-name` — a bare `corven-dev` is rejected with `Invalid plugin spec`. Here the marketplace name and the plugin name are both `corven-dev`, hence the doubled `corven-dev@corven-dev`.
+
+> **Note:** the marketplace name equals the plugin name, so `corven-dev` alone is ambiguous. `copilot plugin uninstall corven-dev` removes the *direct* install; use `corven-dev@corven-dev` for the marketplace install.
+
+<details>
+<summary>Deprecated: direct install from the repository</summary>
 
 ```shell
 copilot plugin install matthewcorven/corven-dev-copilot-plugin
 ```
 
-Or register this repository as a marketplace (it ships `.github/plugin/marketplace.json`):
+This creates a second, distinct install identity (`marketplace: ""`) alongside the marketplace one (`corven-dev@corven-dev`), so both can appear in `copilot plugin list` at once. Prefer the marketplace route above.
+</details>
 
-```shell
-copilot plugin marketplace add matthewcorven/corven-dev-copilot-plugin
-copilot plugin install corven-dev
+You can also enable it declaratively in `.github/copilot/settings.json` (repository-level) or `~/.copilot/settings.json` (user-level). The `enabledPlugins` key must be the qualified `corven-dev@corven-dev`, and a non-default marketplace must also be registered under `extraKnownMarketplaces`:
+
+```json
+{
+  "enabledPlugins": {
+    "corven-dev@corven-dev": true
+  },
+  "extraKnownMarketplaces": {
+    "corven-dev": {
+      "source": {
+        "source": "github",
+        "repo": "matthewcorven/corven-dev-copilot-plugin"
+      }
+    }
+  }
+}
 ```
-
-You can also enable it declaratively in `.github/copilot/settings.json` via the `enabledPlugins` field.
 
 ## Usage
 
