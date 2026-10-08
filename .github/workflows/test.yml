@@ -13,4 +13,4 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run issue-work-queue unit tests
-        run: python3 -m unittest discover -s plugins/corven-dev/skills/issue-work-queue/tests -v
+        run: python3 -m unittest discover -s plugins/github-issues/skills/issue-work-queue/tests -v
