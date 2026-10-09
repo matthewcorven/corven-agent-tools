@@ -1,6 +1,6 @@
-# corven-copilot-tools
+# corven-agent-tools
 
-A GitHub Copilot **Agent Plugins 1.0** marketplace (the v1 open plugin format — not the legacy Copilot format) shipping dependency-driven GitHub issue-tracking tooling.
+Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository distributes a dependency-driven GitHub issue-tracking skill and is published as a plugin marketplace.
 
 ## What's inside
 
@@ -12,34 +12,42 @@ A GitHub Copilot **Agent Plugins 1.0** marketplace (the v1 open plugin format �
 
 Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/).
 
-## Install
+## Format and compatibility
+
+`github-issues` uses the open Agent Plugins 1.0 format, compatible with multiple AI coding agents. Its `skills/issue-work-queue/SKILL.md` skill is portable to clients that support Agent Plugins 1.0 and the Agent Skills format.
+
+## Install with GitHub Copilot
 
 Register the marketplace once, then install the plugin:
 
 ```shell
-copilot plugin marketplace add matthewcorven/corven-copilot-tools
-copilot plugin install github-issues@corven-copilot-tools
+copilot plugin marketplace add matthewcorven/corven-agent-tools
+copilot plugin install github-issues@corven-agent-tools
 ```
 
 The install source must be the qualified `plugin@marketplace` form — a bare `github-issues` is rejected with `Invalid plugin spec`.
 
-You can also enable it declaratively in `.github/copilot/settings.json` (repository-level) or `~/.copilot/settings.json` (user-level). The `enabledPlugins` key must be the qualified `github-issues@corven-copilot-tools`, and a non-default marketplace must also be registered under `extraKnownMarketplaces`:
+You can also enable it declaratively in `.github/copilot/settings.json` (repository-level) or `~/.copilot/settings.json` (user-level). The `enabledPlugins` key must be the qualified `github-issues@corven-agent-tools`, and a non-default marketplace must also be registered under `extraKnownMarketplaces`:
 
 ```json
 {
   "enabledPlugins": {
-    "github-issues@corven-copilot-tools": true
+    "github-issues@corven-agent-tools": true
   },
   "extraKnownMarketplaces": {
-    "corven-copilot-tools": {
+    "corven-agent-tools": {
       "source": {
         "source": "github",
-        "repo": "matthewcorven/corven-copilot-tools"
+        "repo": "matthewcorven/corven-agent-tools"
       }
     }
   }
 }
 ```
+
+### Migration from `corven-copilot-tools`
+
+After the GitHub repository is renamed, replace existing marketplace registrations and declarative settings with `corven-agent-tools` and `github-issues@corven-agent-tools`. The plugin name remains `github-issues`.
 
 ## Usage
 
@@ -99,10 +107,10 @@ References resolve to issue numbers or `[Task X.Y]` ids parsed from issue titles
 ## Repository layout
 
 ```text
-corven-copilot-tools/                      # marketplace: corven-copilot-tools
+corven-agent-tools/                        # marketplace: corven-agent-tools
 ├── .github/plugin/marketplace.json
 └── plugins/
-    └── github-issues/                    # plugin: github-issues@corven-copilot-tools
+    └── github-issues/                    # plugin: github-issues@corven-agent-tools
         ├── plugin.json                   # Agent Plugins 1.0 manifest ($schema → v1, not legacy)
         └── skills/issue-work-queue/
             ├── SKILL.md

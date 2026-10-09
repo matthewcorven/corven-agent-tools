@@ -1,10 +1,10 @@
 {
-  "name": "corven-copilot-tools",
+  "name": "corven-agent-tools",
   "owner": {
     "name": "Matthew Corven"
   },
   "metadata": {
-    "description": "Corven dev tooling plugins",
+    "description": "Corven Agent Plugins 1.0 tooling",
     "version": "0.1.0"
   },
   "plugins": [
