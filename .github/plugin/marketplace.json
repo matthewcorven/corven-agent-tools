@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Corven Agent Plugins 1.0 tooling",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "plugins": [
     {
       "name": "github-issues",
       "source": "plugins/github-issues",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "description": "issue-work-queue skill: dependency-driven GitHub issue queue with a ready-vs-blocked helper",
       "keywords": ["github-issues", "dependency-graph", "work-queue"]
     }

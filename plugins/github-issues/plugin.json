@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "github-issues",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "GitHub issue-tracking and dependency-readiness tooling: the issue-work-queue skill with a ready-vs-blocked queue helper driven by issue-body 'Depends On' / 'Blocked By' sections.",
   "author": {
     "name": "Matthew Corven"

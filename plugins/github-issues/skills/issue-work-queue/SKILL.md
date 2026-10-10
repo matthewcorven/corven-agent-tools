@@ -20,6 +20,24 @@ Compute which GitHub issues are **ready to work on** versus **blocked**, from th
 - Raw GitHub queries (`gh issue view`, `gh pr view`, `gh pr list`, `gh issue list`) are **follow-up only** — permitted after the helper has identified the specific issue or PR to inspect.
 - Issue bodies' `## Depends On` and `## Blocked By` sections are the source of truth for readiness and ordering; issue titles are never used for readiness or prioritization.
 
+## Consumer-project guidance
+
+For reliable use across coordinator sessions and spawned agents, add an equivalent repository-specific rule to the consuming project's `AGENTS.md` or `.github/copilot-instructions.md`. This makes the helper's precedence visible even when an agent is not actively reading this skill.
+
+Use this as a template, replacing the placeholders with the consuming repository's values:
+
+```markdown
+## Issue Backlog Scans
+
+For issue backlog, triage, queue-status, and "what's next" scans, the `issue-work-queue` helper is authoritative. Run it before reporting readiness, ordering, blockers, or board status; its output takes precedence over raw `gh issue list` results.
+
+- Default board-status scan: `python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --mode status --format text`
+- A base `--label <team-label>` includes the exact `<team-label>` label and `<team-label>:*` member labels; use a fully qualified member label to scope one member.
+- Use `--mode status` for the untriaged/assigned breakdown; do not reconstruct it from raw label JSON.
+- This rule applies to coordinator sessions and every spawned agent that touches the backlog.
+- This rule governs issue readiness, ordering, and board status only. PR scans (`gh pr list`, `gh pr view`) remain permitted, and raw issue queries are allowed after the helper identifies a specific issue.
+```
+
 ## Requirements
 
 - `python3` (standard library only — no pip packages)
@@ -53,7 +71,7 @@ python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --for
 | `--mode` | `queue`, `status` | `queue` | `status` adds board counts, untriaged/assigned breakdown, open/draft PR counts |
 | `--repo` | `owner/repo` | current repo (via `gh repo view`) | Errors if the repo cannot be detected — always pass `--repo` in scripts |
 | `--state` | `all`, `open` | `all` | CLOSED issues resolve references as satisfied but never appear in output lists |
-| `--label` | repeatable | `squad` | `squad` matches the base label plus `squad:{member}` labels; repeat for multiple (AND) |
+| `--label` | repeatable | `squad` | A base label matches itself plus `<label>:*` member labels; a fully qualified member label matches exactly; repeat for multiple (AND) |
 | `--format` | `json`, `text`, `ascii`, `mermaid`, `markdown-mermaid` | `json` | `ascii`/`mermaid`/`markdown-mermaid` render the dependency graph as a flow diagram (see [Flow diagram formats](#flow-diagram-formats)) |
 | `--limit` | int | `1000` | Max issues fetched from GitHub |
 | `--project` | number | repo's `.github/issue-queue.json` | GitHub Projects V2 number; enables the board-drift diagnostic |

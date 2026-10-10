@@ -46,12 +46,13 @@ class IssueQueueTests(unittest.TestCase):
         blocked_summary = {"number": 13, "state": "OPEN", "is_blocked": True}
         self.assertFalse(is_issue_available(blocked_summary, set()))
 
-    def test_matches_label_filter_treats_squad_as_member_squad_labels(self) -> None:
-        issue = {"labels": [{"name": "squad:neo"}]}
+    def test_matches_label_filter_matches_any_base_label_and_exact_member_label(self) -> None:
+        issue = {"labels": [{"name": "example:neo"}]}
 
-        self.assertTrue(matches_label_filter(issue, "squad"))
-        self.assertTrue(matches_label_filter(issue, "squad:neo"))
-        self.assertFalse(matches_label_filter(issue, "squad:tank"))
+        self.assertTrue(matches_label_filter(issue, "example"))
+        self.assertTrue(matches_label_filter(issue, "example:neo"))
+        self.assertFalse(matches_label_filter(issue, "example:tank"))
+        self.assertFalse(matches_label_filter(issue, "squad"))
 
     def test_filter_summaries_by_label_keeps_dependency_resolution_on_full_issue_graph(self) -> None:
         issues = [

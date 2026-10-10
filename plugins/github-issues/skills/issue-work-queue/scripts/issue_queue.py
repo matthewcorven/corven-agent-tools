@@ -46,7 +46,12 @@ def parse_args() -> argparse.Namespace:
             "Use 'open' to reproduce the legacy resolution view."
         ),
     )
-    parser.add_argument("--label", action="append", default=None, help="Label to include. Repeat for multiple labels. Defaults to squad.")
+    parser.add_argument(
+        "--label",
+        action="append",
+        default=None,
+        help="Label to include. Repeat for multiple labels. Defaults to squad; a base label also includes its label:* member labels.",
+    )
     parser.add_argument(
         "--format",
         choices=["json", "text", "ascii", "mermaid", "markdown-mermaid"],
@@ -129,16 +134,18 @@ def has_label(issue: Dict[str, object], label_name: str) -> bool:
     return any((label.get("name") or "").lower() == label_name.lower() for label in labels)
 
 
-def has_member_label(issue: Dict[str, object]) -> bool:
-    labels = issue.get("labels", []) or []
-    return any((label.get("name") or "").lower().startswith("squad:") for label in labels)
-
-
 def matches_label_filter(issue: Dict[str, object], label_name: str) -> bool:
     normalized_label = (label_name or "").lower()
-    if normalized_label == "squad":
-        return has_label(issue, "squad") or has_member_label(issue)
-    return has_label(issue, label_name)
+    if ":" in normalized_label:
+        return has_label(issue, label_name)
+
+    labels = issue.get("labels", []) or []
+    member_prefix = f"{normalized_label}:"
+    return any(
+        (label.get("name") or "").lower() in {normalized_label}
+        or (label.get("name") or "").lower().startswith(member_prefix)
+        for label in labels
+    )
 
 
 def fetch_issues(repo: str, state: str, limit: int) -> List[Dict[str, object]]:
