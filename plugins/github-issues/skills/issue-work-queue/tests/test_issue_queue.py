@@ -19,6 +19,7 @@ from issue_queue import (
     format_flow_ascii,
     format_flow_markdown,
     format_flow_mermaid,
+    has_member_label,
     is_issue_available,
     load_project_config,
     matches_label_filter,
@@ -53,6 +54,8 @@ class IssueQueueTests(unittest.TestCase):
         self.assertTrue(matches_label_filter(issue, "example:neo"))
         self.assertFalse(matches_label_filter(issue, "example:tank"))
         self.assertFalse(matches_label_filter(issue, "squad"))
+        self.assertTrue(has_member_label(issue, "example"))
+        self.assertFalse(has_member_label(issue, "squad"))
 
     def test_filter_summaries_by_label_keeps_dependency_resolution_on_full_issue_graph(self) -> None:
         issues = [

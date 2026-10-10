@@ -134,6 +134,12 @@ def has_label(issue: Dict[str, object], label_name: str) -> bool:
     return any((label.get("name") or "").lower() == label_name.lower() for label in labels)
 
 
+def has_member_label(issue: Dict[str, object], label_name: str) -> bool:
+    member_prefix = f"{(label_name or '').lower()}:"
+    labels = issue.get("labels", []) or []
+    return any((label.get("name") or "").lower().startswith(member_prefix) for label in labels)
+
+
 def matches_label_filter(issue: Dict[str, object], label_name: str) -> bool:
     normalized_label = (label_name or "").lower()
     if ":" in normalized_label:
@@ -997,8 +1003,8 @@ def main() -> int:
         # "all" this costs a single additional gh call and keeps board semantics unchanged.
         open_issues = issues if args.state == "open" else fetch_issues(repo, "open", args.limit)
         open_squad_issues = [issue for issue in open_issues if matches_label_filter(issue, "squad")]
-        untriaged = [issue for issue in open_squad_issues if not has_member_label(issue)]
-        assigned = [issue for issue in open_squad_issues if has_member_label(issue)]
+        untriaged = [issue for issue in open_squad_issues if not has_member_label(issue, "squad")]
+        assigned = [issue for issue in open_squad_issues if has_member_label(issue, "squad")]
         pull_requests = fetch_pull_requests(repo, "all", args.limit)
         open_pull_requests = [pr for pr in pull_requests if pr.get("state") == "OPEN"]
 
