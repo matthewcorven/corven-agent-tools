@@ -1,9 +1,9 @@
 ---
 name: use-decision-model
 description: >-
-  A decision model is not a chat model: given a state plus typed questions
-  (noul/choice/score) it returns probabilities and labels — no prose, no
-  rationale — so an agent gets judgments it can compute on (threshold, rank,
+  A decision model is not a chat model — given a state plus typed questions
+  (noul/choice/score) it returns probabilities and labels, no prose and no
+  rationale, so an agent gets judgments it can compute on (threshold, rank,
   route) instead of text to parse. USE FOR: gating a yes/no fact, classifying
   into fixed buckets, scoring quality/severity/risk on a scale, judging
   replies, filtering prompt injection. Covers crafting state and criteria,

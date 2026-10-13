@@ -354,32 +354,43 @@ class IssueQueueTests(unittest.TestCase):
             self.assertIn("description", keys, f"{path}: frontmatter missing 'description'")
 
     def test_skill_frontmatter_description_parses_as_single_line_string(self) -> None:
-        """The folded description must fold back to the intended single-line text."""
-        path = next(self._repo_root().glob("plugins/*/skills/*/SKILL.md"))
-        text = path.read_text(encoding="utf-8")
-        frontmatter = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL).group(1)
+        """Each folded description must fold back to the intended single-line text."""
+        skill_files = sorted(self._repo_root().glob("plugins/*/skills/*/SKILL.md"))
+        self.assertTrue(skill_files, "no SKILL.md files found to validate")
+        # ': ' is allowed only inside the routing markers agent matchers key on.
+        routing_markers = re.compile(r"(?:USE FOR|DO NOT USE FOR): ")
+        folded_by_path = {}
+        for path in skill_files:
+            text = path.read_text(encoding="utf-8")
+            frontmatter = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL).group(1)
 
-        description_line = next(
-            line for line in frontmatter.splitlines() if line.startswith("description:")
-        )
-        marker = description_line.split(":", 1)[1].strip()
-        self.assertIn(marker, (">", ">-", ">+"), "description should use a folded block scalar")
+            description_line = next(
+                line for line in frontmatter.splitlines() if line.startswith("description:")
+            )
+            marker = description_line.split(":", 1)[1].strip()
+            self.assertIn(marker, (">", ">-", ">+"),
+                          f"{path}: description should use a folded block scalar")
 
-        # Collect the indented block that follows and fold it the way YAML does
-        # (single newlines become spaces).
-        lines = frontmatter.splitlines()
-        start = lines.index(description_line)
-        block = []
-        for line in lines[start + 1:]:
-            if not line[:1].isspace():
-                break
-            block.append(line.strip())
-        folded = " ".join(block)
+            # Collect the indented block that follows and fold it the way YAML does
+            # (single newlines become spaces).
+            lines = frontmatter.splitlines()
+            start = lines.index(description_line)
+            block = []
+            for line in lines[start + 1:]:
+                if not line[:1].isspace():
+                    break
+                block.append(line.strip())
+            folded = " ".join(block)
+            folded_by_path[path] = folded
 
-        self.assertNotIn(": ", folded.replace("DO NOT USE FOR: creating", ""),
-                         "description contains an unguarded colon+space outside the known one")
-        self.assertIn("DO NOT USE FOR: creating issues", folded)
-        self.assertNotIn("\n", folded)
+            self.assertNotIn(": ", routing_markers.sub("", folded),
+                             f"{path}: description contains an unguarded colon+space "
+                             "outside the USE FOR / DO NOT USE FOR routing markers")
+            self.assertNotIn("\n", folded)
+
+        iwq_path = (self._repo_root()
+                    / "plugins/github-issues/skills/issue-work-queue/SKILL.md")
+        self.assertIn("DO NOT USE FOR: creating issues", folded_by_path[iwq_path])
 
 
 if __name__ == "__main__":
