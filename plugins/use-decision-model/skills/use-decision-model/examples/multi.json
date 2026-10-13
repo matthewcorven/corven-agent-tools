@@ -1,0 +1,32 @@
+{
+  "state": {
+    "ticket_subject": "App crashes when uploading photo",
+    "ticket_body": "Every time I attach a photo from my camera roll the app closes instantly. iPhone 15, app version 3.2.1.",
+    "account_tier": "enterprise",
+    "reproducible": true
+  },
+  "questions": {
+    "is_bug": {
+      "type": "noul",
+      "instructions": "Does this ticket describe a software defect (as opposed to a how-to question or feature request)?",
+      "criteria": {
+        "true": "The ticket reports unexpected broken behavior such as a crash, error, or data loss.",
+        "false": "The ticket asks how to do something, or requests a new capability, without reporting broken behavior."
+      }
+    },
+    "team": {
+      "type": "choice",
+      "instructions": "Which team should handle this ticket?",
+      "criteria": {
+        "billing": "Charges, invoices, and refunds",
+        "engineering": "Bugs, errors, and outages",
+        "support": "How-to and account questions"
+      }
+    },
+    "urgency": {
+      "type": "score",
+      "instructions": "How urgently should this ticket be triaged? Consider that the reporter is an enterprise customer and the defect is reproducible.",
+      "criteria": ["Backlog", "Normal", "High", "Immediate"]
+    }
+  }
+}

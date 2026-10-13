@@ -1,6 +1,6 @@
 # corven-agent-tools
 
-Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository distributes a dependency-driven GitHub issue-tracking skill and is published as a plugin marketplace.
+Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository distributes a dependency-driven GitHub issue-tracking skill and a decision-model skill, and is published as a plugin marketplace.
 
 ## What's inside
 
@@ -9,30 +9,35 @@ Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository dis
 | `issue-work-queue` skill | `plugins/github-issues/skills/issue-work-queue/SKILL.md` | Portable rules for a dependency-driven work queue: issue bodies' `## Depends On` / `## Blocked By` sections are the source of truth, and **the queue helper takes precedence over raw `gh issue list`** |
 | Queue helper | `plugins/github-issues/skills/issue-work-queue/scripts/issue_queue.py` | Computes the ready-vs-blocked queue (`queue` mode) and board counts (`status` mode) via the `gh` CLI |
 | Unit tests | `plugins/github-issues/skills/issue-work-queue/tests/test_issue_queue.py` | Stdlib `unittest` suite, run in CI |
+| `use-decision-model` skill | `plugins/use-decision-model/skills/use-decision-model/SKILL.md` | Guidance for using a **decision model as a tool**: when it is useful, how to craft the `state` and typed `noul`/`choice`/`score` questions, how to send them, and the response signature to expect |
+| Sender | `plugins/use-decision-model/skills/use-decision-model/scripts/decision.py` | POSTs a `state` + `questions` payload to the decisions endpoint and prints the raw JSON response |
+| Example payloads | `plugins/use-decision-model/skills/use-decision-model/examples/` | Ready-to-send `noul.json`, `choice.json`, `score.json` payloads, plus `borderline.json` (hedged `noul` case) and `multi.json` (all three types on one JSON-object state) |
 
-Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/).
+Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/) for the issue-queue skill. The decision-model sender needs `OPENROUTER_API_KEY` in the environment.
 
 ## Format and compatibility
 
-`github-issues` uses the open Agent Plugins 1.0 format, compatible with multiple AI coding agents. Its `skills/issue-work-queue/SKILL.md` skill is portable to clients that support Agent Plugins 1.0 and the Agent Skills format.
+Both plugins use the open Agent Plugins 1.0 format, compatible with multiple AI coding agents. Their `SKILL.md` skills are portable to clients that support Agent Plugins 1.0 and the Agent Skills format.
 
 ## Install with GitHub Copilot
 
-Register the marketplace once, then install the plugin:
+Register the marketplace once, then install a plugin:
 
 ```shell
 copilot plugin marketplace add matthewcorven/corven-agent-tools
 copilot plugin install github-issues@corven-agent-tools
+copilot plugin install use-decision-model@corven-agent-tools
 ```
 
 The install source must be the qualified `plugin@marketplace` form — a bare `github-issues` is rejected with `Invalid plugin spec`.
 
-You can also enable it declaratively in `.github/copilot/settings.json` (repository-level) or `~/.copilot/settings.json` (user-level). The `enabledPlugins` key must be the qualified `github-issues@corven-agent-tools`, and a non-default marketplace must also be registered under `extraKnownMarketplaces`:
+You can also enable them declaratively in `.github/copilot/settings.json` (repository-level) or `~/.copilot/settings.json` (user-level). The `enabledPlugins` keys must be the qualified `plugin@corven-agent-tools` forms, and a non-default marketplace must also be registered under `extraKnownMarketplaces`:
 
 ```json
 {
   "enabledPlugins": {
-    "github-issues@corven-agent-tools": true
+    "github-issues@corven-agent-tools": true,
+    "use-decision-model@corven-agent-tools": true
   },
   "extraKnownMarketplaces": {
     "corven-agent-tools": {
@@ -47,16 +52,29 @@ You can also enable it declaratively in `.github/copilot/settings.json` (reposit
 
 ### Migration from `corven-copilot-tools`
 
-After the GitHub repository is renamed, replace existing marketplace registrations and declarative settings with `corven-agent-tools` and `github-issues@corven-agent-tools`. The plugin name remains `github-issues`.
+After the GitHub repository is renamed, replace existing marketplace registrations and declarative settings with `corven-agent-tools` and `plugin@corven-agent-tools`. The plugin names remain `github-issues` and `use-decision-model`.
 
 ## Usage
 
-The skill is discovered automatically. Ask for queue status, "what's ready next", or "what's blocking X" — or invoke the helper directly. `<skill-dir>` is the directory containing the skill's `SKILL.md`:
+The skills are discovered automatically.
+
+For the issue queue, ask for queue status, "what's ready next", or "what's blocking X" — or invoke the helper directly. `<skill-dir>` is the directory containing the skill's `SKILL.md`:
 
 ```shell
 python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --format text
 python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --limit 100 --format text --mode status
 ```
+
+For a decision model, ask for a typed judgment (route a ticket, gate a yes/no fact, score quality) — or send a payload directly:
+
+```shell
+python3 <skill-dir>/scripts/decision.py --file examples/choice.json
+echo '{"state": "...", "questions": {...}}' | python3 <skill-dir>/scripts/decision.py --stdin
+```
+
+## Issue-work-queue reference
+
+### Flags
 
 Flags: `--mode {queue,status}` · `--repo owner/repo` · `--state {all,open}` · `--label` (repeatable, default `squad`; a base label includes `<label>:*` members) · `--format {json,text,ascii,mermaid,markdown-mermaid}` · `--limit N` · `--project N` (optional board-drift diagnostic) · `--project-owner login`.
 
@@ -110,12 +128,18 @@ References resolve to issue numbers or `[Task X.Y]` ids parsed from issue titles
 corven-agent-tools/                        # marketplace: corven-agent-tools
 ├── .github/plugin/marketplace.json
 └── plugins/
-    └── github-issues/                    # plugin: github-issues@corven-agent-tools
-        ├── plugin.json                   # Agent Plugins 1.0 manifest ($schema → v1, not legacy)
-        └── skills/issue-work-queue/
+    ├── github-issues/                    # plugin: github-issues@corven-agent-tools
+    │   ├── plugin.json                   # Agent Plugins 1.0 manifest ($schema → v1, not legacy)
+    │   └── skills/issue-work-queue/
+    │       ├── SKILL.md
+    │       ├── scripts/issue_queue.py
+    │       └── tests/test_issue_queue.py
+    └── use-decision-model/                  # plugin: use-decision-model@corven-agent-tools
+        ├── plugin.json
+        └── skills/use-decision-model/
             ├── SKILL.md
-            ├── scripts/issue_queue.py
-            └── tests/test_issue_queue.py
+            ├── scripts/decision.py
+            └── examples/{noul,choice,score}.json
 ```
 
 ## Development
