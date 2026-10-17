@@ -82,6 +82,7 @@ let outerReady = false;
 let nextRequestId = 1;
 const pendingRequests = new Map();
 const pendingInnerIds = new Map();
+let outerDiscoveryRequest;
 let outerInitializeRequest;
 const queuedRequests = [];
 
@@ -134,6 +135,34 @@ function respondToOuterInitialize() {
     outerInitializeRequest = undefined;
 }
 
+function respondToOuterDiscovery() {
+    if (!outerDiscoveryRequest || !innerReady) {
+        return;
+    }
+
+    write(process.stdout, {
+        jsonrpc: "2.0",
+        id: outerDiscoveryRequest.id,
+        result: {
+            resultType: "complete",
+            supportedVersions: ["2026-07-28"],
+            capabilities: {
+                tools: { listChanged: false },
+            },
+            _meta: {
+                "io.modelcontextprotocol/serverInfo": {
+                    name: "ChangeLearn.Host",
+                    version: pluginVersion,
+                },
+            },
+        },
+    });
+    outerDiscoveryRequest = undefined;
+    outerReady = true;
+    log("outer MCP discovery completed");
+    flushQueue();
+}
+
 createInterface({ input: host.stdout }).on("line", (line) => {
     let message;
     try {
@@ -150,6 +179,7 @@ createInterface({ input: host.stdout }).on("line", (line) => {
         }
         innerReady = true;
         log("inner MCP initialization completed");
+        respondToOuterDiscovery();
         respondToOuterInitialize();
         flushQueue();
         return;
@@ -182,6 +212,16 @@ clientInput.on("line", (line) => {
     }
 
     log(`received ${request.method ?? "response"}${request.id === undefined ? "" : ` id=${request.id}`}`);
+
+    if (request.method === "server/discover") {
+        if (outerDiscoveryRequest) {
+            log("received a duplicate outer MCP discovery request");
+            return;
+        }
+        outerDiscoveryRequest = request;
+        respondToOuterDiscovery();
+        return;
+    }
 
     if (request.method === "initialize") {
         if (outerInitializeRequest) {

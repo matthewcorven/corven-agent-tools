@@ -107,7 +107,9 @@ via `npx` on first use; requires Node.js).
   stdio builds before it execs `ChangeLearn.Host.dll --stdio`; tools analyze
   the repo the harness was launched in. The bridge also owns the host lifecycle
   and stops it when the MCP client closes, its parent exits, or it receives a
-  termination signal. It records lifecycle-only diagnostics—method names and
+  termination signal. It answers the current `server/discover` probe itself
+  before translating tool calls to the host's supported protocol. It records
+  lifecycle-only diagnostics—method names and
   request IDs, never tool arguments or results—at
   `${TMPDIR:-/tmp}/change-learn-mcp/bridge-<pid>.log`.
 - **streamable HTTP + Blazor UI (manual)** — `dotnet run` serves the status

@@ -85,6 +85,9 @@ if [[ ! -f "$dll" ]]; then
   exit 1
 fi
 
+release_build_lock
+trap - EXIT
+
 # Analyze the repo the harness launched us in, unless overridden.
 export ChangeLearn__RepoPath="${CHANGE_LEARN_REPO:-$PWD}"
 # The skill scripts live beside this launcher in the installed plugin, not in
