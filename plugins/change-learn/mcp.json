@@ -3,8 +3,9 @@
   "mcpServers": {
     "change-learn": {
       "type": "stdio",
-      "command": "bash",
+      "command": "node",
       "args": [
+        "${PLUGIN_ROOT}/scripts/mcp-protocol-bridge.mjs",
         "${PLUGIN_ROOT}/scripts/mcp-stdio.sh"
       ]
     }

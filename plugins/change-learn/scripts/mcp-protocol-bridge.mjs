@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
 const hostLauncher = process.argv[2];
+const innerProtocolVersion = "2025-11-25";
 if (!hostLauncher) {
     process.stderr.write("change-learn: missing inner MCP host launcher.\n");
     process.exit(1);
@@ -57,7 +58,7 @@ function respondToOuterInitialize() {
         jsonrpc: "2.0",
         id: outerInitializeRequest.id,
         result: {
-            protocolVersion: outerInitializeRequest.params?.protocolVersion ?? "2025-11-25",
+            protocolVersion: innerProtocolVersion,
             capabilities: { tools: { listChanged: false } },
             serverInfo: {
                 name: "ChangeLearn.Host",
@@ -176,7 +177,7 @@ write(host.stdin, {
     id: 0,
     method: "initialize",
     params: {
-        protocolVersion: "2025-11-25",
+        protocolVersion: innerProtocolVersion,
         capabilities: {},
         clientInfo: {
             name: "change-learn-protocol-bridge",

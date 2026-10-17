@@ -101,10 +101,11 @@ via `npx` on first use; requires Node.js).
 
 `hosts/ChangeLearn.Host` is a .NET 10 app with two transports:
 
-- **stdio (default for harnesses)** — `mcp.json` starts
-  `scripts/mcp-stdio.sh` directly. The launcher builds the host incrementally
-  (output to stderr) and execs `ChangeLearn.Host.dll --stdio`; tools analyze
-  the repo the harness was launched in.
+- **stdio (default for harnesses)** — `mcp.json` starts a small Node protocol
+  bridge that negotiates the host's supported MCP protocol and proxies to
+  `scripts/mcp-stdio.sh`. The launcher builds the host incrementally (output
+  to stderr) and execs `ChangeLearn.Host.dll --stdio`; tools analyze the repo
+  the harness was launched in.
 - **streamable HTTP + Blazor UI (manual)** — `dotnet run` serves the status
   page and an MCP endpoint at `http://localhost:5190/mcp`.
 
