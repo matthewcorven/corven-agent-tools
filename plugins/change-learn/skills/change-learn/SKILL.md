@@ -30,11 +30,13 @@ then per-area design, then per-file detail — never the reverse.
    `.change-learn.json`, its `focus`, `ignore`, `areas`, `highlight`, and
    `context_files` settings shape every analysis. Read each listed
    `context_files` document before writing any narrative.
-3. **MCP host when available.** If the `change-learn` MCP server is
-   connected (Blazor host from this plugin), prefer its tools
+3. **Use the resilient local path by default.** Run the bundled scripts for
+   analysis, config, diffs, and deck construction. The `change-learn` MCP
+   host is an optional enhancement for healthy sessions — use its tools
    (`analyze_changes`, `generate_deck`, `summarize_changes`,
-   `export_deck_pdf`) over running scripts manually — the host adds the
-   Squad agent team and records decisions deterministically.
+   `export_deck_pdf`) only when they have completed successfully in the
+   current session. Do not retry a generic MCP invocation failure; continue
+   with the local scripts and report that the fallback was used.
 4. **Mermaid by default, PlantUML on request.** Both are plain-text; emit
    PlantUML only when the user asks for it or the repo config sets
    `"deck": {"diagrams": "plantuml"}`.
@@ -126,3 +128,13 @@ When installed in a consumer project, suggest committing a
 the generated deck rather than the raw diff for orientation. The deck is a
 learning artifact — optimize for a reader seeing the change for the first
 time.
+
+## Canvas range selection
+
+The Change Learn canvas includes **From commit** and **To commit** selectors.
+Each option includes the full commit identity behind the selected value,
+short SHA, subject, local branch/ref decorations, and GitHub pull-request
+metadata when `gh pr list` can retrieve it. Select an ancestor **From**
+commit and later **To** commit, then choose **Analyze span**. This executes
+the bundled `lineage.py` locally through the canvas, so it remains available
+when the App cannot dispatch MCP tool results.

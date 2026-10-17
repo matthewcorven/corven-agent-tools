@@ -19,7 +19,11 @@ This is an [Agent Plugins 1.0](https://agent-plugins.org/) plugin with two layer
 3. **A GitHub Copilot canvas** — GitHub Copilot App discovers the bundled
    `com.github.copilot/extensions/change-learn` extension automatically. It
    provides an interactive Change Learn panel for summaries, Mermaid source,
-   and Marp deck slide previews.
+   and Marp deck slide previews. Its **From commit** and **To commit**
+   selectors include commit SHAs, subjects, branch/ref decorations, and
+   available GitHub pull-request metadata. **Analyze span** validates the
+   selected ancestor range and runs `lineage.py` locally through the canvas,
+   so it remains available when the App cannot dispatch an MCP tool result.
 
 ## The skill (portable layer)
 

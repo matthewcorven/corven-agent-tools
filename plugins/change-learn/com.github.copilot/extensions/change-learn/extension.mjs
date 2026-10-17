@@ -9,9 +9,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CanvasError, createCanvas, joinSession } from "@github/copilot-sdk/extension";
+import { analyzeCommitRange, loadCommitRange } from "./git-range.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const indexPath = path.join(__dirname, "web", "index.html");
+const pluginRoot = path.resolve(__dirname, "../../..");
+const lineagePath = path.join(pluginRoot, "skills", "change-learn", "scripts", "lineage.py");
 
 // One local loopback server + content state per open canvas instance.
 const servers = new Map();
@@ -23,11 +26,14 @@ function emptyState() {
         diagrams: [], // { title, code } — Mermaid source
         deckMarkdown: "",
         deckPath: "",
+        repository: "",
+        commits: [],
+        selectedRange: undefined,
     };
 }
 
-function sendJson(res, value) {
-    res.writeHead(200, {
+function sendJson(res, value, status = 200) {
+    res.writeHead(status, {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store",
     });
@@ -69,6 +75,61 @@ async function readDeckFile(deckPath) {
     }
 }
 
+function rangeSummary(analysis, from, to) {
+    const areas = analysis.areas ?? [];
+    const areaLines = areas.slice(0, 6).map((area) =>
+        `- **${area.area}**: ${area.files} files, +${area.adds} / -${area.dels}`,
+    );
+    return [
+        `## ${from.shortId} to ${to.shortId}`,
+        "",
+        `**${analysis.totals?.commits ?? 0} commits** across **${analysis.totals?.files ?? 0} files** `
+            + `(+${analysis.totals?.adds ?? 0} / -${analysis.totals?.dels ?? 0}).`,
+        "",
+        `From: \`${from.shortId}\` — ${from.subject}`,
+        `To: \`${to.shortId}\` — ${to.subject}`,
+        ...(areaLines.length ? ["", "### Areas", ...areaLines] : []),
+    ].join("\n");
+}
+
+function selectedCommit(entry, id) {
+    return entry.state.commits.find((commit) => commit.id === id);
+}
+
+async function refreshCommits(entry) {
+    const range = await loadCommitRange(entry.repository);
+    entry.repository = range.repository;
+    entry.state.repository = range.repository;
+    entry.state.commits = range.commits;
+
+    if (
+        entry.state.selectedRange
+        && (!selectedCommit(entry, entry.state.selectedRange.from)
+            || !selectedCommit(entry, entry.state.selectedRange.to))
+    ) {
+        entry.state.selectedRange = undefined;
+    }
+}
+
+async function analyzeRange(entry, input) {
+    const from = typeof input?.from === "string" ? input.from : "";
+    const to = typeof input?.to === "string" ? input.to : "";
+    const analysis = await analyzeCommitRange({
+        repository: entry.repository,
+        scriptPath: lineagePath,
+        from,
+        to,
+        allowedCommitIds: new Set(entry.state.commits.map((commit) => commit.id)),
+    });
+    const fromCommit = selectedCommit(entry, from);
+    const toCommit = selectedCommit(entry, to);
+    entry.state.selectedRange = { from, to };
+    entry.state.summaryMarkdown = rangeSummary(analysis, fromCommit, toCommit);
+    entry.state.diagrams = [];
+    broadcast(entry, "state", entry.state);
+    return analysis;
+}
+
 async function applyInput(entry, input) {
     if (!input || typeof input !== "object") return;
     if (typeof input.title === "string" && input.title.trim()) entry.state.title = input.title.trim();
@@ -80,6 +141,23 @@ async function applyInput(entry, input) {
     } else if (typeof input.deckPath === "string" && input.deckPath.trim()) {
         entry.state.deckMarkdown = await readDeckFile(input.deckPath.trim());
         entry.state.deckPath = input.deckPath.trim();
+    }
+}
+
+async function readJson(req) {
+    const chunks = [];
+    let length = 0;
+    for await (const chunk of req) {
+        length += chunk.length;
+        if (length > 8_192) {
+            throw new CanvasError("request_too_large", "Canvas request exceeds 8 KiB.");
+        }
+        chunks.push(chunk);
+    }
+    try {
+        return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch {
+        throw new CanvasError("invalid_request", "Canvas request must be valid JSON.");
     }
 }
 
@@ -103,6 +181,19 @@ async function handleRequest(entry, req, res) {
         return;
     }
 
+    if (req.method === "POST" && url.pathname === "/analyze") {
+        await analyzeRange(entry, await readJson(req));
+        sendJson(res, entry.state);
+        return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/refresh") {
+        await refreshCommits(entry);
+        broadcast(entry, "state", entry.state);
+        sendJson(res, entry.state);
+        return;
+    }
+
     if (url.pathname === "/" || url.pathname === "/index.html") {
         const html = await readFile(indexPath, "utf8");
         res.writeHead(200, {
@@ -117,17 +208,30 @@ async function handleRequest(entry, req, res) {
     res.end("Not found");
 }
 
-async function startServer() {
+async function startServer(workingDirectory) {
     const entry = {
         clients: new Set(),
         state: emptyState(),
+        repository: "",
         server: undefined,
         url: undefined,
     };
+    try {
+        const range = await loadCommitRange(workingDirectory);
+        entry.repository = range.repository;
+        entry.state.repository = range.repository;
+        entry.state.commits = range.commits;
+    } catch (error) {
+        throw new CanvasError(
+            "git_repository_unavailable",
+            `Could not load commits from the active repository: ${error.message}`,
+        );
+    }
     const server = createServer((req, res) => {
         handleRequest(entry, req, res).catch((error) => {
-            res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
-            res.end(error instanceof Error ? error.message : "change-learn canvas server error");
+            sendJson(res, {
+                error: error instanceof Error ? error.message : "Change Learn canvas request failed.",
+            }, 400);
         });
     });
     entry.server = server;
@@ -204,6 +308,50 @@ await joinSession({
                     },
                 },
                 {
+                    name: "refresh_commits",
+                    description:
+                        "Refresh the commit, branch, and available pull-request metadata in an open Change Learn canvas.",
+                    handler: async (ctx) => {
+                        const entry = getOpenEntry(ctx.instanceId);
+                        await refreshCommits(entry);
+                        broadcast(entry, "state", entry.state);
+                        return {
+                            repository: entry.repository,
+                            commits: entry.state.commits.length,
+                        };
+                    },
+                },
+                {
+                    name: "analyze_range",
+                    description:
+                        "Analyze a selected ancestor commit span directly through Change Learn's local script path, without MCP tool dispatch.",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            from: { type: "string", description: "Full commit SHA from the canvas From selector." },
+                            to: { type: "string", description: "Full commit SHA from the canvas To selector." },
+                        },
+                        required: ["from", "to"],
+                        additionalProperties: false,
+                    },
+                    handler: async (ctx) => {
+                        const entry = getOpenEntry(ctx.instanceId);
+                        try {
+                            const analysis = await analyzeRange(entry, ctx.input);
+                            return {
+                                from: analysis.spec?.from,
+                                to: analysis.spec?.to,
+                                totals: analysis.totals,
+                            };
+                        } catch (error) {
+                            throw new CanvasError(
+                                "range_analysis_failed",
+                                error instanceof Error ? error.message : "Could not analyze the selected commit range.",
+                            );
+                        }
+                    },
+                },
+                {
                     name: "load_deck",
                     description:
                         "Load a Marp deck into the canvas slide previewer, either from an absolute .md file path (e.g. a deck scaffolded by deck.py or export_deck) or from inline markdown.",
@@ -249,7 +397,14 @@ await joinSession({
             open: async (ctx) => {
                 let entry = servers.get(ctx.instanceId);
                 if (!entry) {
-                    entry = await startServer();
+                    const workingDirectory = ctx.session?.workingDirectory;
+                    if (!workingDirectory) {
+                        throw new CanvasError(
+                            "workspace_unavailable",
+                            "The active session working directory is unavailable.",
+                        );
+                    }
+                    entry = await startServer(workingDirectory);
                     servers.set(ctx.instanceId, entry);
                 }
                 await applyInput(entry, ctx.input);
