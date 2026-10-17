@@ -49,5 +49,8 @@ fi
 
 # Analyze the repo the harness launched us in, unless overridden.
 export ChangeLearn__RepoPath="${CHANGE_LEARN_REPO:-$PWD}"
+# The skill scripts live beside this launcher in the installed plugin, not in
+# the consumer repository that the MCP host analyzes.
+export ChangeLearn__SkillScriptsPath="${CHANGE_LEARN_SKILL_SCRIPTS_PATH:-$script_dir/../skills/change-learn/scripts}"
 
 exec dotnet "$dll" --stdio

@@ -11,7 +11,7 @@
     {
       "name": "change-learn",
       "source": "plugins/change-learn",
-      "version": "1.2.2",
+      "version": "1.2.4",
       "description": "change-learn skill + MCP host: AI-visualize and AI-summarize changes between two source-control states as Mermaid diagrams and Marp slide decks with PDF export",
       "keywords": ["git", "diff", "visualization", "marp", "mermaid", "slides", "mcp"]
     },
