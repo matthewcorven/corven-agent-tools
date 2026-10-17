@@ -2,8 +2,9 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
   "mcpServers": {
     "change-learn": {
-      "type": "streamable-http",
-      "url": "http://localhost:5190/mcp"
+      "type": "stdio",
+      "command": "bash",
+      "args": ["${PLUGIN_ROOT}/scripts/mcp-stdio.sh"]
     }
   }
 }

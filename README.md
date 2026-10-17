@@ -14,7 +14,7 @@ Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository dis
 | Example payloads | `plugins/use-decision-model/skills/use-decision-model/examples/` | Ready-to-send `noul.json`, `choice.json`, `score.json` payloads, plus `borderline.json` (hedged `noul` case) and `multi.json` (all three types on one JSON-object state) |
 | `change-learn` skill | `plugins/change-learn/skills/change-learn/SKILL.md` | AI-visualize and AI-summarize changes between two source-control states as Mermaid diagrams and Marp slide decks (PDF export), narrated high-level first then lower, driven by a repo-root `.change-learn.json` |
 | Lineage + deck scripts | `plugins/change-learn/skills/change-learn/scripts/` | `lineage.py` (token-efficient change analysis as compact JSON) and `deck.py` (Marp deck scaffold with Mermaid blocks + `npx` PDF export) |
-| Change-learn MCP host | `hosts/ChangeLearn.Host/` | Blazor Server app exposing 8 MCP tools at `:5190/mcp`, with a Squad agent team on the GitHub Copilot SDK + Microsoft Agent Framework — see [`plugins/change-learn/README.md`](plugins/change-learn/README.md) |
+| Change-learn MCP host | `hosts/ChangeLearn.Host/` | Dual-transport MCP host (on-demand stdio for harnesses; Blazor Server UI + `:5190/mcp` HTTP) exposing 8 tools, with a Squad agent team on the GitHub Copilot SDK + Microsoft Agent Framework — see [`plugins/change-learn/README.md`](plugins/change-learn/README.md) |
 
 Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/) for the issue-queue skill. The decision-model sender needs `OPENROUTER_API_KEY` in the environment.
 
@@ -132,11 +132,11 @@ References resolve to issue numbers or `[Task X.Y]` ids parsed from issue titles
 corven-agent-tools/                        # marketplace: corven-agent-tools
 ├── .github/plugin/marketplace.json
 ├── hosts/
-│   └── ChangeLearn.Host/                 # Blazor Server MCP host for change-learn (:5190/mcp)
+│   └── ChangeLearn.Host/                 # change-learn MCP host (stdio on demand, or Blazor UI + :5190/mcp)
 └── plugins/
     ├── change-learn/                     # plugin: change-learn@corven-agent-tools
     │   ├── plugin.json                   # Agent Plugins 1.0 manifest
-    │   ├── mcp.json                      # streamable-http → localhost:5190/mcp
+    │   ├── mcp.json                      # stdio → scripts/mcp-stdio.sh (starts host on demand)
     │   ├── README.md
     │   └── skills/change-learn/
     │       ├── SKILL.md

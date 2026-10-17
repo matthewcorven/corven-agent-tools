@@ -60,8 +60,16 @@ via `npx` on first use; requires Node.js).
 
 ## The MCP host (full architecture)
 
-`hosts/ChangeLearn.Host` is a .NET 10 Blazor Server app hosting a
-streamable-HTTP MCP endpoint at `http://localhost:5190/mcp` (see `mcp.json`).
+`hosts/ChangeLearn.Host` is a .NET 10 app with two transports:
+
+- **stdio (default for harnesses)** — `mcp.json` points at
+  `scripts/mcp-stdio.sh`, so Copilot CLI / Copilot app start the server
+  **on demand** per session and stop it when the session ends. The launcher
+  builds the host incrementally (output to stderr) and execs
+  `ChangeLearn.Host.dll --stdio`; tools analyze the repo the harness was
+  launched in.
+- **streamable HTTP + Blazor UI (manual)** — `dotnet run` serves the status
+  page and an MCP endpoint at `http://localhost:5190/mcp`.
 
 ```text
 Blazor Server (status page, :5190)
@@ -83,11 +91,17 @@ Blazor Server (status page, :5190)
 | `export_deck_pdf` | Render the deck to PDF/HTML |
 | `record_decision` / `list_decisions` | Squad append-only decision ledger |
 
-Run it:
+Run it manually (UI + HTTP mode):
 
 ```shell
 cd hosts/ChangeLearn.Host
 dotnet run          # listens on http://localhost:5190
+```
+
+Stdio mode is normally launched by the harness, but can be probed directly:
+
+```shell
+plugins/change-learn/scripts/mcp-stdio.sh   # speaks MCP on stdin/stdout
 ```
 
 Configuration (`appsettings.json`, all optional — blank values fall back to
@@ -116,8 +130,17 @@ copilot plugin marketplace add matthewcorven/corven-agent-tools
 copilot plugin install change-learn@corven-agent-tools
 ```
 
-The skill works immediately. The MCP server entry activates when the host is
-running on `:5190`.
+The skill works immediately. The MCP server starts **on demand**: the harness
+runs `scripts/mcp-stdio.sh`, which needs the .NET 10 SDK plus a local clone of
+this repo to supply the host. The launcher finds the host via (in order):
+
+1. `CHANGE_LEARN_HOST_DIR` — `export CHANGE_LEARN_HOST_DIR=<clone>/hosts/ChangeLearn.Host`
+2. the source checkout itself, when the plugin runs from this repo
+3. `~/.config/change-learn/host-dir` — a file containing the host path:
+   `mkdir -p ~/.config/change-learn && echo <clone>/hosts/ChangeLearn.Host > ~/.config/change-learn/host-dir`
+
+Set `CHANGE_LEARN_REPO` to analyze a repo other than the harness's working
+directory.
 
 ## Tests
 
