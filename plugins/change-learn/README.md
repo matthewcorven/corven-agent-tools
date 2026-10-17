@@ -16,6 +16,10 @@ This is an [Agent Plugins 1.0](https://agent-plugins.org/) plugin with two layer
    app exposing the same capabilities as 8 MCP tools, with a Squad agent team on
    the GitHub Copilot SDK + Microsoft Agent Framework for AI-written summaries
    and an append-only decision ledger.
+3. **A GitHub Copilot canvas** — GitHub Copilot App discovers the bundled
+   `com.github.copilot/extensions/change-learn` extension automatically. It
+   provides an interactive Change Learn panel for summaries, Mermaid source,
+   and Marp deck slide previews.
 
 ## The skill (portable layer)
 

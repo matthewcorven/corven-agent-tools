@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Change Learn</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: Canvas;
+      color: CanvasText;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; }
+    header {
+      align-items: center;
+      border-bottom: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+      display: flex;
+      gap: 12px;
+      padding: 12px 16px;
+    }
+    h1 { flex: 1; font-size: 18px; margin: 0; }
+    button {
+      background: transparent;
+      border: 1px solid color-mix(in srgb, CanvasText 35%, transparent);
+      border-radius: 5px;
+      color: inherit;
+      cursor: pointer;
+      padding: 6px 10px;
+    }
+    button[aria-selected="true"] {
+      background: Highlight;
+      border-color: Highlight;
+      color: HighlightText;
+    }
+    main { padding: 16px; }
+    [hidden] { display: none !important; }
+    .empty {
+      color: color-mix(in srgb, CanvasText 65%, transparent);
+      line-height: 1.5;
+      margin: 24px auto;
+      max-width: 48rem;
+      text-align: center;
+    }
+    .summary {
+      line-height: 1.55;
+      margin: 0;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    .diagram {
+      border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+      border-radius: 6px;
+      margin: 0 0 16px;
+      overflow: hidden;
+    }
+    .diagram h2 {
+      font-size: 15px;
+      margin: 0;
+      padding: 10px 12px;
+    }
+    pre {
+      background: color-mix(in srgb, CanvasText 7%, Canvas);
+      border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+      margin: 0;
+      overflow: auto;
+      padding: 12px;
+    }
+    .deck {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+    }
+    .slide {
+      border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+      border-radius: 8px;
+      line-height: 1.5;
+      min-height: 260px;
+      overflow: auto;
+      padding: 24px;
+      white-space: pre-wrap;
+    }
+    .slide-count {
+      color: color-mix(in srgb, CanvasText 60%, transparent);
+      grid-column: 1 / -1;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="title">Change Learn</h1>
+    <button type="button" data-tab="summary" aria-selected="true">Summary</button>
+    <button type="button" data-tab="diagrams" aria-selected="false">Diagrams</button>
+    <button type="button" data-tab="deck" aria-selected="false">Deck</button>
+  </header>
+  <main>
+    <section id="summary" aria-labelledby="title"></section>
+    <section id="diagrams" hidden></section>
+    <section id="deck" hidden></section>
+  </main>
+  <script>
+    const state = {
+      title: "Change Learn",
+      summaryMarkdown: "",
+      diagrams: [],
+      deckMarkdown: "",
+    };
+    let activeTab = "summary";
+    let slideIndex = 0;
+
+    const title = document.querySelector("#title");
+    const tabs = [...document.querySelectorAll("[data-tab]")];
+    const panels = Object.fromEntries(["summary", "diagrams", "deck"].map((id) => [id, document.querySelector(`#${id}`)]));
+
+    function appendText(parent, text, className) {
+      const element = document.createElement("div");
+      if (className) element.className = className;
+      element.textContent = text;
+      parent.append(element);
+    }
+
+    function splitSlides(markdown) {
+      return markdown
+        .replace(/^---\s*\n(?:[\s\S]*?)^---\s*\n?/m, "")
+        .split(/\n---\s*\n/g)
+        .map((slide) => slide.trim())
+        .filter(Boolean);
+    }
+
+    function renderSummary() {
+      panels.summary.replaceChildren();
+      appendText(
+        panels.summary,
+        state.summaryMarkdown || "Use the show_changes action to display a change summary.",
+        state.summaryMarkdown ? "summary" : "empty",
+      );
+    }
+
+    function renderDiagrams() {
+      panels.diagrams.replaceChildren();
+      if (!state.diagrams.length) {
+        appendText(panels.diagrams, "Use the show_changes action to display Mermaid diagram source.", "empty");
+        return;
+      }
+      for (const diagram of state.diagrams) {
+        const article = document.createElement("article");
+        article.className = "diagram";
+        const heading = document.createElement("h2");
+        heading.textContent = diagram.title;
+        const source = document.createElement("pre");
+        source.textContent = diagram.code;
+        article.append(heading, source);
+        panels.diagrams.append(article);
+      }
+    }
+
+    function renderDeck() {
+      panels.deck.replaceChildren();
+      const slides = splitSlides(state.deckMarkdown);
+      if (!slides.length) {
+        appendText(panels.deck, "Use the load_deck action to preview a Marp deck.", "empty");
+        return;
+      }
+      slideIndex = Math.min(slideIndex, slides.length - 1);
+      const previous = document.createElement("button");
+      previous.type = "button";
+      previous.textContent = "Previous";
+      previous.disabled = slideIndex === 0;
+      previous.addEventListener("click", () => { slideIndex--; renderDeck(); });
+      const next = document.createElement("button");
+      next.type = "button";
+      next.textContent = "Next";
+      next.disabled = slideIndex === slides.length - 1;
+      next.addEventListener("click", () => { slideIndex++; renderDeck(); });
+      const slide = document.createElement("article");
+      slide.className = "slide";
+      slide.textContent = slides[slideIndex];
+      const count = document.createElement("div");
+      count.className = "slide-count";
+      count.textContent = `Slide ${slideIndex + 1} of ${slides.length}`;
+      const deck = document.createElement("div");
+      deck.className = "deck";
+      deck.append(previous, slide, next, count);
+      panels.deck.append(deck);
+    }
+
+    function render() {
+      title.textContent = state.title || "Change Learn";
+      renderSummary();
+      renderDiagrams();
+      renderDeck();
+      for (const tab of tabs) {
+        const selected = tab.dataset.tab === activeTab;
+        tab.setAttribute("aria-selected", String(selected));
+        panels[tab.dataset.tab].hidden = !selected;
+      }
+    }
+
+    function setTab(tab) {
+      if (panels[tab]) {
+        activeTab = tab;
+        render();
+      }
+    }
+
+    function update(nextState) {
+      Object.assign(state, nextState);
+      slideIndex = 0;
+      render();
+    }
+
+    tabs.forEach((tab) => tab.addEventListener("click", () => setTab(tab.dataset.tab)));
+    new EventSource("/events").addEventListener("state", (event) => update(JSON.parse(event.data)));
+    new EventSource("/events").addEventListener("showTab", (event) => setTab(JSON.parse(event.data).tab));
+    fetch("/state").then((response) => response.json()).then(update).catch(() => render());
+    render();
+  </script>
+</body>
+</html>
