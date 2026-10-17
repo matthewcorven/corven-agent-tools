@@ -63,6 +63,25 @@ def file_table(files, limit=12):
     return "\n".join(rows)
 
 
+def area_file_rows(area, files, untracked):
+    """Return the analysis samples for one area, including untracked files."""
+    tracked_by_path = {f["p"]: f for f in files}
+    untracked_by_path = {u["p"]: u for u in untracked}
+    rows = []
+    for path in area.get("sample", []):
+        if path in tracked_by_path:
+            rows.append(tracked_by_path[path])
+        elif path in untracked_by_path:
+            u = untracked_by_path[path]
+            rows.append({
+                "p": path,
+                "st": "A (untracked)",
+                "a": u.get("lines"),
+                "d": 0,
+            })
+    return rows
+
+
 def scaffold(analysis, title, theme, repo_name):
     spec = analysis.get("spec", {})
     totals = analysis.get("totals", {})
@@ -131,7 +150,7 @@ def scaffold(analysis, title, theme, repo_name):
 
     # 5. Per-area slides (middle level)
     for a in areas[:6]:
-        area_files = [f for f in files if f["p"].startswith(a["area"]) or a["area"] == "(root)"][:8]
+        area_files = area_file_rows(a, files, untracked)
         slides.append(f"""---
 
 ## Area — {a['area']}

@@ -214,6 +214,39 @@ class TestDeckScaffold(GitRepoFixture):
         self.assertLess(deck.index("The story at a glance"),
                         deck.index("Appendix"))
 
+    def test_per_area_tables_use_only_that_areas_samples(self):
+        analysis = {
+            "spec": {"repo": self.repo},
+            "totals": {},
+            "commits": [],
+            "areas": [
+                {"area": "src", "files": 1, "adds": 2, "dels": 0,
+                 "sample": ["src/app.py"]},
+                {"area": "(root)", "files": 1, "adds": 1, "dels": 0,
+                 "sample": ["README.md"]},
+                {"area": "notes", "files": 1, "adds": 3, "dels": 0,
+                 "sample": ["notes/new.md"]},
+            ],
+            "files": [
+                {"p": "src/app.py", "st": "M", "a": 2, "d": 0},
+                {"p": "README.md", "st": "M", "a": 1, "d": 0},
+            ],
+            "untracked": [{"p": "notes/new.md", "lines": 3}],
+            "flags": [],
+        }
+
+        deck = deck_mod.scaffold(analysis, "Area samples", "default", "repo")
+        src = deck.split("## Area — src", 1)[1].split("\n---", 1)[0]
+        root = deck.split("## Area — (root)", 1)[1].split("\n---", 1)[0]
+        notes = deck.split("## Area — notes", 1)[1].split("\n---", 1)[0]
+
+        self.assertIn("`src/app.py`", src)
+        self.assertNotIn("`README.md`", src)
+        self.assertIn("`README.md`", root)
+        self.assertNotIn("`src/app.py`", root)
+        self.assertIn("`notes/new.md`", notes)
+        self.assertIn("A (untracked)", notes)
+
 
 class TestDeckUnits(unittest.TestCase):
     def test_mermaid_block_regex(self):

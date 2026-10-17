@@ -59,8 +59,7 @@ narrative in your architecture notes without re-discovering them.
 ### AI model selection: the `"ai"` section
 
 The MCP host reads an optional `"ai"` object from the same file to pick the
-model that writes narrative summaries (`summarize_changes`,
-`explain_for_audience`, `assess_risk`):
+model that writes narrative summaries (`summarize_changes`):
 
 ```json
 {
@@ -104,10 +103,13 @@ via `npx` on first use; requires Node.js).
 - **stdio (default for harnesses)** — `mcp.json` starts a small Node protocol
   bridge that negotiates the host's supported MCP protocol and proxies to
   `scripts/mcp-stdio.sh`. The launcher builds the host incrementally (output
-  to stderr) and execs `ChangeLearn.Host.dll --stdio`; tools analyze the repo
-  the harness was launched in. The bridge also owns the host lifecycle and
-  stops it when the MCP client closes, its parent exits, or it receives a
-  termination signal.
+  to stderr) with isolated temporary intermediates, serializing simultaneous
+  stdio builds before it execs `ChangeLearn.Host.dll --stdio`; tools analyze
+  the repo the harness was launched in. The bridge also owns the host lifecycle
+  and stops it when the MCP client closes, its parent exits, or it receives a
+  termination signal. It records lifecycle-only diagnostics—method names and
+  request IDs, never tool arguments or results—at
+  `${TMPDIR:-/tmp}/change-learn-mcp/bridge-<pid>.log`.
 - **streamable HTTP + Blazor UI (manual)** — `dotnet run` serves the status
   page and an MCP endpoint at `http://localhost:5190/mcp`.
 
@@ -160,8 +162,9 @@ through the GitHub Copilot SDK via Microsoft Agent Framework.
 > **Known caveat:** the Copilot SDK launches the locally installed Copilot CLI;
 > if that CLI predates the SDK's protocol (symptom:
 > `copilot-runtime: unsupported argument '--allow-all'`), `summarize_changes`
-> logs a warning and returns the deterministic summary instead. Update the
-> Copilot CLI to restore AI summaries — every tool keeps working either way.
+> returns a deterministic summary with an actionable compatibility warning.
+> Update the Copilot CLI to restore AI summaries — every non-AI tool keeps
+> working either way.
 
 ## Install
 

@@ -16,16 +16,17 @@ public sealed class ChangeSummarizer(IServiceProvider services, ILogger<ChangeSu
     public async Task<string> SummarizeAsync(string analysisJson, string? audience, CancellationToken ct = default)
     {
         var agentResult = await TrySquadAsync(analysisJson, audience, ct);
-        if (agentResult is not null) return agentResult;
-        return DeterministicSummary(analysisJson, audience);
+        if (agentResult.Summary is not null) return agentResult.Summary;
+        return DeterministicSummary(analysisJson, audience, agentResult.Warning);
     }
 
-    private async Task<string?> TrySquadAsync(string analysisJson, string? audience, CancellationToken ct)
+    private async Task<SquadSummaryResult> TrySquadAsync(string analysisJson, string? audience, CancellationToken ct)
     {
         try
         {
             var agent = services.GetService<AIAgent>();
-            if (agent is null) return null;
+            if (agent is null)
+                return new(null, "No AI agent is configured for the selected provider.");
 
             var prompt = new StringBuilder()
                 .AppendLine("Summarize this source-control change window for a reader seeing it for the first time.")
@@ -38,17 +39,25 @@ public sealed class ChangeSummarizer(IServiceProvider services, ILogger<ChangeSu
             var session = await agent.CreateSessionAsync(cancellationToken: ct);
             var response = await agent.RunAsync(prompt, session, cancellationToken: ct);
             var text = response.Text;
-            return string.IsNullOrWhiteSpace(text) ? null : text;
+            return string.IsNullOrWhiteSpace(text)
+                ? new(null, "The configured AI agent returned an empty response.")
+                : new(text, null);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Squad agent unavailable; using deterministic summary.");
-            return null;
+            return new(null, SummarizationWarning(ex));
         }
     }
 
+    private static string SummarizationWarning(Exception ex) =>
+        ex.ToString().Contains("unsupported argument '--allow-all'", StringComparison.Ordinal)
+            ? "The installed Copilot CLI is incompatible with the GitHub Copilot SDK " +
+              "(it rejects '--allow-all'). Update the Copilot CLI, then retry for an AI-written summary."
+            : "The configured AI runtime was unavailable. Inspect the Change Learn host stderr for details.";
+
     /// <summary>Rigid, template-driven narrative derived only from the analysis JSON.</summary>
-    internal static string DeterministicSummary(string analysisJson, string? audience)
+    internal static string DeterministicSummary(string analysisJson, string? audience, string? warning = null)
     {
         using var doc = JsonDocument.Parse(analysisJson);
         var root = doc.RootElement;
@@ -58,6 +67,11 @@ public sealed class ChangeSummarizer(IServiceProvider services, ILogger<ChangeSu
         sb.AppendLine("# Change summary (deterministic fallback)");
         sb.AppendLine();
         sb.AppendLine($"_Audience: {audience ?? "engineers new to the change"}. Squad agent team was unavailable; this is a template-driven narrative._");
+        if (!string.IsNullOrWhiteSpace(warning))
+        {
+            sb.AppendLine();
+            sb.AppendLine($"> **Warning:** {warning}");
+        }
         sb.AppendLine();
         sb.AppendLine("## Intent (high level)");
         sb.AppendLine($"- Window `{root.GetProperty("spec").GetRawText()}` touches " +
@@ -102,4 +116,6 @@ public sealed class ChangeSummarizer(IServiceProvider services, ILogger<ChangeSu
 
         return sb.ToString();
     }
+
+    private sealed record SquadSummaryResult(string? Summary, string? Warning);
 }

@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { createInterface } from "node:readline";
 
 const hostLauncher = process.argv[2];
@@ -11,9 +14,35 @@ if (!hostLauncher) {
     process.exit(1);
 }
 
+const pluginManifestPath = path.resolve(path.dirname(hostLauncher), "..", "plugin.json");
+let pluginVersion = "unknown";
+try {
+    pluginVersion = JSON.parse(readFileSync(pluginManifestPath, "utf8")).version || pluginVersion;
+} catch {
+    process.stderr.write(`change-learn: could not read plugin version from ${pluginManifestPath}.\n`);
+}
+
+const diagnosticsDirectory = process.env.CHANGE_LEARN_MCP_LOG_DIR
+    ?? path.join(tmpdir(), "change-learn-mcp");
+const diagnosticsPath = path.join(diagnosticsDirectory, `bridge-${process.pid}.log`);
+
+function log(message) {
+    const line = `${new Date().toISOString()} ${message}`;
+    process.stderr.write(`change-learn: ${message}\n`);
+    try {
+        mkdirSync(diagnosticsDirectory, { recursive: true, mode: 0o700 });
+        appendFileSync(diagnosticsPath, `${line}\n`, { mode: 0o600 });
+    } catch (error) {
+        process.stderr.write(`change-learn: could not write diagnostics: ${error.message}\n`);
+    }
+}
+
+log(`starting bridge v${pluginVersion}; parent=${parentPid}; diagnostics=${diagnosticsPath}`);
+
 const host = spawn("bash", [hostLauncher], {
     stdio: ["pipe", "pipe", "pipe"],
 });
+log(`started inner MCP host pid=${host.pid}`);
 
 let shuttingDown = false;
 let forcedShutdownTimer;
@@ -24,11 +53,11 @@ function shutdown(reason, exitCode = 0) {
     }
 
     shuttingDown = true;
-    process.stderr.write(`change-learn: shutting down MCP host (${reason}).\n`);
+    log(`shutting down MCP host (${reason})`);
     host.stdin.end();
     forcedShutdownTimer = setTimeout(() => {
         if (!host.killed) {
-            process.stderr.write("change-learn: MCP host did not stop gracefully; sending SIGTERM.\n");
+            log("MCP host did not stop gracefully; sending SIGTERM");
             host.kill("SIGTERM");
         }
     }, 5_000);
@@ -39,14 +68,12 @@ function shutdown(reason, exitCode = 0) {
 
 host.stderr.on("data", (chunk) => process.stderr.write(chunk));
 host.on("error", (error) => {
-    process.stderr.write(`change-learn: could not start the MCP host: ${error.message}\n`);
+    log(`could not start the MCP host: ${error.message}`);
     shutdown("inner MCP host launch failure", 1);
 });
 host.on("exit", (code, signal) => {
     clearTimeout(forcedShutdownTimer);
-    process.stderr.write(
-        `change-learn: MCP host exited${signal ? ` from ${signal}` : ` with code ${code ?? "unknown"}`}.\n`,
-    );
+    log(`MCP host exited${signal ? ` from ${signal}` : ` with code ${code ?? "unknown"}`}`);
     process.exit(shuttingDown ? 0 : (code ?? 1));
 });
 
@@ -59,6 +86,7 @@ let outerInitializeRequest;
 const queuedRequests = [];
 
 function write(stream, message) {
+    log(`writing ${message.method ?? "response"}${message.id === undefined ? "" : ` id=${message.id}`}`);
     stream.write(`${JSON.stringify(message)}\n`);
 }
 
@@ -66,7 +94,7 @@ function requestInner(method, params, outerId) {
     const innerId = nextRequestId++;
     pendingRequests.set(innerId, outerId);
     pendingInnerIds.set(outerId, innerId);
-    process.stderr.write(`change-learn: forwarding ${method} to inner MCP host.\n`);
+    log(`forwarding ${method} id=${outerId} to inner MCP host as id=${innerId}`);
     write(host.stdin, {
         jsonrpc: "2.0",
         id: innerId,
@@ -99,7 +127,7 @@ function respondToOuterInitialize() {
             capabilities: { tools: { listChanged: false } },
             serverInfo: {
                 name: "ChangeLearn.Host",
-                version: "1.0.0.0",
+                version: pluginVersion,
             },
         },
     });
@@ -111,16 +139,17 @@ createInterface({ input: host.stdout }).on("line", (line) => {
     try {
         message = JSON.parse(line);
     } catch {
-        process.stderr.write(`change-learn: inner host emitted invalid JSON: ${line}\n`);
+        log(`inner host emitted invalid JSON (${line.length} bytes)`);
         return;
     }
 
     if (message.id === 0) {
         if (message.error) {
-            process.stderr.write(`change-learn: inner MCP initialization failed: ${message.error.message}\n`);
+            log(`inner MCP initialization failed: ${message.error.message}`);
             process.exit(1);
         }
         innerReady = true;
+        log("inner MCP initialization completed");
         respondToOuterInitialize();
         flushQueue();
         return;
@@ -128,12 +157,12 @@ createInterface({ input: host.stdout }).on("line", (line) => {
 
     const outerId = pendingRequests.get(message.id);
     if (outerId === undefined) {
-        process.stderr.write(`change-learn: received an inner response for unknown request ${message.id}.\n`);
+        log(`received an inner response for unknown request id=${message.id}`);
         return;
     }
     pendingRequests.delete(message.id);
     pendingInnerIds.delete(outerId);
-    process.stderr.write(`change-learn: returning ${message.error ? "an error" : "a result"} to the MCP client.\n`);
+    log(`returning ${message.error ? "an error" : "a result"} for outer request id=${outerId}`);
     write(process.stdout, {
         jsonrpc: "2.0",
         id: outerId,
@@ -148,13 +177,15 @@ clientInput.on("line", (line) => {
     try {
         request = JSON.parse(line);
     } catch {
-        process.stderr.write(`change-learn: received invalid MCP JSON: ${line}\n`);
+        log(`received invalid outer MCP JSON (${line.length} bytes)`);
         return;
     }
 
+    log(`received ${request.method ?? "response"}${request.id === undefined ? "" : ` id=${request.id}`}`);
+
     if (request.method === "initialize") {
         if (outerInitializeRequest) {
-            process.stderr.write("change-learn: received a duplicate outer MCP initialization request.\n");
+            log("received a duplicate outer MCP initialization request");
             return;
         }
         outerInitializeRequest = request;
@@ -166,6 +197,7 @@ clientInput.on("line", (line) => {
 
     if (request.method === "notifications/initialized") {
         outerReady = true;
+        log("outer MCP initialization completed");
         write(host.stdin, {
             jsonrpc: "2.0",
             method: "notifications/initialized",
@@ -181,7 +213,7 @@ clientInput.on("line", (line) => {
         if (innerRequestId !== undefined) {
             pendingInnerIds.delete(outerRequestId);
             pendingRequests.delete(innerRequestId);
-            process.stderr.write("change-learn: forwarding MCP request cancellation to inner host.\n");
+            log(`forwarding MCP request cancellation for outer id=${outerRequestId}`);
             write(host.stdin, {
                 jsonrpc: "2.0",
                 method: request.method,
@@ -205,7 +237,7 @@ clientInput.on("line", (line) => {
     }
 
     if (!innerReady || !outerReady) {
-        process.stderr.write(`change-learn: queueing ${request.method} until MCP initialization completes.\n`);
+        log(`queueing ${request.method} id=${request.id} until MCP initialization completes`);
         queuedRequests.push(request);
         return;
     }
@@ -218,7 +250,7 @@ process.stdout.on("error", (error) => {
         shutdown("outer MCP stdout closed");
         return;
     }
-    process.stderr.write(`change-learn: outer MCP stdout failed: ${error.message}\n`);
+    log(`outer MCP stdout failed: ${error.message}`);
     shutdown("outer MCP stdout failure", 1);
 });
 process.on("SIGTERM", () => shutdown("SIGTERM received"));

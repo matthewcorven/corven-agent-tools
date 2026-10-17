@@ -5,7 +5,13 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>ChangeLearn.Host</RootNamespace>
+    <Version>1.2.7</Version>
     <NoWarn>$(NoWarn);MEAI001</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(ChangeLearnStdioBuild)' == 'true' and '$(ChangeLearnStdioIntermediatePath)' != ''">
+    <BaseIntermediateOutputPath>$(ChangeLearnStdioIntermediatePath)</BaseIntermediateOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)/obj/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

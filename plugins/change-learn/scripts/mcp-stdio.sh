@@ -38,8 +38,46 @@ if ! command -v dotnet >/dev/null 2>&1; then
   exit 1
 fi
 
+# Keep stdio-host builds out of the source checkout's obj directory. A harness
+# may start more than one server at once, or a developer may build the host at
+# the same time; Static Web Assets caches use exclusive locks in obj.
+build_root="${TMPDIR:-/tmp}/change-learn-host-build"
+build_lock="$build_root/.lock"
+mkdir -p "$build_root"
+
+missing_owner_attempts=0
+while ! mkdir "$build_lock" 2>/dev/null; do
+  if [[ -f "$build_lock/pid" ]]; then
+    lock_owner="$(head -n1 "$build_lock/pid" 2>/dev/null || true)"
+    if [[ "$lock_owner" =~ ^[0-9]+$ ]] && ! kill -0 "$lock_owner" 2>/dev/null; then
+      rm -f "$build_lock/pid"
+      rmdir "$build_lock" 2>/dev/null || true
+      continue
+    fi
+    missing_owner_attempts=0
+  else
+    missing_owner_attempts=$((missing_owner_attempts + 1))
+    if (( missing_owner_attempts >= 20 )); then
+      rmdir "$build_lock" 2>/dev/null || true
+      missing_owner_attempts=0
+      continue
+    fi
+  fi
+  sleep 0.1
+done
+printf '%s\n' "$$" > "$build_lock/pid"
+
+release_build_lock() {
+  rm -f "$build_lock/pid"
+  rmdir "$build_lock" 2>/dev/null || true
+}
+trap release_build_lock EXIT
+trap 'release_build_lock; exit 130' HUP INT TERM
+
 # Quiet incremental build; MSBuild output must not touch stdout.
-dotnet build "$host_dir/ChangeLearn.Host.csproj" -c Release -v quiet --nologo 1>&2
+dotnet build "$host_dir/ChangeLearn.Host.csproj" -c Release -v quiet --nologo \
+  -p:ChangeLearnStdioBuild=true \
+  -p:ChangeLearnStdioIntermediatePath="$build_root/obj/" 1>&2
 
 dll="$host_dir/bin/Release/net10.0/ChangeLearn.Host.dll"
 if [[ ! -f "$dll" ]]; then
