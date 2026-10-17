@@ -9,12 +9,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CanvasError, createCanvas, joinSession } from "@github/copilot-sdk/extension";
-import { analyzeCommitRange, loadCommitRange } from "./git-range.mjs";
+import {
+    analyzeCommitRange,
+    loadCommitRange,
+    scaffoldDeckPreview,
+} from "./git-range.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const indexPath = path.join(__dirname, "web", "index.html");
 const pluginRoot = path.resolve(__dirname, "../../..");
 const lineagePath = path.join(pluginRoot, "skills", "change-learn", "scripts", "lineage.py");
+const deckPath = path.join(pluginRoot, "skills", "change-learn", "scripts", "deck.py");
 
 // One local loopback server + content state per open canvas instance.
 const servers = new Map();
@@ -96,6 +101,30 @@ function selectedCommit(entry, id) {
     return entry.state.commits.find((commit) => commit.id === id);
 }
 
+function directDiagrams(analysis) {
+    const commits = analysis.commits ?? [];
+    const areas = (analysis.areas ?? [])
+        .filter((area) => (area.adds ?? 0) + (area.dels ?? 0) > 0)
+        .slice(0, 8);
+    const diagrams = [];
+
+    if (commits.length) {
+        const lines = ["gitGraph"];
+        for (const commit of [...commits].reverse().slice(-12)) {
+            lines.push(`  commit id: "${commit.sha}"`);
+        }
+        diagrams.push({ title: "Selected commit span", code: lines.join("\n") });
+    }
+    if (areas.length) {
+        const lines = ["pie showData", "  title Changed lines by area"];
+        for (const area of areas) {
+            lines.push(`  ${JSON.stringify(area.area)} : ${(area.adds ?? 0) + (area.dels ?? 0)}`);
+        }
+        diagrams.push({ title: "Change distribution", code: lines.join("\n") });
+    }
+    return diagrams;
+}
+
 async function refreshCommits(entry) {
     const range = await loadCommitRange(entry.repository);
     entry.repository = range.repository;
@@ -123,9 +152,19 @@ async function analyzeRange(entry, input) {
     });
     const fromCommit = selectedCommit(entry, from);
     const toCommit = selectedCommit(entry, to);
+    const deckMarkdown = await scaffoldDeckPreview({
+        scriptPath: deckPath,
+        analysis,
+        title: `Change Learn: ${fromCommit.shortId} to ${toCommit.shortId}`,
+        theme: typeof analysis.config?.deck?.theme === "string"
+            ? analysis.config.deck.theme
+            : undefined,
+    });
     entry.state.selectedRange = { from, to };
     entry.state.summaryMarkdown = rangeSummary(analysis, fromCommit, toCommit);
-    entry.state.diagrams = [];
+    entry.state.diagrams = directDiagrams(analysis);
+    entry.state.deckMarkdown = deckMarkdown;
+    entry.state.deckPath = "";
     broadcast(entry, "state", entry.state);
     return analysis;
 }

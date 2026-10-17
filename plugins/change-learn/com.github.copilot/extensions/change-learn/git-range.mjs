@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -161,5 +164,31 @@ export async function analyzeCommitRange({ repository, scriptPath, from, to, all
         return JSON.parse(stdout);
     } catch {
         throw new Error("Change Learn returned an invalid analysis result.");
+    }
+}
+
+export async function scaffoldDeckPreview({ scriptPath, analysis, title, theme }) {
+    const directory = await mkdtemp(path.join(tmpdir(), "change-learn-canvas-"));
+    const analysisPath = path.join(directory, "analysis.json");
+    const deckPath = path.join(directory, "change-learn.md");
+    try {
+        await writeFile(analysisPath, JSON.stringify(analysis), "utf8");
+        const args = [
+            scriptPath,
+            "scaffold",
+            "--analysis",
+            analysisPath,
+            "-o",
+            deckPath,
+            "--title",
+            title,
+        ];
+        if (theme) {
+            args.push("--theme", theme);
+        }
+        await run("python3", args, { cwd: directory, timeout: 30_000 });
+        return await readFile(deckPath, "utf8");
+    } finally {
+        await rm(directory, { recursive: true, force: true });
     }
 }

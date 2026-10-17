@@ -136,5 +136,6 @@ Each option includes the full commit identity behind the selected value,
 short SHA, subject, local branch/ref decorations, and GitHub pull-request
 metadata when `gh pr list` can retrieve it. Select an ancestor **From**
 commit and later **To** commit, then choose **Analyze span**. This executes
-the bundled `lineage.py` locally through the canvas, so it remains available
+the bundled `lineage.py` locally through the canvas, then fills the Summary,
+Diagrams, and Deck tabs with deterministic artifacts. It remains available
 when the App cannot dispatch MCP tool results.
