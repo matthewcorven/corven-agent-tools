@@ -1,5 +1,9 @@
+using System.ClientModel;
 using ChangeLearn.Host.Components;
 using ChangeLearn.Host.Services;
+using Microsoft.Agents.AI;
+using OpenAI;
+using OpenAI.Chat;
 using Squad.Agents.AI;
 
 // Dual transport:
@@ -63,27 +67,65 @@ static void AddChangeLearnServices(IServiceCollection services, IConfiguration c
     services.AddSingleton<DecisionLedger>();
     services.AddSingleton<ChangeSummarizer>();
 
-    // Squad agent team over the GitHub Copilot SDK (coordinator + lineage-analyst,
-    // diagrammer, deck-author from team/.squad). Registration is declarative; the
-    // Copilot CLI is only contacted when an agent session starts, and
-    // ChangeSummarizer degrades to its deterministic fallback if that fails.
+    const string coordinatorInstructions =
+        "You are the change-learn team coordinator. Route lineage analysis to " +
+        "lineage-analyst, diagram authoring to diagrammer, and slide narration to " +
+        "deck-author. Always narrate high-level first, then progressively lower. " +
+        "Record notable routing choices in decisions.md.";
+
+    var repoCwd = configuration["ChangeLearn:RepoPath"];
+    var repoPath = string.IsNullOrWhiteSpace(repoCwd)
+        ? Directory.GetCurrentDirectory()
+        : repoCwd;
+
+    // Model selection from the repo-root .change-learn.json "ai" section.
+    var ai = AiModelOptions.Load(repoPath);
+
+    if (ai.IsOpenAiCompatible)
+    {
+        // OpenAI-compatible endpoint (e.g. OpenRouter). Registered lazily so a
+        // missing key/model surfaces as a logged warning + deterministic fallback
+        // in ChangeSummarizer rather than crashing host startup.
+        services.AddSingleton<AIAgent>(_ =>
+        {
+            var model = !string.IsNullOrWhiteSpace(ai.Model)
+                ? ai.Model
+                : throw new InvalidOperationException(
+                    $"ai.provider \"{ai.Provider}\" in {AiModelOptions.FileName} requires \"ai.model\".");
+            var key = Environment.GetEnvironmentVariable(ai.ApiKeyEnv);
+            if (string.IsNullOrWhiteSpace(key))
+                throw new InvalidOperationException(
+                    $"Environment variable {ai.ApiKeyEnv} is not set; cannot reach the {ai.Provider} endpoint.");
+
+            var clientOptions = new OpenAIClientOptions();
+            var baseUrl = ai.BaseUrl
+                ?? (ai.Provider == "openrouter" ? "https://openrouter.ai/api/v1" : null);
+            if (!string.IsNullOrWhiteSpace(baseUrl))
+                clientOptions.Endpoint = new Uri(baseUrl);
+
+            return new OpenAIClient(new ApiKeyCredential(key), clientOptions)
+                .GetChatClient(model)
+                .AsAIAgent(instructions: coordinatorInstructions, name: "change-learn");
+        });
+        return;
+    }
+
+    // Default: Squad agent team over the GitHub Copilot SDK (coordinator +
+    // lineage-analyst, diagrammer, deck-author from team/.squad). Registration is
+    // declarative; the Copilot CLI is only contacted when an agent session starts,
+    // and ChangeSummarizer degrades to its deterministic fallback if that fails.
     var squadFolder = configuration["ChangeLearn:SquadFolderPath"];
     if (string.IsNullOrWhiteSpace(squadFolder))
         squadFolder = Path.Combine(AppContext.BaseDirectory, "team", ".squad");
     if (Directory.Exists(squadFolder))
     {
-        var repoCwd = configuration["ChangeLearn:RepoPath"];
         services.AddSquadAgent(options =>
         {
             options.SquadFolderPath = squadFolder;
-            options.Cwd = string.IsNullOrWhiteSpace(repoCwd)
-                ? Directory.GetCurrentDirectory()
-                : repoCwd;
-            options.Instructions =
-                "You are the change-learn team coordinator. Route lineage analysis to " +
-                "lineage-analyst, diagram authoring to diagrammer, and slide narration to " +
-                "deck-author. Always narrate high-level first, then progressively lower. " +
-                "Record notable routing choices in decisions.md.";
+            options.Cwd = repoPath;
+            options.Instructions = coordinatorInstructions;
+            if (!string.IsNullOrWhiteSpace(ai.Model))
+                options.ConfigureSession = session => session.Model = ai.Model;
         });
     }
 }

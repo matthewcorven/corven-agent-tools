@@ -146,6 +146,19 @@ class TestConfig(GitRepoFixture):
         self.assertEqual(cfg["focus"], ["src/**"])
         self.assertTrue(cfg["path"].endswith(".change-learn.json"))
 
+    def test_ai_section_surfaced(self):
+        self._write_config({"ai": {"provider": "openrouter",
+                                   "model": "deepseek/deepseek-v4.1-flash"}})
+        out = sh(self.repo, sys.executable, LINEAGE, "--repo", self.repo, "config")
+        cfg = json.loads(out)
+        self.assertEqual(cfg["ai"]["provider"], "openrouter")
+        self.assertEqual(cfg["ai"]["model"], "deepseek/deepseek-v4.1-flash")
+
+    def test_ai_section_defaults_empty(self):
+        out = sh(self.repo, sys.executable, LINEAGE, "--repo", self.repo, "config")
+        cfg = json.loads(out)
+        self.assertEqual(cfg["ai"], {})
+
 
 class TestDiffMode(GitRepoFixture):
     def test_diff_writes_patch_manifest(self):

@@ -79,6 +79,7 @@ def load_config(root):
         "context_files": [],  # repo-root docs the agent should read for narrative context
         "highlight": [],      # globs; matching files are always surfaced first
         "deck": {},           # {"theme": ..., "audiences": [...]} hints for deck.py / the agent
+        "ai": {},             # {"provider", "model", "baseUrl", "apiKeyEnv"} — host-side model selection
         "max_files": 200,
         "max_commits": 30,
     }

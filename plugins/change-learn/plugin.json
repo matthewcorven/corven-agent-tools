@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "change-learn",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "AI-visualizes and AI-summarizes the changes between two source-control states (commits, staged, untracked, or combinations) as Mermaid/PlantUML diagrams and Marp slide decks, narrated high-level first and then progressively lower, with optional PDF export and token-efficient lineage analysis driven by a repo-root .change-learn.json config.",
   "author": {
     "name": "Matthew Corven"

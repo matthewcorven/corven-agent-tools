@@ -52,6 +52,41 @@ Drop this at the analyzed repo's root to steer every analysis:
 `context_files` are surfaced in the analysis so the agent can ground its
 narrative in your architecture notes without re-discovering them.
 
+### AI model selection: the `"ai"` section
+
+The MCP host reads an optional `"ai"` object from the same file to pick the
+model that writes narrative summaries (`summarize_changes`,
+`explain_for_audience`, `assess_risk`):
+
+```json
+{
+  "ai": {
+    "provider": "copilot",
+    "model": "gpt-6-luna"
+  }
+}
+```
+
+```json
+{
+  "ai": {
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-v4.1-flash",
+    "apiKeyEnv": "OPENROUTER_API_KEY"
+  }
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `provider` | `copilot` | `copilot` (Squad + Copilot CLI) or `openai` / `openai-compatible` / `openrouter` (direct chat-completions) |
+| `model` | provider default | Model ID; for `copilot` it pins the Copilot session model |
+| `baseUrl` | `https://openrouter.ai/api/v1` for `openrouter` | Endpoint for OpenAI-compatible providers |
+| `apiKeyEnv` | `OPENAI_API_KEY` | **Name of the env var** holding the key — the key itself never lives in the file |
+
+If the configured provider can't be reached (missing key, incompatible CLI),
+the host logs a warning and falls back to the deterministic template summary.
+
 ### PDF export
 
 `deck.py export --deck deck.md --format pdf` pre-renders Mermaid blocks with
