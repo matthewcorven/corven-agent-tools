@@ -27,10 +27,12 @@ host.on("exit", (code, signal) => {
 });
 
 let innerReady = false;
+let outerReady = false;
 let nextRequestId = 1;
 const pendingRequests = new Map();
 const pendingInnerIds = new Map();
 let outerInitializeRequest;
+const queuedRequests = [];
 
 function write(stream, message) {
     stream.write(`${JSON.stringify(message)}\n`);
@@ -47,6 +49,17 @@ function requestInner(method, params, outerId) {
         method,
         params,
     });
+}
+
+function flushQueue() {
+    if (!innerReady || !outerReady) {
+        return;
+    }
+
+    while (queuedRequests.length > 0) {
+        const request = queuedRequests.shift();
+        requestInner(request.method, request.params, request.id);
+    }
 }
 
 function respondToOuterInitialize() {
@@ -84,12 +97,8 @@ createInterface({ input: host.stdout }).on("line", (line) => {
             process.exit(1);
         }
         innerReady = true;
-        write(host.stdin, {
-            jsonrpc: "2.0",
-            method: "notifications/initialized",
-            params: {},
-        });
         respondToOuterInitialize();
+        flushQueue();
         return;
     }
 
@@ -132,11 +141,18 @@ clientInput.on("line", (line) => {
     }
 
     if (request.method === "notifications/initialized") {
+        outerReady = true;
+        write(host.stdin, {
+            jsonrpc: "2.0",
+            method: "notifications/initialized",
+            params: request.params ?? {},
+        });
+        flushQueue();
         return;
     }
 
-    if (request.method === "notifications/cancelled") {
-        const outerRequestId = request.params?.requestId;
+    if (request.method === "notifications/cancelled" || request.method === "$/cancelRequest") {
+        const outerRequestId = request.params?.requestId ?? request.params?.id;
         const innerRequestId = pendingInnerIds.get(outerRequestId);
         if (innerRequestId !== undefined) {
             pendingInnerIds.delete(outerRequestId);
@@ -144,9 +160,18 @@ clientInput.on("line", (line) => {
             process.stderr.write("change-learn: forwarding MCP request cancellation to inner host.\n");
             write(host.stdin, {
                 jsonrpc: "2.0",
-                method: "notifications/cancelled",
-                params: { ...request.params, requestId: innerRequestId },
+                method: request.method,
+                params: request.method === "notifications/cancelled"
+                    ? { ...request.params, requestId: innerRequestId }
+                    : { ...request.params, id: innerRequestId },
             });
+        } else {
+            const queuedRequestIndex = queuedRequests.findIndex(
+                (queuedRequest) => queuedRequest.id === outerRequestId,
+            );
+            if (queuedRequestIndex !== -1) {
+                queuedRequests.splice(queuedRequestIndex, 1);
+            }
         }
         return;
     }
@@ -155,16 +180,9 @@ clientInput.on("line", (line) => {
         return;
     }
 
-    if (!innerReady) {
-        process.stderr.write(`change-learn: rejected ${request.method} before MCP initialization completed.\n`);
-        write(process.stdout, {
-            jsonrpc: "2.0",
-            id: request.id,
-            error: {
-                code: -32002,
-                message: "MCP server initialization is still in progress.",
-            },
-        });
+    if (!innerReady || !outerReady) {
+        process.stderr.write(`change-learn: queueing ${request.method} until MCP initialization completes.\n`);
+        queuedRequests.push(request);
         return;
     }
     requestInner(request.method, request.params, request.id);
