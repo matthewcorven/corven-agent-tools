@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# .NET build output
+bin/
+obj/

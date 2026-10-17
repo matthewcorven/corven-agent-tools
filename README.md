@@ -1,6 +1,6 @@
 # corven-agent-tools
 
-Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository distributes a dependency-driven GitHub issue-tracking skill and a decision-model skill, and is published as a plugin marketplace.
+Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository distributes a dependency-driven GitHub issue-tracking skill, a decision-model skill, and a source-control change-visualization plugin, and is published as a plugin marketplace.
 
 ## What's inside
 
@@ -12,6 +12,9 @@ Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository dis
 | `use-decision-model` skill | `plugins/use-decision-model/skills/use-decision-model/SKILL.md` | Guidance for using a **decision model as a tool**: when it is useful, how to craft the `state` and typed `noul`/`choice`/`score` questions, how to send them, and the response signature to expect |
 | Sender | `plugins/use-decision-model/skills/use-decision-model/scripts/decision.py` | POSTs a `state` + `questions` payload to the decisions endpoint and prints the raw JSON response |
 | Example payloads | `plugins/use-decision-model/skills/use-decision-model/examples/` | Ready-to-send `noul.json`, `choice.json`, `score.json` payloads, plus `borderline.json` (hedged `noul` case) and `multi.json` (all three types on one JSON-object state) |
+| `change-learn` skill | `plugins/change-learn/skills/change-learn/SKILL.md` | AI-visualize and AI-summarize changes between two source-control states as Mermaid diagrams and Marp slide decks (PDF export), narrated high-level first then lower, driven by a repo-root `.change-learn.json` |
+| Lineage + deck scripts | `plugins/change-learn/skills/change-learn/scripts/` | `lineage.py` (token-efficient change analysis as compact JSON) and `deck.py` (Marp deck scaffold with Mermaid blocks + `npx` PDF export) |
+| Change-learn MCP host | `hosts/ChangeLearn.Host/` | Blazor Server app exposing 8 MCP tools at `:5190/mcp`, with a Squad agent team on the GitHub Copilot SDK + Microsoft Agent Framework — see [`plugins/change-learn/README.md`](plugins/change-learn/README.md) |
 
 Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/) for the issue-queue skill. The decision-model sender needs `OPENROUTER_API_KEY` in the environment.
 
@@ -27,6 +30,7 @@ Register the marketplace once, then install a plugin:
 copilot plugin marketplace add matthewcorven/corven-agent-tools
 copilot plugin install github-issues@corven-agent-tools
 copilot plugin install use-decision-model@corven-agent-tools
+copilot plugin install change-learn@corven-agent-tools
 ```
 
 The install source must be the qualified `plugin@marketplace` form — a bare `github-issues` is rejected with `Invalid plugin spec`.
@@ -127,7 +131,18 @@ References resolve to issue numbers or `[Task X.Y]` ids parsed from issue titles
 ```text
 corven-agent-tools/                        # marketplace: corven-agent-tools
 ├── .github/plugin/marketplace.json
+├── hosts/
+│   └── ChangeLearn.Host/                 # Blazor Server MCP host for change-learn (:5190/mcp)
 └── plugins/
+    ├── change-learn/                     # plugin: change-learn@corven-agent-tools
+    │   ├── plugin.json                   # Agent Plugins 1.0 manifest
+    │   ├── mcp.json                      # streamable-http → localhost:5190/mcp
+    │   ├── README.md
+    │   └── skills/change-learn/
+    │       ├── SKILL.md
+    │       ├── scripts/{lineage,deck}.py
+    │       ├── references/deck-authoring.md
+    │       └── tests/test_change_learn.py
     ├── github-issues/                    # plugin: github-issues@corven-agent-tools
     │   ├── plugin.json                   # Agent Plugins 1.0 manifest ($schema → v1, not legacy)
     │   └── skills/issue-work-queue/
@@ -146,7 +161,10 @@ corven-agent-tools/                        # marketplace: corven-agent-tools
 
 ```shell
 python3 -m unittest discover -s plugins/github-issues/skills/issue-work-queue/tests -v
+python3 -m unittest discover -s plugins/change-learn/skills/change-learn/tests -v
 ```
+
+The change-learn MCP host builds with `dotnet build hosts/ChangeLearn.Host`.
 
 ## License
 

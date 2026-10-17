@@ -1,0 +1,72 @@
+@page "/"
+@using ChangeLearn.Host.Services
+@inject GitLineageService Lineage
+@inject DecisionLedger Ledger
+
+<h1>change-learn host</h1>
+
+<p>
+    Blazor Server host for the <strong>change-learn</strong> agent plugin.
+    MCP endpoint: <code>http://localhost:5190/mcp</code> (streamable HTTP).
+</p>
+
+<h2>MCP tools</h2>
+<table>
+    <tr><th>Tool</th><th>Purpose</th></tr>
+    <tr><td><code>analyze_changes</code></td><td>Token-efficient change-window analysis (JSON)</td></tr>
+    <tr><td><code>get_change_config</code></td><td>Resolve repo-root <code>.change-learn.json</code></td></tr>
+    <tr><td><code>get_file_diffs</code></td><td>Per-file patches for targeted reading</td></tr>
+    <tr><td><code>summarize_changes</code></td><td>AI narrative, high-level first (Squad team or fallback)</td></tr>
+    <tr><td><code>generate_deck</code></td><td>Scaffold a Marp + Mermaid slide deck</td></tr>
+    <tr><td><code>export_deck_pdf</code></td><td>Render the deck to PDF</td></tr>
+    <tr><td><code>record_decision</code> / <code>list_decisions</code></td><td>Squad append-only decision ledger</td></tr>
+</table>
+
+<h2>Live repo snapshot</h2>
+@if (_error is not null)
+{
+    <pre>@_error</pre>
+}
+else if (_summary is null)
+{
+    <p><em>Analyzing current repo…</em></p>
+}
+else
+{
+    <pre>@_summary</pre>
+}
+
+<h2>Recent decisions</h2>
+@if (_decisions.Count == 0)
+{
+    <p><em>No decisions recorded yet.</em></p>
+}
+else
+{
+    <ul>
+        @foreach (var d in _decisions)
+        {
+            <li>@d</li>
+        }
+    </ul>
+}
+
+@code {
+    private string? _summary;
+    private string? _error;
+    private IReadOnlyList<string> _decisions = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _decisions = await Ledger.ListAsync(10);
+            var json = await Lineage.SummaryAsync(new ChangeWindow(Working: true, Staged: true, Untracked: true));
+            _summary = ChangeSummarizer.DeterministicSummary(json, "dashboard viewer");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}
