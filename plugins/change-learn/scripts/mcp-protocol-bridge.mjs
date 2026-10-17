@@ -28,7 +28,8 @@ host.on("exit", (code, signal) => {
 let innerReady = false;
 let nextRequestId = 1;
 const pendingRequests = new Map();
-const queuedRequests = [];
+const pendingInnerIds = new Map();
+let outerInitializeRequest;
 
 function write(stream, message) {
     stream.write(`${JSON.stringify(message)}\n`);
@@ -37,6 +38,8 @@ function write(stream, message) {
 function requestInner(method, params, outerId) {
     const innerId = nextRequestId++;
     pendingRequests.set(innerId, outerId);
+    pendingInnerIds.set(outerId, innerId);
+    process.stderr.write(`change-learn: forwarding ${method} to inner MCP host.\n`);
     write(host.stdin, {
         jsonrpc: "2.0",
         id: innerId,
@@ -45,11 +48,24 @@ function requestInner(method, params, outerId) {
     });
 }
 
-function flushQueue() {
-    while (queuedRequests.length > 0) {
-        const request = queuedRequests.shift();
-        requestInner(request.method, request.params, request.id);
+function respondToOuterInitialize() {
+    if (!outerInitializeRequest) {
+        return;
     }
+
+    write(process.stdout, {
+        jsonrpc: "2.0",
+        id: outerInitializeRequest.id,
+        result: {
+            protocolVersion: outerInitializeRequest.params?.protocolVersion ?? "2025-11-25",
+            capabilities: { tools: { listChanged: false } },
+            serverInfo: {
+                name: "ChangeLearn.Host",
+                version: "1.0.0.0",
+            },
+        },
+    });
+    outerInitializeRequest = undefined;
 }
 
 createInterface({ input: host.stdout }).on("line", (line) => {
@@ -72,15 +88,18 @@ createInterface({ input: host.stdout }).on("line", (line) => {
             method: "notifications/initialized",
             params: {},
         });
-        flushQueue();
+        respondToOuterInitialize();
         return;
     }
 
     const outerId = pendingRequests.get(message.id);
     if (outerId === undefined) {
+        process.stderr.write(`change-learn: received an inner response for unknown request ${message.id}.\n`);
         return;
     }
     pendingRequests.delete(message.id);
+    pendingInnerIds.delete(outerId);
+    process.stderr.write(`change-learn: returning ${message.error ? "an error" : "a result"} to the MCP client.\n`);
     write(process.stdout, {
         jsonrpc: "2.0",
         id: outerId,
@@ -100,22 +119,34 @@ clientInput.on("line", (line) => {
     }
 
     if (request.method === "initialize") {
-        write(process.stdout, {
-            jsonrpc: "2.0",
-            id: request.id,
-            result: {
-                protocolVersion: request.params?.protocolVersion ?? "2025-11-25",
-                capabilities: { tools: { listChanged: false } },
-                serverInfo: {
-                    name: "ChangeLearn.Host",
-                    version: "1.0.0.0",
-                },
-            },
-        });
+        if (outerInitializeRequest) {
+            process.stderr.write("change-learn: received a duplicate outer MCP initialization request.\n");
+            return;
+        }
+        outerInitializeRequest = request;
+        if (innerReady) {
+            respondToOuterInitialize();
+        }
         return;
     }
 
     if (request.method === "notifications/initialized") {
+        return;
+    }
+
+    if (request.method === "notifications/cancelled") {
+        const outerRequestId = request.params?.requestId;
+        const innerRequestId = pendingInnerIds.get(outerRequestId);
+        if (innerRequestId !== undefined) {
+            pendingInnerIds.delete(outerRequestId);
+            pendingRequests.delete(innerRequestId);
+            process.stderr.write("change-learn: forwarding MCP request cancellation to inner host.\n");
+            write(host.stdin, {
+                jsonrpc: "2.0",
+                method: "notifications/cancelled",
+                params: { ...request.params, requestId: innerRequestId },
+            });
+        }
         return;
     }
 
@@ -124,7 +155,15 @@ clientInput.on("line", (line) => {
     }
 
     if (!innerReady) {
-        queuedRequests.push(request);
+        process.stderr.write(`change-learn: rejected ${request.method} before MCP initialization completed.\n`);
+        write(process.stdout, {
+            jsonrpc: "2.0",
+            id: request.id,
+            error: {
+                code: -32002,
+                message: "MCP server initialization is still in progress.",
+            },
+        });
         return;
     }
     requestInner(request.method, request.params, request.id);
