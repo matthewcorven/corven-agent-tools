@@ -5,6 +5,7 @@ import { createInterface } from "node:readline";
 
 const hostLauncher = process.argv[2];
 const innerProtocolVersion = "2025-11-25";
+const parentPid = process.ppid;
 if (!hostLauncher) {
     process.stderr.write("change-learn: missing inner MCP host launcher.\n");
     process.exit(1);
@@ -14,16 +15,39 @@ const host = spawn("bash", [hostLauncher], {
     stdio: ["pipe", "pipe", "pipe"],
 });
 
+let shuttingDown = false;
+let forcedShutdownTimer;
+
+function shutdown(reason, exitCode = 0) {
+    if (shuttingDown) {
+        return;
+    }
+
+    shuttingDown = true;
+    process.stderr.write(`change-learn: shutting down MCP host (${reason}).\n`);
+    host.stdin.end();
+    forcedShutdownTimer = setTimeout(() => {
+        if (!host.killed) {
+            process.stderr.write("change-learn: MCP host did not stop gracefully; sending SIGTERM.\n");
+            host.kill("SIGTERM");
+        }
+    }, 5_000);
+    forcedShutdownTimer.unref();
+
+    host.once("exit", () => process.exit(exitCode));
+}
+
 host.stderr.on("data", (chunk) => process.stderr.write(chunk));
 host.on("error", (error) => {
     process.stderr.write(`change-learn: could not start the MCP host: ${error.message}\n`);
-    process.exit(1);
+    shutdown("inner MCP host launch failure", 1);
 });
 host.on("exit", (code, signal) => {
+    clearTimeout(forcedShutdownTimer);
     process.stderr.write(
         `change-learn: MCP host exited${signal ? ` from ${signal}` : ` with code ${code ?? "unknown"}`}.\n`,
     );
-    process.exit(code ?? 1);
+    process.exit(shuttingDown ? 0 : (code ?? 1));
 });
 
 let innerReady = false;
@@ -188,7 +212,24 @@ clientInput.on("line", (line) => {
     requestInner(request.method, request.params, request.id);
 });
 
-clientInput.on("close", () => host.stdin.end());
+clientInput.on("close", () => shutdown("outer MCP stdin closed"));
+process.stdout.on("error", (error) => {
+    if (error.code === "EPIPE") {
+        shutdown("outer MCP stdout closed");
+        return;
+    }
+    process.stderr.write(`change-learn: outer MCP stdout failed: ${error.message}\n`);
+    shutdown("outer MCP stdout failure", 1);
+});
+process.on("SIGTERM", () => shutdown("SIGTERM received"));
+process.on("SIGHUP", () => shutdown("SIGHUP received"));
+
+const parentMonitor = setInterval(() => {
+    if (process.ppid !== parentPid) {
+        shutdown("outer MCP parent exited");
+    }
+}, 1_000);
+parentMonitor.unref();
 
 write(host.stdin, {
     jsonrpc: "2.0",

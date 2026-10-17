@@ -105,7 +105,9 @@ via `npx` on first use; requires Node.js).
   bridge that negotiates the host's supported MCP protocol and proxies to
   `scripts/mcp-stdio.sh`. The launcher builds the host incrementally (output
   to stderr) and execs `ChangeLearn.Host.dll --stdio`; tools analyze the repo
-  the harness was launched in.
+  the harness was launched in. The bridge also owns the host lifecycle and
+  stops it when the MCP client closes, its parent exits, or it receives a
+  termination signal.
 - **streamable HTTP + Blazor UI (manual)** — `dotnet run` serves the status
   page and an MCP endpoint at `http://localhost:5190/mcp`.
 
