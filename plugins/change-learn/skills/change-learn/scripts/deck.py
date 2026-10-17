@@ -217,10 +217,12 @@ def prerender_mermaid(deck_md, assets_dir):
 def cmd_export(args):
     with open(args.deck, encoding="utf-8") as f:
         deck = f.read()
-    deck_dir = os.path.dirname(os.path.abspath(args.deck))
-    out = args.output or os.path.splitext(args.deck)[0] + (".pdf" if args.format == "pdf" else ".html")
+    deck_path = os.path.abspath(args.deck)
+    deck_dir = os.path.dirname(deck_path)
+    out = os.path.abspath(
+        args.output or os.path.splitext(deck_path)[0] + (".pdf" if args.format == "pdf" else ".html"))
 
-    source = args.deck
+    source = deck_path
     if args.format == "pdf" and MERMAID_BLOCK.search(deck):
         assets = os.path.join(deck_dir, os.path.splitext(os.path.basename(args.deck))[0] + "_assets")
         rendered, n = prerender_mermaid(deck, assets)

@@ -101,12 +101,11 @@ via `npx` on first use; requires Node.js).
 
 `hosts/ChangeLearn.Host` is a .NET 10 app with two transports:
 
-- **stdio (default for harnesses)** — `mcp.json` points at
-  `scripts/mcp-stdio.sh`, so Copilot CLI / Copilot app start the server
-  **on demand** per session and stop it when the session ends. The launcher
-  builds the host incrementally (output to stderr) and execs
-  `ChangeLearn.Host.dll --stdio`; tools analyze the repo the harness was
-  launched in.
+- **stdio (default for harnesses)** — `mcp.json` starts a small Node protocol
+  bridge that accepts the Copilot App's current MCP protocol and proxies to
+  `scripts/mcp-stdio.sh`. The launcher builds the host incrementally (output
+  to stderr) and execs `ChangeLearn.Host.dll --stdio`; tools analyze the repo
+  the harness was launched in.
 - **streamable HTTP + Blazor UI (manual)** — `dotnet run` serves the status
   page and an MCP endpoint at `http://localhost:5190/mcp`.
 

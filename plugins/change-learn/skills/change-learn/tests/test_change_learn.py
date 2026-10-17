@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS_DIR = os.path.join(TESTS_DIR, "..", "scripts")
@@ -232,6 +234,26 @@ class TestDeckUnits(unittest.TestCase):
         ])
         self.assertIn('"a" : 6', pie)
         self.assertNotIn('"b"', pie)
+
+    def test_export_resolves_relative_output_before_changing_working_directory(self):
+        with tempfile.TemporaryDirectory(prefix="cl-deck-") as tmp:
+            deck_path = os.path.join(tmp, "review.md")
+            with open(deck_path, "w", encoding="utf-8") as f:
+                f.write("# Review\n")
+
+            with patch.object(deck_mod, "npx") as npx:
+                with patch("builtins.print") as print_mock:
+                    deck_mod.cmd_export(SimpleNamespace(
+                        deck=deck_path,
+                        output="artifacts/review.pdf",
+                        format="pdf",
+                        keep_intermediate=False,
+                    ))
+
+            expected = os.path.abspath("artifacts/review.pdf")
+            self.assertEqual(npx.call_args.args[0][-1], expected)
+            self.assertEqual(npx.call_args.kwargs["cwd"], tmp)
+            self.assertEqual(json.loads(print_mock.call_args.args[0])["output"], expected)
 
 
 class TestLineageUnits(unittest.TestCase):

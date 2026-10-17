@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# change-learn MCP stdio launcher.
+# change-learn MCP stdio host launcher.
 #
-# Started on demand by AI harnesses (Copilot CLI / Copilot app) via the
-# plugin's mcp.json. Builds the ChangeLearn.Host once (incremental, quiet)
-# and execs it with --stdio. stdout is reserved for the MCP protocol; all
-# diagnostics go to stderr.
+# Started by mcp-protocol-bridge.mjs. Builds the ChangeLearn.Host once
+# (incremental, quiet) and execs it with --stdio. stdout is reserved for the
+# MCP protocol; all diagnostics go to stderr.
 #
 # Host directory resolution order:
 #   1. $CHANGE_LEARN_HOST_DIR
