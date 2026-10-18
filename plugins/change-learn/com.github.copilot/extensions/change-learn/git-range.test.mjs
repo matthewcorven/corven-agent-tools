@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
     attachPullRequests,
+    buildAnalyzePrompt,
     commitLabel,
     parseCommits,
     scaffoldDeckPreview,
@@ -56,3 +57,24 @@ test("scaffolds a disposable deck preview from direct analysis", async () => {
     assert.match(deck, /Direct canvas preview/);
     assert.match(deck, /```mermaid/);
 });
+
+test("builds an agent prompt to kick off the full workflow for a commit span", () => {
+    const prompt = buildAnalyzePrompt({
+        instanceId: "change-learn-test-instance",
+        repository: "/example/repository",
+        fromCommit: { id: "1111222233334444", shortId: "1111222", subject: "Initial work" },
+        toCommit: { id: "5555666677778888", shortId: "5555666", subject: "Final touch" },
+        analysis: {
+            spec: { repo: "/example/repository", from: "1111222233334444", to: "5555666677778888" },
+            totals: { files: 4, adds: 45, dels: 12, commits: 3 },
+        },
+    });
+
+    assert.match(prompt, /Target canvas instance: "change-learn-test-instance"/);
+    assert.match(prompt, /commit span 1111222\.\.5555666/);
+    assert.match(prompt, /1111222233334444\.\.5555666677778888/);
+    assert.match(prompt, /invoke_canvas_action\(instanceId="change-learn-test-instance", actionName="show_changes"/);
+    assert.match(prompt, /invoke_canvas_action\(instanceId="change-learn-test-instance", actionName="load_deck"/);
+    assert.match(prompt, /replace all scaffold directives and <!-- ai-fill: \.\.\. --> comments/);
+});
+

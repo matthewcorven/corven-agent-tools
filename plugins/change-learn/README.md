@@ -22,10 +22,11 @@ This is an [Agent Plugins 1.0](https://agent-plugins.org/) plugin with two layer
    and Marp deck slide previews. Its **From commit** and **To commit**
    selectors include commit SHAs, subjects, branch/ref decorations, and
    available GitHub pull-request metadata. **Analyze span** validates the
-   selected ancestor range and runs `lineage.py` locally through the canvas,
-   then generates a commit-span diagram, area-churn diagram, and disposable
-   Marp preview. The direct path remains available when the App cannot
-   dispatch an MCP tool result.
+   selected ancestor range, generates immediate baseline artifacts
+   (commit-span diagram, area-churn diagram, and initial Marp preview), and
+   dispatches the full AI workflow to the Copilot session via `session.send`
+   to write the complete narrative and load the finished deck. The direct baseline
+   path remains available when the App cannot dispatch an MCP tool result.
 
 ## The skill (portable layer)
 

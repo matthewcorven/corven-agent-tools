@@ -157,6 +157,7 @@
       repository: "",
       commits: [],
       selectedRange: undefined,
+      statusMessage: "",
     };
     let activeTab = "summary";
     let slideIndex = 0;
@@ -219,6 +220,8 @@
       analyzeRange.disabled = !available;
       if (!state.commits.length) {
         rangeStatus.textContent = "No commits are available in this repository.";
+      } else if (state.statusMessage) {
+        rangeStatus.textContent = state.statusMessage;
       } else if (state.selectedRange) {
         rangeStatus.textContent = `Showing ${state.selectedRange.from.slice(0, 7)} to ${state.selectedRange.to.slice(0, 7)} from ${state.repository}.`;
       } else {
@@ -302,7 +305,7 @@
 
     tabs.forEach((tab) => tab.addEventListener("click", () => setTab(tab.dataset.tab)));
     async function submitRange(path, body) {
-      rangeStatus.textContent = path === "/analyze" ? "Analyzing selected commit span..." : "Refreshing commits...";
+      rangeStatus.textContent = path === "/analyze" ? "Analyzing span and initiating AI workflow..." : "Refreshing commits...";
       try {
         const response = await fetch(path, {
           method: "POST",

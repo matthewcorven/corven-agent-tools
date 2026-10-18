@@ -192,3 +192,33 @@ export async function scaffoldDeckPreview({ scriptPath, analysis, title, theme }
         await rm(directory, { recursive: true, force: true });
     }
 }
+
+export function buildAnalyzePrompt({ instanceId, repository, fromCommit, toCommit, analysis }) {
+    const fromId = fromCommit?.shortId || analysis?.spec?.from?.slice(0, 7) || "start";
+    const toId = toCommit?.shortId || analysis?.spec?.to?.slice(0, 7) || "end";
+    const fromSha = fromCommit?.id || analysis?.spec?.from || "";
+    const toSha = toCommit?.id || analysis?.spec?.to || "";
+    const repo = repository || analysis?.spec?.repo || "current repository";
+    const totals = analysis?.totals || {};
+
+    return `The user selected commit span ${fromId}..${toId} in the Change Learn canvas and clicked "Analyze span".
+Target canvas instance: "${instanceId}" (canvasId: "change-learn").
+Repository: ${repo}
+Commit range: ${fromSha}..${toSha} (${totals.commits ?? 0} commits, ${totals.files ?? 0} files, +${totals.adds ?? 0} / -${totals.dels ?? 0}).
+
+Please run the full Change Learn analysis flow for this commit span:
+1. Examine the change window between ${fromId} and ${toId} top-down: executive intent first, then architecture/areas, then key files and diffs.
+2. Generate an AI-narrated change summary with Mermaid diagrams and update the canvas:
+   invoke_canvas_action(instanceId="${instanceId}", actionName="show_changes", input={
+     title: "Change Learn: ${fromId} to ${toId}",
+     summaryMarkdown: "<full AI-narrated summary>",
+     diagrams: [...]
+   })
+3. Complete the Marp presentation deck for this change window. Every slide must contain real narrative, insights, and explanations tailored to this exact changeset — replace all scaffold directives and <!-- ai-fill: ... --> comments with complete narrative. Then load the finished deck into the canvas:
+   invoke_canvas_action(instanceId="${instanceId}", actionName="load_deck", input={
+     deckMarkdown: "<complete Marp deck with all ai-fill sections fully written>"
+   })
+
+Ensure all slides are fully written and informative with no placeholder comments left in the deck.`;
+}
+

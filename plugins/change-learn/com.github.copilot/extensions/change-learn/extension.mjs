@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { CanvasError, createCanvas, joinSession } from "@github/copilot-sdk/extension";
 import {
     analyzeCommitRange,
+    buildAnalyzePrompt,
     loadCommitRange,
     scaffoldDeckPreview,
 } from "./git-range.mjs";
@@ -23,6 +24,7 @@ const deckPath = path.join(pluginRoot, "skills", "change-learn", "scripts", "dec
 
 // One local loopback server + content state per open canvas instance.
 const servers = new Map();
+let session;
 
 function emptyState() {
     return {
@@ -34,6 +36,7 @@ function emptyState() {
         repository: "",
         commits: [],
         selectedRange: undefined,
+        statusMessage: "",
     };
 }
 
@@ -140,7 +143,7 @@ async function refreshCommits(entry) {
     }
 }
 
-async function analyzeRange(entry, input) {
+async function analyzeRange(entry, input, { triggerAgent = false } = {}) {
     const from = typeof input?.from === "string" ? input.from : "";
     const to = typeof input?.to === "string" ? input.to : "";
     const analysis = await analyzeCommitRange({
@@ -165,21 +168,48 @@ async function analyzeRange(entry, input) {
     entry.state.diagrams = directDiagrams(analysis);
     entry.state.deckMarkdown = deckMarkdown;
     entry.state.deckPath = "";
+    if (triggerAgent) {
+        entry.state.statusMessage = `Full AI analysis requested in session for ${fromCommit.shortId}..${toCommit.shortId}.`;
+    }
     broadcast(entry, "state", entry.state);
+
+    if (triggerAgent && session && typeof session.send === "function") {
+        try {
+            await session.send({
+                prompt: buildAnalyzePrompt({
+                    instanceId: entry.instanceId || "change-learn",
+                    repository: entry.repository,
+                    fromCommit,
+                    toCommit,
+                    analysis,
+                }),
+                displayPrompt: `Change Learn: Analyze commit span ${fromCommit.shortId}..${toCommit.shortId}`,
+            });
+        } catch (error) {
+            entry.state.statusMessage = `Baseline generated. Could not dispatch to session: ${error.message}`;
+            broadcast(entry, "state", entry.state);
+        }
+    }
+
     return analysis;
 }
 
 async function applyInput(entry, input) {
     if (!input || typeof input !== "object") return;
     if (typeof input.title === "string" && input.title.trim()) entry.state.title = input.title.trim();
-    if (typeof input.summaryMarkdown === "string") entry.state.summaryMarkdown = input.summaryMarkdown;
+    if (typeof input.summaryMarkdown === "string") {
+        entry.state.summaryMarkdown = input.summaryMarkdown;
+        entry.state.statusMessage = "";
+    }
     if (input.diagrams !== undefined) entry.state.diagrams = normalizeDiagrams(input.diagrams);
     if (typeof input.deckMarkdown === "string" && input.deckMarkdown.trim()) {
         entry.state.deckMarkdown = input.deckMarkdown;
         entry.state.deckPath = "";
+        entry.state.statusMessage = "";
     } else if (typeof input.deckPath === "string" && input.deckPath.trim()) {
         entry.state.deckMarkdown = await readDeckFile(input.deckPath.trim());
         entry.state.deckPath = input.deckPath.trim();
+        entry.state.statusMessage = "";
     }
 }
 
@@ -221,7 +251,7 @@ async function handleRequest(entry, req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/analyze") {
-        await analyzeRange(entry, await readJson(req));
+        await analyzeRange(entry, await readJson(req), { triggerAgent: true });
         sendJson(res, entry.state);
         return;
     }
@@ -247,8 +277,9 @@ async function handleRequest(entry, req, res) {
     res.end("Not found");
 }
 
-async function startServer(workingDirectory) {
+async function startServer(workingDirectory, instanceId) {
     const entry = {
+        instanceId,
         clients: new Set(),
         state: emptyState(),
         repository: "",
@@ -303,7 +334,7 @@ const diagramSchema = {
     },
 };
 
-await joinSession({
+session = await joinSession({
     canvases: [
         createCanvas({
             id: "change-learn",
@@ -369,14 +400,18 @@ await joinSession({
                         properties: {
                             from: { type: "string", description: "Full commit SHA from the canvas From selector." },
                             to: { type: "string", description: "Full commit SHA from the canvas To selector." },
+                            triggerAgent: { type: "boolean", description: "Whether to dispatch the full AI workflow to the Copilot session." },
                         },
                         required: ["from", "to"],
                         additionalProperties: false,
                     },
                     handler: async (ctx) => {
                         const entry = getOpenEntry(ctx.instanceId);
+                        entry.instanceId = ctx.instanceId;
                         try {
-                            const analysis = await analyzeRange(entry, ctx.input);
+                            const analysis = await analyzeRange(entry, ctx.input, {
+                                triggerAgent: Boolean(ctx.input?.triggerAgent),
+                            });
                             return {
                                 from: analysis.spec?.from,
                                 to: analysis.spec?.to,
@@ -443,8 +478,10 @@ await joinSession({
                             "The active session working directory is unavailable.",
                         );
                     }
-                    entry = await startServer(workingDirectory);
+                    entry = await startServer(workingDirectory, ctx.instanceId);
                     servers.set(ctx.instanceId, entry);
+                } else {
+                    entry.instanceId = ctx.instanceId;
                 }
                 await applyInput(entry, ctx.input);
                 broadcast(entry, "state", entry.state);

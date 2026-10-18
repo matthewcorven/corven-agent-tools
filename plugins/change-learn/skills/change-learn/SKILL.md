@@ -136,6 +136,9 @@ Each option includes the full commit identity behind the selected value,
 short SHA, subject, local branch/ref decorations, and GitHub pull-request
 metadata when `gh pr list` can retrieve it. Select an ancestor **From**
 commit and later **To** commit, then choose **Analyze span**. This executes
-the bundled `lineage.py` locally through the canvas, then fills the Summary,
-Diagrams, and Deck tabs with deterministic artifacts. It remains available
-when the App cannot dispatch MCP tool results.
+the bundled `lineage.py` locally through the canvas to generate immediate
+baseline artifacts (Summary, Diagrams, and Deck preview), and dispatches
+the full Change Learn flow to the Copilot session so the agent produces
+the complete AI narrative and fully-written Marp deck. The direct baseline
+remains available when the App cannot dispatch MCP tool results.
+
