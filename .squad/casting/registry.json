@@ -1,0 +1,44 @@
+{
+  "schema": "squad-agent-provenance/v1",
+  "schema_version": 1,
+  "revision": 2,
+  "generated_at": "2026-10-30T11:45:42Z",
+  "agents": {
+    "george-jetson": {
+      "persistent_name": "George Jetson",
+      "universe": "The Jetsons",
+      "created_at": "2026-10-30T11:45:42Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "rosie": {
+      "persistent_name": "Rosie",
+      "universe": "The Jetsons",
+      "created_at": "2026-10-30T11:45:42Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "elroy-jetson": {
+      "persistent_name": "Elroy Jetson",
+      "universe": "The Jetsons",
+      "created_at": "2026-10-30T11:45:42Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "judy-jetson": {
+      "persistent_name": "Judy Jetson",
+      "universe": "The Jetsons",
+      "created_at": "2026-10-30T11:45:42Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "astro": {
+      "persistent_name": "Astro",
+      "universe": "The Jetsons",
+      "created_at": "2026-10-30T11:45:42Z",
+      "legacy_named": false,
+      "status": "active"
+    }
+  },
+  "transaction_id": "694459b1-f100-4245-8538-c74df326838c"
+}

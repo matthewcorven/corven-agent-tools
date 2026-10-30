@@ -5,3 +5,14 @@ __pycache__/
 # .NET build output
 bin/
 obj/
+# Squad: ignore runtime state (logs, inbox, sessions)
+# Note: .squad/casting/* is identity and MUST be committed to main, not ignored
+.squad/orchestration-log/
+.squad/log/
+.squad/decisions/inbox/
+.squad/sessions/
+.squad/.scratch/
+.squad/.cache/
+.squad/memory/
+# Squad: SubSquad activation file (local to this machine)
+.squad-workstream
