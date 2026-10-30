@@ -1,0 +1,26 @@
+{
+  "tool_approvals": [
+    {
+      "kind": "mcp",
+      "serverName": "squad-model-resolver",
+      "toolName": "resolve_for_agent"
+    },
+    {
+      "kind": "mcp",
+      "serverName": "squad-model-resolver",
+      "toolName": "resolve_model"
+    },
+    {
+      "kind": "mcp",
+      "serverName": "squad-model-resolver",
+      "toolName": "verify_spawn"
+    }
+  ],
+  "allowedTools": [
+    "squad-model-resolver-*",
+    "squad-model-resolver",
+    "squad-model-resolver(resolve_for_agent)",
+    "squad-model-resolver(resolve_model)",
+    "squad-model-resolver(verify_spawn)"
+  ]
+}
