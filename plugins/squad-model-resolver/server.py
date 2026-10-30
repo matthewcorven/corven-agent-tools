@@ -387,7 +387,7 @@ def verify_spawn(
 TOOLS = [
     {
         "name": "resolve_model",
-        "description": "Deterministically resolves a model reference (built-in or provider-qualified like openrouter://...) against the harness model catalog.",
+        "description": "Deterministically resolves a model reference (resolve_model), built-in or provider-qualified like openrouter://..., against the harness model catalog.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -420,7 +420,7 @@ TOOLS = [
     },
     {
         "name": "resolve_for_agent",
-        "description": "Resolves target model for a Squad agent by evaluating .squad/config.json, session directives, and agent charters in strict layer precedence.",
+        "description": "Resolves target model for a Squad agent (resolve_for_agent) by evaluating .squad/config.json, session directives, and agent charters in strict layer precedence.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -451,7 +451,7 @@ TOOLS = [
     },
     {
         "name": "verify_spawn",
-        "description": "Verifies that the spawned session reported the model ID selected before spawn.",
+        "description": "Verifies that the spawned session reported the model ID selected before spawn (verify_spawn).",
         "inputSchema": {
             "type": "object",
             "properties": {
