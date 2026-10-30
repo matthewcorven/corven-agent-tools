@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "squad-model-resolver",
+  "version": "0.1.0",
+  "description": "Deterministic model resolver MCP server and skill for Squad agent sessions: provider-qualified references, config layering, fallback chains, and post-spawn verification.",
+  "author": {
+    "name": "Matthew Corven"
+  },
+  "license": "MIT",
+  "keywords": [
+    "squad",
+    "mcp",
+    "model-resolver",
+    "subagents",
+    "agent-sessions",
+    "routing"
+  ]
+}

@@ -1,6 +1,6 @@
 # corven-agent-tools
 
-Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository distributes a dependency-driven GitHub issue-tracking skill, a decision-model skill, and a source-control change-visualization plugin, and is published as a plugin marketplace.
+Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository distributes a dependency-driven GitHub issue-tracking skill, a decision-model skill, a source-control change-visualization plugin, and a deterministic Squad model-resolver plugin, and is published as a plugin marketplace.
 
 ## What's inside
 
@@ -15,6 +15,7 @@ Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository dis
 | `change-learn` skill | `plugins/change-learn/skills/change-learn/SKILL.md` | AI-visualize and AI-summarize changes between two source-control states as Mermaid diagrams and Marp slide decks (PDF export), narrated high-level first then lower, driven by a repo-root `.change-learn.json` |
 | Lineage + deck scripts | `plugins/change-learn/skills/change-learn/scripts/` | `lineage.py` (token-efficient change analysis as compact JSON) and `deck.py` (Marp deck scaffold with Mermaid blocks + `npx` PDF export) |
 | Change-learn MCP host | `hosts/ChangeLearn.Host/` | Dual-transport MCP host (on-demand stdio from a configured source checkout; Blazor Server UI + `:5190/mcp` HTTP) exposing 8 tools, with a Squad agent team on the GitHub Copilot SDK + Microsoft Agent Framework — see [`plugins/change-learn/README.md`](plugins/change-learn/README.md) |
+| `squad-model-resolver` plugin | `plugins/squad-model-resolver/` | Deterministic model ID resolution MCP server (`resolve_model`, `resolve_for_agent`, `verify_spawn`) + thin aggressive skill for Squad agent spawns |
 
 Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/) for the issue-queue skill. The decision-model sender needs `OPENROUTER_API_KEY` in the environment.
 
@@ -31,6 +32,7 @@ copilot plugin marketplace add matthewcorven/corven-agent-tools
 copilot plugin install github-issues@corven-agent-tools
 copilot plugin install use-decision-model@corven-agent-tools
 copilot plugin install change-learn@corven-agent-tools
+copilot plugin install squad-model-resolver@corven-agent-tools
 ```
 
 The install source must be the qualified `plugin@marketplace` form — a bare `github-issues` is rejected with `Invalid plugin spec`.
@@ -41,7 +43,8 @@ You can also enable them declaratively in `.github/copilot/settings.json` (repos
 {
   "enabledPlugins": {
     "github-issues@corven-agent-tools": true,
-    "use-decision-model@corven-agent-tools": true
+    "use-decision-model@corven-agent-tools": true,
+    "squad-model-resolver@corven-agent-tools": true
   },
   "extraKnownMarketplaces": {
     "corven-agent-tools": {
@@ -126,41 +129,67 @@ python3 <skill-dir>/scripts/issue_queue.py --repo <owner/repo> --project 3 --for
 
 References resolve to issue numbers or `[Task X.Y]` ids parsed from issue titles. A reference is unsatisfied only when its referent is OPEN; CLOSED referents are satisfied; missing referents are flagged `(missing)`.
 
+## Squad model-resolver reference
+
+The `squad-model-resolver` plugin provides an MCP server and a thin skill that deterministically resolves model references into exact complete IDs for the harness `task` tool, and verifies spawned sessions.
+
+### MCP tools
+
+- `resolve_model`: Takes `reference`, `catalog` (list of model IDs exposed by the harness), and optional `provider_registry`. Resolves built-in or `provider://model-path` references against exact catalog matches.
+- `resolve_for_agent`: Takes `repo_path`, `agent_name`, `catalog`, and optional `session_directive`. Reads `.squad/config.json` and the agent's charter `## Model` section, applying strict layer precedence (`agentModelOverrides` → session directive → charter → `defaultModel` → `auto`).
+- `verify_spawn`: Takes `selected_model_id` and `reported_model_id` to verify match status post-spawn, noting provider provenance disclaimers.
+
+### Provider registry file format
+
+To resolve provider-qualified references (such as `openrouter://z-ai/glm-5.3` or `omlx://Qwen3.8-27B-4bit`), the server maps provider schemes to opaque ID prefixes independently using a user-level configuration file at `~/.config/squad-model-resolver/providers.json`:
+
+```json
+{
+  "openrouter": "b311631e-d285-40e6-b0e3-2e813af887ed",
+  "omlx": "6fecf2bb-2bbb-4e4e-bec9-a2ca2c4a9d44"
+}
+```
+
+Prefix values can be either a string prefix (e.g. UUID) or an array of string prefixes. The user-level registry file is authoritative: calling agents cannot forge or overwrite entries in the user registry, and the resolver will never guess prefixes or infer providers from UUIDs.
+
 ## Repository layout
 
 ```text
-corven-agent-tools/                        # marketplace: corven-agent-tools
-├── .github/plugin/marketplace.json
-├── hosts/
-│   └── ChangeLearn.Host/                 # change-learn MCP host (stdio on demand, or Blazor UI + :5190/mcp)
-└── plugins/
-    ├── change-learn/                     # plugin: change-learn@corven-agent-tools
-    │   ├── plugin.json                   # Agent Plugins 1.0 manifest
-    │   ├── mcp.json                      # stdio → scripts/mcp-stdio.sh (starts host on demand)
-    │   ├── README.md
-    │   └── skills/change-learn/
-    │       ├── SKILL.md
-    │       ├── scripts/{lineage,deck}.py
-    │       ├── references/deck-authoring.md
-    │       └── tests/test_change_learn.py
-    ├── github-issues/                    # plugin: github-issues@corven-agent-tools
-    │   ├── plugin.json                   # Agent Plugins 1.0 manifest ($schema → v1, not legacy)
-    │   └── skills/issue-work-queue/
-    │       ├── SKILL.md
-    │       ├── scripts/issue_queue.py
-    │       └── tests/test_issue_queue.py
-    └── use-decision-model/                  # plugin: use-decision-model@corven-agent-tools
+corven-agent-tools/                         # Agent Plugins marketplace
+├── .github/
+│   ├── plugin/marketplace.json             # Marketplace registry
+│   ├── workflows/                          # CI and repository automation
+│   ├── agents/                              # Repository-level Copilot agents
+│   └── skills/                              # Repository-level Copilot skills
+├── hosts/ChangeLearn.Host/                 # .NET MCP host and Blazor UI
+│   ├── Components/                         # Blazor UI
+│   ├── Services/                            # Lineage, deck, summary, decision services
+│   ├── Tools/                               # MCP tool registrations
+│   └── team/.squad/                         # Host's runtime agent-team definitions
+└── plugins/                                 # Independently installable plugins
+    ├── change-learn/                        # change-learn@corven-agent-tools
+    │   ├── plugin.json, mcp.json, README.md
+    │   ├── com.github.copilot/extensions/   # Copilot App canvas
+    │   ├── scripts/                         # MCP bridge and host launcher
+    │   └── skills/change-learn/             # Portable skill, scripts, reference, tests
+    ├── github-issues/                       # github-issues@corven-agent-tools
+    │   ├── plugin.json
+    │   └── skills/issue-work-queue/         # Skill, queue helper, tests
+    ├── squad-model-resolver/                # squad-model-resolver@corven-agent-tools
+    │   ├── plugin.json, mcp.json
+    │   ├── server.py
+    │   ├── skills/squad-model-resolver/     # Mandatory thin skill
+    │   └── tests/                           # Unit tests + MCP smoke tests
+    └── use-decision-model/                  # use-decision-model@corven-agent-tools
         ├── plugin.json
-        └── skills/use-decision-model/
-            ├── SKILL.md
-            ├── scripts/decision.py
-            └── examples/{noul,choice,score}.json
+        └── skills/use-decision-model/       # Skill, sender, example payloads
 ```
 
 ## Development
 
 ```shell
 python3 -m unittest discover -s plugins/github-issues/skills/issue-work-queue/tests -v
+python3 -m unittest discover -s plugins/squad-model-resolver/tests -v
 python3 -m unittest discover -s plugins/change-learn/skills/change-learn/tests -v
 ```
 
