@@ -16,6 +16,7 @@ Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository dis
 | Lineage + deck scripts | `plugins/change-learn/skills/change-learn/scripts/` | `lineage.py` (token-efficient change analysis as compact JSON) and `deck.py` (Marp deck scaffold with Mermaid blocks + `npx` PDF export) |
 | Change-learn MCP host | `hosts/ChangeLearn.Host/` | Dual-transport MCP host (on-demand stdio from a configured source checkout; Blazor Server UI + `:5190/mcp` HTTP) exposing 8 tools, with a Squad agent team on the GitHub Copilot SDK + Microsoft Agent Framework — see [`plugins/change-learn/README.md`](plugins/change-learn/README.md) |
 | `squad-model-resolver` plugin | `plugins/squad-model-resolver/` | Deterministic model ID resolution MCP server (`resolve_model`, `resolve_for_agent`, `verify_spawn`) + thin aggressive skill for Squad agent spawns |
+| `playwright-report-retrieval` plugin | `plugins/playwright-report-retrieval/` | Canonical Playwright reporting + AI-driven E2E standards skill, plus a retrieval CLI and MCP server (`fetch_report`, `list_failed_tests`) that downloads a CI HTML report by run ID or commit and deep-links to a test |
 
 Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/) for the issue-queue skill. The decision-model sender needs `OPENROUTER_API_KEY` in the environment.
 
@@ -33,6 +34,7 @@ copilot plugin install github-issues@corven-agent-tools
 copilot plugin install use-decision-model@corven-agent-tools
 copilot plugin install change-learn@corven-agent-tools
 copilot plugin install squad-model-resolver@corven-agent-tools
+copilot plugin install playwright-report-retrieval@corven-agent-tools
 ```
 
 The install source must be the qualified `plugin@marketplace` form — a bare `github-issues` is rejected with `Invalid plugin spec`.
@@ -44,7 +46,8 @@ You can also enable them declaratively in `.github/copilot/settings.json` (repos
   "enabledPlugins": {
     "github-issues@corven-agent-tools": true,
     "use-decision-model@corven-agent-tools": true,
-    "squad-model-resolver@corven-agent-tools": true
+    "squad-model-resolver@corven-agent-tools": true,
+    "playwright-report-retrieval@corven-agent-tools": true
   },
   "extraKnownMarketplaces": {
     "corven-agent-tools": {
@@ -152,6 +155,33 @@ To resolve provider-qualified references (such as `openrouter://z-ai/glm-5.3` or
 
 Prefix values can be either a string prefix (e.g. UUID) or an array of string prefixes. The user-level registry file is authoritative: calling agents cannot forge or overwrite entries in the user registry, and the resolver will never guess prefixes or infer providers from UUIDs.
 
+## Playwright report retrieval reference
+
+The `playwright-report-retrieval` plugin carries the canonical Playwright reporting and AI-driven E2E standards, plus the tooling to pull a CI HTML report back to a workstation.
+
+### Standards (skill)
+
+`skills/playwright-report-retrieval/SKILL.md` is the source of truth for: Playwright-only E2E automation, Red-Green-Refactor, the coverage gate (no UI change without happy/alternate/edge coverage), deterministic data-driven journeys with ephemeral state, `storageState()` forking for parallel alternate/edge paths, ephemeral local artifacts, and 90-day CI artifact retention with no commit-back.
+
+### CLI
+
+```shell
+python3 plugins/playwright-report-retrieval/scripts/fetch_report.py --run-id 123456789
+python3 plugins/playwright-report-retrieval/scripts/fetch_report.py --commit abc1234 --test "Login Flow"
+python3 plugins/playwright-report-retrieval/scripts/fetch_report.py --run-id 123456789 --test-id 3f2a1b --no-open --json
+```
+
+The script resolves the run, locates the `playwright-report` artifact, prunes namespace entries older than 7 days, extracts to `./playwright-reports/<run-id>/`, appends the `#?q=` / `#?testId=` deep link, and opens the default browser. Cached reports are reused unless `--force` is passed.
+
+### MCP tools
+
+- `fetch_report`: Takes `run_id` or `commit`, plus optional `test`, `test_id`, `artifact_name`, `namespace`, `provider`, `repo`, `workflow`, `max_age_days`, `force`, `open_browser`. Returns the report directory, `index.html` path, and deep link.
+- `list_failed_tests`: Takes `report_dir` (or the same run/commit selectors) and returns every test with its status, plus a `failed` subset.
+
+### Provider seam
+
+`GitHubActionsProvider` (backed by the `gh` CLI) is the only implementation today. Subclass `CIProvider`, implement `resolve_run_id`, `find_artifact`, and `download_artifact`, then register it in `PROVIDERS`.
+
 ## Repository layout
 
 ```text
@@ -180,6 +210,12 @@ corven-agent-tools/                         # Agent Plugins marketplace
     │   ├── server.py
     │   ├── skills/squad-model-resolver/     # Mandatory thin skill
     │   └── tests/                           # Unit tests + MCP smoke tests
+    ├── playwright-report-retrieval/         # playwright-report-retrieval@corven-agent-tools
+    │   ├── plugin.json, mcp.json
+    │   ├── server.py                        # MCP server: fetch_report, list_failed_tests
+    │   ├── scripts/fetch_report.py          # Retrieval CLI + CI provider seam
+    │   ├── skills/playwright-report-retrieval/  # Canonical E2E + reporting standards
+    │   └── tests/                           # Unit tests + MCP smoke tests
     └── use-decision-model/                  # use-decision-model@corven-agent-tools
         ├── plugin.json
         └── skills/use-decision-model/       # Skill, sender, example payloads
@@ -190,6 +226,7 @@ corven-agent-tools/                         # Agent Plugins marketplace
 ```shell
 python3 -m unittest discover -s plugins/github-issues/skills/issue-work-queue/tests -v
 python3 -m unittest discover -s plugins/squad-model-resolver/tests -v
+python3 -m unittest discover -s plugins/playwright-report-retrieval/tests -v
 python3 -m unittest discover -s plugins/change-learn/skills/change-learn/tests -v
 ```
 

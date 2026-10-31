@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "playwright-report-retrieval",
+  "version": "0.1.0",
+  "description": "Fetch a Playwright HTML report from a CI run or commit, extract it to a local temp namespace, and open it deep-linked to a specific test. Ships the canonical Playwright reporting and AI-driven E2E standards.",
+  "author": {
+    "name": "Matthew Corven"
+  },
+  "license": "MIT",
+  "keywords": [
+    "playwright",
+    "e2e",
+    "testing",
+    "ci",
+    "artifacts",
+    "github-actions",
+    "mcp",
+    "reporting"
+  ]
+}

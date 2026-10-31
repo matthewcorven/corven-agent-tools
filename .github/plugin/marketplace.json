@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Corven Agent Plugins 1.0 tooling",
-    "version": "0.7.0"
+    "version": "0.8.0"
   },
   "plugins": [
     {
@@ -57,6 +57,22 @@
         "agent-tools"
       ],
       "source": "plugins/squad-model-resolver"
+    },
+    {
+      "name": "playwright-report-retrieval",
+      "source": "plugins/playwright-report-retrieval",
+      "version": "0.1.0",
+      "description": "Playwright reporting + AI-driven E2E standards skill and MCP server: fetch CI HTML reports by run ID or commit, deep-link to a test, and list failed tests",
+      "keywords": [
+        "playwright",
+        "e2e",
+        "testing",
+        "ci",
+        "artifacts",
+        "github-actions",
+        "mcp",
+        "reporting"
+      ]
     }
   ]
 }
