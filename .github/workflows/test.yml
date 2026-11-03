@@ -16,6 +16,8 @@ jobs:
         run: python3 -m unittest discover -s plugins/github-issues/skills/issue-work-queue/tests -v
       - name: Run squad-model-resolver unit and smoke tests
         run: python3 -m unittest discover -s plugins/squad-model-resolver/tests -v
+      - name: Run playwright-report-retrieval unit and smoke tests
+        run: python3 -m unittest discover -s plugins/playwright-report-retrieval/tests -v
 
   frontmatter:
     # GitHub renders SKILL.md frontmatter with a strict YAML parser; a plain

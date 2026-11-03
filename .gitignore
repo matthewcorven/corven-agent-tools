@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .DS_Store
 
+# playwright-report-retrieval cache (downloaded CI reports)
+playwright-reports/
+
 # .NET build output
 bin/
 obj/
