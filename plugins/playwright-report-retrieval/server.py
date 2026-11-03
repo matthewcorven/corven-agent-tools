@@ -36,7 +36,7 @@ from fetch_report import (  # noqa: E402
 )
 
 SERVER_NAME = "playwright-report-retrieval"
-SERVER_VERSION = "0.2.2"
+SERVER_VERSION = "0.2.3"
 PROTOCOL_VERSION = "2024-11-05"
 
 TOOLS: list[dict[str, Any]] = [
@@ -107,7 +107,9 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "List the failing tests recorded in a Playwright report. Fetches the report "
             "first when run_id or commit is supplied, otherwise reads an already-extracted "
-            "report directory."
+            "report directory. Global errors (for example a globalSetup abort that ran zero "
+            "tests) are reported in errors[] and counted in failed_count, so a zero-test run "
+            "is never returned as a clean pass."
         ),
         "inputSchema": {
             "type": "object",
@@ -138,23 +140,30 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+# Playwright has shipped the embedded payload in two shapes: a ``<template>``
+# (1.64.x) and a ``<script>`` appended after ``</html>`` (1.57.x). Match either,
+# anywhere in the document, so the reader is not coupled to one reporter version.
+_EMBEDDED_REPORT_RE = re.compile(
+    r'<(?:template|script)[^>]*\bid=["\']playwrightReportBase64["\'][^>]*>(.*?)</(?:template|script)>',
+    re.DOTALL,
+)
+
+
 def _decode_embedded_report(index_html: Path) -> dict[str, Any]:
     """Decode the zip payload Playwright embeds in a self-contained ``index.html``.
 
     Modern Playwright HTML reports ship as one ``index.html`` with the whole
-    report base64-encoded inside ``<template id="playwrightReportBase64">``. The
-    payload is a zip of ``report.json`` plus one ``<fileId>.json`` per test file.
+    report base64-encoded inside an element carrying
+    ``id="playwrightReportBase64"``. The payload is a zip of ``report.json`` plus
+    one ``<fileId>.json`` per test file; a report that aborted before any spec ran
+    contains only ``report.json``.
     """
     try:
         html = index_html.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return {}
 
-    match = re.search(
-        r'<template[^>]*id="playwrightReportBase64"[^>]*>(.*?)</template>',
-        html,
-        re.DOTALL,
-    )
+    match = _EMBEDDED_REPORT_RE.search(html)
     if not match:
         return {}
 
@@ -280,6 +289,35 @@ def _walk_suites(suites: list[dict[str, Any]], path: Optional[list[str]] = None)
     return found
 
 
+def _flatten_report_json_tests(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten a single ``report.json`` that carries top-level ``files[]``.
+
+    Some reporter versions inline every test into ``report.json`` instead of
+    writing one ``<fileId>.json`` per file. Each entry in ``files[]`` mirrors the
+    per-file shape, so the same flattening applies.
+    """
+    found: list[dict[str, Any]] = []
+
+    for entry in payload.get("files") or []:
+        if not isinstance(entry, dict):
+            continue
+        file_name = entry.get("fileName") or ""
+        for test in entry.get("tests") or []:
+            location = test.get("location") or {}
+            found.append(
+                {
+                    "title": test.get("title") or "",
+                    "file": file_name or location.get("file") or "",
+                    "suite": test.get("path") and " › ".join(test["path"]) or "",
+                    "status": _test_status(test),
+                    "test_id": test.get("testId") or "",
+                    "project": test.get("projectName") or "",
+                }
+            )
+
+    return found
+
+
 def _collect_tests(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Return every test in the report, modern shape first, legacy second."""
     tests = _flatten_modern_tests(data)
@@ -287,9 +325,37 @@ def _collect_tests(data: dict[str, Any]) -> list[dict[str, Any]]:
         return tests
 
     for payload in data.values():
-        if isinstance(payload, dict) and payload.get("suites"):
+        if not isinstance(payload, dict):
+            continue
+        tests.extend(_flatten_report_json_tests(payload))
+        if payload.get("suites"):
             tests.extend(_walk_suites(payload["suites"]))
     return tests
+
+
+def _collect_errors(data: dict[str, Any]) -> list[str]:
+    """Return the report's global errors (``globalSetup`` aborts and friends).
+
+    Playwright records a global-setup failure in ``errors[]`` while still
+    reporting ``stats.ok: true``, so this is the only signal that the run did not
+    actually execute its suite.
+    """
+    errors: list[str] = []
+
+    for payload in data.values():
+        if not isinstance(payload, dict):
+            continue
+        for error in payload.get("errors") or []:
+            if isinstance(error, dict):
+                message = error.get("message") or error.get("value") or ""
+                stack = error.get("stack") or ""
+                text = f"{message}\n{stack}".strip() if stack else str(message)
+            else:
+                text = str(error)
+            if text.strip():
+                errors.append(text.strip())
+
+    return errors
 
 
 def list_failed_tests(
@@ -327,14 +393,40 @@ def list_failed_tests(
 
     data = _read_report_data(root)
     tests = _collect_tests(data)
+    errors = _collect_errors(data)
     failed = [t for t in tests if t["status"] in {"unexpected", "failed", "timedOut", "interrupted"}]
 
-    return {
+    # A report with global errors never ran its suite to completion, so it can
+    # never be a pass — even when Playwright reports ``stats.ok: true``.
+    if errors:
+        failed.extend(
+            {
+                "title": error.splitlines()[0],
+                "file": "",
+                "suite": "",
+                "status": "failed",
+                "test_id": "",
+                "project": "",
+                "error": error,
+            }
+            for error in errors
+        )
+
+    result: dict[str, Any] = {
         "report_dir": str(root),
         "total": len(tests),
         "failed_count": len(failed),
         "failed": failed,
     }
+    if errors:
+        result["errors"] = errors
+        result["error_count"] = len(errors)
+    if not tests and not errors:
+        result["warning"] = (
+            "The report contains no tests and no errors. Treat this as a failure: "
+            "a run that executed zero tests is never a pass."
+        )
+    return result
 
 
 def _tool_result(payload: Any, *, is_error: bool = False) -> dict[str, Any]:

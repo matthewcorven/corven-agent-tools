@@ -206,16 +206,32 @@ or after the artifact has expired; pass `--force` to re-download.
 ### Report format
 
 Modern Playwright HTML reports are **self-contained**: `index.html` embeds the
-entire report as a base64-encoded zip inside
-`<template id="playwrightReportBase64">`. The zip holds `report.json` plus one
-`<fileId>.json` per test file, and each per-file entry carries its own `tests[]`
-array. `report.json` has no top-level `tests` key.
+entire report as a base64-encoded zip inside an element carrying
+`id="playwrightReportBase64"`. The reporter has shipped that element in two
+shapes, and both are supported:
+
+- `@playwright/test` 1.64.x — `<template id="playwrightReportBase64">` inside `<body>`.
+- `@playwright/test` 1.57.x — `<script id="playwrightReportBase64" type="application/zip">`
+  appended **after** `</html>`.
+
+The zip holds `report.json` plus one `<fileId>.json` per test file, and each
+per-file entry carries its own `tests[]` array. `report.json` has no top-level
+`tests` key. Some versions instead inline every test into `report.json` under a
+top-level `files[]`; that shape is flattened too.
 
 `list_failed_tests` decodes that embedded payload first, then falls back to the
 legacy `data/report.json` layout. A test counts as failed when its derived status
 is `unexpected`, `failed`, `timedOut` or `interrupted`; the status comes from the
 test's `outcome`, or from the first failing `results[*].status` when `outcome` is
 absent.
+
+**Global errors are failures.** When a report aborts in `globalSetup` (or any
+other global hook) before a spec runs, Playwright writes `files: []` and a
+non-empty `errors[]` while still reporting `stats.ok: true`. `list_failed_tests`
+surfaces those errors as `errors[]` / `error_count` and counts each one in
+`failed_count`, so a zero-test run is never reported as a clean pass. A report
+with no tests *and* no errors returns a `warning` telling the caller to treat it
+as a failure.
 
 ### MCP tools
 

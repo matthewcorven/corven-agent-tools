@@ -18,11 +18,20 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 SERVER_SCRIPT = PLUGIN_ROOT / "server.py"
 
 
-def build_index_html(directory: Path, files: dict[str, object], *, pad: bool = True) -> Path:
+def build_index_html(
+    directory: Path,
+    files: dict[str, object],
+    *,
+    pad: bool = True,
+    tag: str = "template",
+    after_html: bool = False,
+) -> Path:
     """Write a self-contained ``index.html`` shaped like a real Playwright report.
 
-    Playwright embeds the whole report as a base64 zip inside
-    ``<template id="playwrightReportBase64">``.
+    Playwright embeds the whole report as a base64 zip inside an element carrying
+    ``id="playwrightReportBase64"``. ``@playwright/test`` 1.64.x uses a
+    ``<template>`` inside ``<body>``; 1.57.x uses a ``<script>`` appended after
+    ``</html>``. Both shapes must be readable.
     """
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as zf:
@@ -33,15 +42,39 @@ def build_index_html(directory: Path, files: dict[str, object], *, pad: bool = T
     if not pad:
         encoded = encoded.rstrip("=")
 
+    element = (
+        f'<{tag} id="playwrightReportBase64" type="application/zip">'
+        f"data:application/zip;base64,{encoded}</{tag}>"
+    )
+    if after_html:
+        document = f"<!DOCTYPE html><html><body><div id='root'></div></body></html>\n{element}"
+    else:
+        document = f"<!DOCTYPE html><html><body>{element}</body></html>"
+
     directory.mkdir(parents=True, exist_ok=True)
     index_html = directory / "index.html"
-    index_html.write_text(
-        "<!DOCTYPE html><html><body>"
-        f'<template id="playwrightReportBase64">data:application/zip;base64,{encoded}</template>'
-        "</body></html>",
-        encoding="utf-8",
-    )
+    index_html.write_text(document, encoding="utf-8")
     return index_html
+
+
+def aborted_report_files(*, errors: int = 2) -> dict[str, object]:
+    """Return the single ``report.json`` a report aborted in globalSetup contains.
+
+    Playwright still reports ``stats.ok: true`` here — the only failure signal is
+    the non-empty ``errors[]``.
+    """
+    return {
+        "report.json": {
+            "metadata": {},
+            "files": [],
+            "projectNames": ["chromium"],
+            "stats": {"total": 0, "expected": 0, "unexpected": 0, "flaky": 0, "skipped": 0, "ok": True},
+            "errors": [
+                f"Error: global-setup: form template seed failed (500): {{...}} (shard {i})"
+                for i in range(errors)
+            ],
+        }
+    }
 
 
 def modern_report_files(*, failing: bool = False) -> dict[str, object]:
@@ -252,6 +285,117 @@ class PlaywrightReportRetrievalMCPSmokeTest(unittest.TestCase):
         self.assertEqual(payload["total"], 2)
         self.assertEqual(payload["failed_count"], 1)
         self.assertEqual(payload["failed"][0]["test_id"], "bbb")
+
+    def test_script_embedded_report_after_html_is_decoded(self) -> None:
+        """DEF-9: 1.57.x emits a <script> payload after </html>, not a <template>."""
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp)
+            build_index_html(report, modern_report_files(failing=True), tag="script", after_html=True)
+
+            res = self.send_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 9,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_failed_tests",
+                        "arguments": {"report_dir": str(report)},
+                    },
+                }
+            )
+
+        payload = res["result"]["structuredContent"]
+        self.assertFalse(res["result"]["isError"], payload)
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(payload["failed_count"], 1)
+        self.assertEqual(payload["failed"][0]["test_id"], "bbb")
+
+    def test_global_errors_are_never_reported_as_a_clean_pass(self) -> None:
+        """DEF-9: zero tests plus globalSetup errors must not look green."""
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp)
+            build_index_html(report, aborted_report_files(errors=2), tag="script", after_html=True)
+
+            res = self.send_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 10,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_failed_tests",
+                        "arguments": {"report_dir": str(report)},
+                    },
+                }
+            )
+
+        payload = res["result"]["structuredContent"]
+        self.assertFalse(res["result"]["isError"], payload)
+        self.assertEqual(payload["total"], 0)
+        self.assertEqual(payload["failed_count"], 2)
+        self.assertEqual(payload["error_count"], 2)
+        self.assertEqual(len(payload["errors"]), 2)
+        self.assertIn("global-setup", payload["errors"][0])
+        self.assertIn("global-setup", payload["failed"][0]["title"])
+
+    def test_report_json_with_inline_files_is_flattened(self) -> None:
+        """DEF-9: a single report.json carrying files[] must yield its tests."""
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp)
+            files = modern_report_files(failing=True)
+            inline = {
+                "report.json": {
+                    "metadata": {},
+                    "files": [files["chat-abc123.json"]],
+                    "projectNames": ["chromium"],
+                    "stats": {"total": 2, "unexpected": 1, "ok": False},
+                    "errors": [],
+                }
+            }
+            build_index_html(report, inline, tag="script", after_html=True)
+
+            res = self.send_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 11,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_failed_tests",
+                        "arguments": {"report_dir": str(report)},
+                    },
+                }
+            )
+
+        payload = res["result"]["structuredContent"]
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(payload["failed_count"], 1)
+        self.assertEqual(payload["failed"][0]["test_id"], "bbb")
+        self.assertNotIn("errors", payload)
+
+    def test_clean_report_with_errors_key_stays_green(self) -> None:
+        """DEF-9 AC5: a genuinely clean report still reports failed_count 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp)
+            files = modern_report_files(failing=False)
+            files["report.json"]["errors"] = []
+            build_index_html(report, files, tag="script", after_html=True)
+
+            res = self.send_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 12,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_failed_tests",
+                        "arguments": {"report_dir": str(report)},
+                    },
+                }
+            )
+
+        payload = res["result"]["structuredContent"]
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(payload["failed_count"], 0)
+        self.assertEqual(payload["failed"], [])
+        self.assertNotIn("errors", payload)
 
     def test_unknown_tool_returns_tool_error(self) -> None:
         res = self.send_request(
