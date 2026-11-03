@@ -159,6 +159,7 @@ Sharded pipelines should emit a blob per shard and merge them:
 python3 scripts/fetch_report.py --run-id 123456789
 python3 scripts/fetch_report.py --run-id 123456789 --test "Login Flow"
 python3 scripts/fetch_report.py --commit abc1234 --test-id 3f2a1b
+python3 scripts/fetch_report.py --commit abc1234 --workflow e2e.yml
 python3 scripts/fetch_report.py --run-id 123456789 --no-open --json
 python3 scripts/fetch_report.py --run-id 123456789 --repo owner/repo
 ```
@@ -177,7 +178,17 @@ The script:
 
 The repository is inferred from the `origin` remote when `--repo` is omitted, so
 the script works from any subdirectory of a checkout. Outside a git checkout, or
-when `origin` is not a GitHub remote, pass `--repo owner/repo` explicitly.
+when `origin` is not a GitHub remote, pass `--repo owner/repo` explicitly. **MCP
+callers must always pass `repo`** — the stdio server's working directory is the
+plugin install directory, not your checkout.
+
+Resolving by commit SHA scans every workflow that ran for that SHA, so pass
+`--workflow e2e.yml` (or the numeric workflow id) whenever the repository has
+more than one workflow per commit. The workflow-scoped
+`/actions/workflows/{workflow}/runs` endpoint is used, because `workflow_id` is
+not a valid filter on `/actions/runs` — GitHub accepts it and silently ignores
+it. Without `--workflow`, the script prefers the first run whose artifact list
+contains the requested artifact, then falls back to the first completed run.
 
 `gh run download --dir <path>` **extracts** the artifact into `<path>`; it does
 not leave a `.zip` behind. The script therefore accepts either an extracted

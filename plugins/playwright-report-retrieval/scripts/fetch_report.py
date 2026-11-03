@@ -107,7 +107,12 @@ class CIProvider:
 
     name = "base"
 
-    def resolve_run_id(self, run_id: Optional[str], commit: Optional[str]) -> str:
+    def resolve_run_id(
+        self,
+        run_id: Optional[str],
+        commit: Optional[str],
+        artifact_name: str = "",
+    ) -> str:
         raise NotImplementedError
 
     def find_artifact(self, run_id: str, artifact_name: str) -> ArtifactRef:
@@ -142,7 +147,9 @@ class GitHubActionsProvider(CIProvider):
             raise RetrievalError(
                 "No --repo was given and the current directory is not inside a git "
                 "repository, so the GitHub repository could not be inferred. "
-                "Pass --repo owner/repo (or run from inside the target checkout)."
+                "Pass --repo owner/repo. MCP callers must always pass repo — the "
+                "server's working directory is the plugin install dir, not your "
+                "checkout."
             )
 
         try:
@@ -204,28 +211,69 @@ class GitHubActionsProvider(CIProvider):
 
     # -- interface -------------------------------------------------------- #
 
-    def resolve_run_id(self, run_id: Optional[str], commit: Optional[str]) -> str:
+    def resolve_run_id(
+        self,
+        run_id: Optional[str],
+        commit: Optional[str],
+        artifact_name: str = DEFAULT_ARTIFACT_NAME,
+    ) -> str:
         if run_id:
             return str(run_id)
         if not commit:
             raise RetrievalError("Either --run-id or --commit is required.")
 
-        query = f"/repos/{self._resolve_repo()}/actions/runs?head_sha={commit}&per_page=20"
+        # `workflow_id` is not a filter on /actions/runs — GitHub accepts it and
+        # ignores it. The workflow-scoped endpoint is the one that really filters.
         if self.workflow:
-            query += f"&workflow_id={urllib.parse.quote(self.workflow)}"
+            query = (
+                f"/repos/{self._resolve_repo()}/actions/workflows/"
+                f"{urllib.parse.quote(self.workflow, safe='')}/runs"
+                f"?head_sha={commit}&per_page=20"
+            )
+        else:
+            query = f"/repos/{self._resolve_repo()}/actions/runs?head_sha={commit}&per_page=20"
 
         payload = self._api(query)
         runs = payload.get("workflow_runs") or []
         if not runs:
+            scope = f" for workflow '{self.workflow}'" if self.workflow else ""
             raise RetrievalError(
-                f"No workflow run found for commit '{commit}'. "
+                f"No workflow run found for commit '{commit}'{scope}. "
                 "Check the SHA and that the workflow has run for that commit."
             )
 
         # Prefer a completed run; fall back to the newest run of any status.
         completed = [r for r in runs if r.get("status") == "completed"]
-        chosen = (completed or runs)[0]
-        return str(chosen["id"])
+        candidates = completed or runs
+
+        # Several workflows can run for one commit. Taking the first run blindly
+        # resolves to whichever GitHub happens to list first, so prefer a run
+        # that actually carries the artifact we are about to download.
+        if artifact_name:
+            chosen = self._first_run_with_artifact(candidates, artifact_name)
+            if chosen is not None:
+                return str(chosen["id"])
+
+        return str(candidates[0]["id"])
+
+    def _first_run_with_artifact(
+        self, runs: list[dict[str, Any]], artifact_name: str
+    ) -> Optional[dict[str, Any]]:
+        for run in runs:
+            run_id = run.get("id")
+            if run_id is None:
+                continue
+            try:
+                payload = self._api(
+                    f"/repos/{self._resolve_repo()}/actions/runs/{run_id}/artifacts"
+                )
+            except RetrievalError:
+                # An unreadable artifact list must not abort run resolution.
+                continue
+            names = {a.get("name") for a in payload.get("artifacts") or []}
+            if artifact_name in names:
+                return run
+        return None
 
     def find_artifact(self, run_id: str, artifact_name: str) -> ArtifactRef:
         payload = self._api(f"/repos/{self._resolve_repo()}/actions/runs/{run_id}/artifacts")
@@ -473,7 +521,7 @@ def fetch_report(
         ) from None
 
     provider = provider_cls(repo=repo, workflow=workflow)  # type: ignore[call-arg]
-    resolved_run_id = provider.resolve_run_id(run_id, commit)
+    resolved_run_id = provider.resolve_run_id(run_id, commit, artifact_name=artifact_name)
 
     if not force:
         cached = _cached_result(

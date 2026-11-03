@@ -36,7 +36,7 @@ from fetch_report import (  # noqa: E402
 )
 
 SERVER_NAME = "playwright-report-retrieval"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.2.1"
 PROTOCOL_VERSION = "2024-11-05"
 
 TOOLS: list[dict[str, Any]] = [
@@ -71,7 +71,13 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "CI provider implementation.",
                 },
                 "repo": {"type": "string", "description": "owner/repo override."},
-                "workflow": {"type": "string", "description": "Workflow file or name."},
+                "workflow": {
+                    "type": "string",
+                    "description": (
+                        "Workflow file name (e2e.yml) or numeric workflow id. Recommended "
+                        "with commit when the repository runs several workflows per commit."
+                    ),
+                },
                 "max_age_days": {
                     "type": "integer",
                     "default": DEFAULT_MAX_AGE_DAYS,

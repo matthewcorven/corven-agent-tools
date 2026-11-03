@@ -118,7 +118,7 @@ class FakeProvider(fr.CIProvider):
     def __init__(self, **_: object) -> None:
         self.downloads = 0
 
-    def resolve_run_id(self, run_id, commit):
+    def resolve_run_id(self, run_id, commit, artifact_name=""):
         return run_id or "resolved-from-commit"
 
     def find_artifact(self, run_id, artifact_name):
@@ -291,13 +291,101 @@ class GitHubActionsProviderTest(unittest.TestCase):
             ]
         }
         with mock.patch.object(provider, "_api", return_value=payload):
-            self.assertEqual(provider.resolve_run_id(None, "abc"), "2")
+            self.assertEqual(provider.resolve_run_id(None, "abc", artifact_name=""), "2")
+
+    def test_workflow_uses_the_workflow_scoped_endpoint(self) -> None:
+        """`workflow_id` is not a filter on /actions/runs — GitHub ignores it."""
+        provider = fr.GitHubActionsProvider(repo="o/r", workflow="e2e.yml")
+        payload = {"workflow_runs": [{"id": 41703114762, "status": "completed"}]}
+        with mock.patch.object(provider, "_api", return_value=payload) as api:
+            self.assertEqual(
+                provider.resolve_run_id(None, "ae24b42", artifact_name=""), "41703114762"
+            )
+
+        path = api.call_args.args[0]
+        self.assertIn("/repos/o/r/actions/workflows/e2e.yml/runs", path)
+        self.assertIn("head_sha=ae24b42", path)
+        self.assertNotIn("workflow_id=", path)
+        self.assertNotIn("/actions/runs?", path)
+
+    def test_workflow_accepts_a_numeric_id(self) -> None:
+        provider = fr.GitHubActionsProvider(repo="o/r", workflow="406115410")
+        payload = {"workflow_runs": [{"id": 41703114762, "status": "completed"}]}
+        with mock.patch.object(provider, "_api", return_value=payload) as api:
+            self.assertEqual(
+                provider.resolve_run_id(None, "ae24b42", artifact_name=""), "41703114762"
+            )
+        self.assertIn("/actions/workflows/406115410/runs", api.call_args.args[0])
+
+    def test_workflow_name_is_url_encoded(self) -> None:
+        provider = fr.GitHubActionsProvider(repo="o/r", workflow="e2e tests.yml")
+        with mock.patch.object(provider, "_api", return_value={"workflow_runs": []}) as api:
+            with self.assertRaises(fr.RetrievalError):
+                provider.resolve_run_id(None, "abc", artifact_name="")
+        self.assertIn("e2e%20tests.yml", api.call_args.args[0])
+
+    def test_run_without_the_artifact_is_skipped(self) -> None:
+        """Without --workflow, prefer the run that actually has the artifact."""
+        provider = fr.GitHubActionsProvider(repo="o/r")
+        runs = {
+            "workflow_runs": [
+                {"id": 41703114625, "status": "completed"},  # Squad Release
+                {"id": 41703114762, "status": "completed"},  # E2E (Playwright)
+            ]
+        }
+        artifacts = {
+            "/repos/o/r/actions/runs/41703114625/artifacts": {"artifacts": []},
+            "/repos/o/r/actions/runs/41703114762/artifacts": {
+                "artifacts": [{"name": "playwright-report"}]
+            },
+        }
+
+        def fake_api(path: str):
+            return runs if path.endswith("/actions/runs?head_sha=abc&per_page=20") else artifacts[path]
+
+        with mock.patch.object(provider, "_api", side_effect=fake_api):
+            self.assertEqual(
+                provider.resolve_run_id(None, "abc", artifact_name="playwright-report"),
+                "41703114762",
+            )
+
+    def test_run_resolution_falls_back_when_no_run_has_the_artifact(self) -> None:
+        provider = fr.GitHubActionsProvider(repo="o/r")
+        runs = {"workflow_runs": [{"id": 1, "status": "completed"}]}
+        with mock.patch.object(provider, "_api") as api:
+            api.side_effect = lambda path: (
+                runs if "/actions/runs?" in path else {"artifacts": []}
+            )
+            self.assertEqual(
+                provider.resolve_run_id(None, "abc", artifact_name="playwright-report"), "1"
+            )
+
+    def test_artifact_lookup_errors_do_not_abort_resolution(self) -> None:
+        provider = fr.GitHubActionsProvider(repo="o/r")
+        runs = {
+            "workflow_runs": [
+                {"id": 1, "status": "completed"},
+                {"id": 2, "status": "completed"},
+            ]
+        }
+
+        def fake_api(path: str):
+            if "/actions/runs?" in path:
+                return runs
+            if path.endswith("/runs/1/artifacts"):
+                raise fr.RetrievalError("boom")
+            return {"artifacts": [{"name": "playwright-report"}]}
+
+        with mock.patch.object(provider, "_api", side_effect=fake_api):
+            self.assertEqual(
+                provider.resolve_run_id(None, "abc", artifact_name="playwright-report"), "2"
+            )
 
     def test_resolve_run_id_raises_when_no_runs(self) -> None:
         provider = fr.GitHubActionsProvider(repo="o/r")
         with mock.patch.object(provider, "_api", return_value={"workflow_runs": []}):
             with self.assertRaises(fr.RetrievalError):
-                provider.resolve_run_id(None, "abc")
+                provider.resolve_run_id(None, "abc", artifact_name="")
 
     def test_find_artifact_picks_newest_match(self) -> None:
         provider = fr.GitHubActionsProvider(repo="o/r")
