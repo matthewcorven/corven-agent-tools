@@ -1,0 +1,111 @@
+---
+name: copilot-byok-metadata
+description: >-
+  Use when the user wants GitHub Copilot desktop app BYOK models to report
+  correct context-window sizes, output-token budgets, or reasoning-effort
+  levels — for example when compaction triggers too early, when the reasoning
+  picker is missing or empty for an OpenRouter model, or when the user asks to
+  sync, refresh, or repair BYOK model metadata. Reads the app database, fetches
+  authoritative values from the provider source-of-truth API, and applies them
+  interactively or automatically. USE FOR: BYOK context window, BYOK reasoning
+  effort, reasoning levels missing, compaction too aggressive, sync model
+  metadata, refresh BYOK models, OpenRouter model limits, provider_models
+  metadata. DO NOT USE FOR: GitHub Copilot CLI configuration (not yet
+  supported), built-in Copilot models, adding or removing BYOK providers, or
+  editing API keys.
+---
+
+# Copilot BYOK Metadata
+
+Keeps GitHub Copilot desktop app BYOK models honest about what they can do. The
+app stores BYOK models with `max_prompt_tokens`, `max_output_tokens`, and
+`supported_reasoning_efforts` all `NULL`, so it cannot size the context window
+or offer reasoning levels. This skill fills those columns from the provider's
+own source of truth.
+
+## Scope
+
+- **Supported target:** GitHub Copilot **desktop app** (`~/.copilot/data.db`).
+- **Supported providers:** OpenRouter only. Other providers are reported as
+  `unsupported_provider` and left untouched.
+- **Not supported yet:** GitHub Copilot CLI. If the user asks for CLI support,
+  say it is planned and stop — do not improvise a CLI write path.
+
+## Tools
+
+| Tool | Purpose |
+|------|---------|
+| `list_byok_models` | Read configured providers/models and their current metadata |
+| `fetch_provider_metadata` | Fetch source-of-truth values and show what Copilot would get |
+| `plan_metadata_updates` | Dry-run diff of current vs proposed — never writes |
+| `apply_metadata_updates` | Write the plan; `dry_run` defaults to `true` |
+| `get_provider_registry` | Show the hardcoded provider registry and supported targets |
+
+If these tools are deferred, load them with `tool_search_tool` using the query
+`copilot-byok-metadata` before proceeding.
+
+## Protocol
+
+1. **Read.** Call `list_byok_models`. Report the provider count, model count, and
+   how many models are missing metadata. If every model already has metadata,
+   say so and stop — there is nothing to do.
+
+2. **Plan.** Call `plan_metadata_updates`. This fetches the provider catalog and
+   returns a per-model diff with `status` of `update`, `unchanged`, `unresolved`,
+   or `unsupported_provider`.
+
+3. **Present.** Show the user a compact table of models with `status == "update"`:
+   model id, proposed context window, proposed output budget, and reasoning
+   levels. Mention `unresolved` models by name — those ids are absent from the
+   provider catalog and need the user's attention. Do not list
+   `unsupported_provider` models individually; summarize them as "N models on
+   providers without a source of truth".
+
+4. **Decide.** Choose interactive or automatic per the rule below.
+
+5. **Apply.** Call `apply_metadata_updates` with `dry_run=false`. Leave `backup`
+   at its default of `true` unless the user explicitly declines a backup.
+
+6. **Report.** State how many models were updated, the backup path, and that the
+   user should reopen the model picker (or restart the app) to see the change.
+
+## Interactive vs automatic
+
+Decide from the conversation, not from a guess:
+
+- **Automatic** — apply without asking when the user is in autopilot mode, or
+  when the current request already authorizes the write ("sync them", "fix it",
+  "apply the metadata", "just do it"). A standing preference stated earlier in
+  the session also counts.
+- **Interactive** — present the plan and wait for confirmation when the user
+  asked a question rather than issuing an instruction ("can you check…",
+  "what's wrong with…"), when the plan would change more than a handful of
+  models and the user has not seen a plan yet, or when the request is ambiguous.
+
+When in doubt, ask. A dry run costs nothing; a wrong write costs a backup
+restore.
+
+## Optional behaviors
+
+Both are off by default. Enable only when the user asks for them.
+
+- **`set_reasoning_defaults`** — also writes a reasoning-effort selection for
+  models that have no explicit user choice, using the provider's default effort.
+  Without this, the app shows the levels but keeps its own default selection.
+- **`set_context_tier`** — writes `default` or `long_context` for every resolved
+  model. Only use when the user explicitly wants a tier applied; the app's
+  meaning for `long_context` on BYOK models is not documented.
+- **`refresh_catalog_cache`** — also patches the app's cached model catalog so
+  the new limits appear without a restart. Safe, but the app may overwrite the
+  cache on its next refresh.
+
+## Safety
+
+- Never write to `~/.copilot/config.json` or `~/.copilot/settings.json`. The
+  database is the only store this skill touches.
+- Never run `apply_metadata_updates` with `dry_run=false` against a database the
+  user has not seen a plan for, unless the automatic rule above applies.
+- Never edit `provider_models` rows directly with SQL. The server owns the
+  transaction, the backup, and the `updated_at` bookkeeping.
+- If the app is running, writes still succeed (WAL mode), but tell the user to
+  reopen the model picker so the UI re-reads the values.

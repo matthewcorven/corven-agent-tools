@@ -1,6 +1,6 @@
 # corven-agent-tools
 
-Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository distributes a dependency-driven GitHub issue-tracking skill, a decision-model skill, a source-control change-visualization plugin, and a deterministic Squad model-resolver plugin, and is published as a plugin marketplace.
+Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository distributes a dependency-driven GitHub issue-tracking skill, a decision-model skill, a source-control change-visualization plugin, a deterministic Squad model-resolver plugin, a Playwright report-retrieval plugin, and a GitHub Copilot BYOK model-metadata plugin, and is published as a plugin marketplace.
 
 ## What's inside
 
@@ -17,6 +17,7 @@ Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository dis
 | Change-learn MCP host | `hosts/ChangeLearn.Host/` | Dual-transport MCP host (on-demand stdio from a configured source checkout; Blazor Server UI + `:5190/mcp` HTTP) exposing 8 tools, with a Squad agent team on the GitHub Copilot SDK + Microsoft Agent Framework — see [`plugins/change-learn/README.md`](plugins/change-learn/README.md) |
 | `squad-model-resolver` plugin | `plugins/squad-model-resolver/` | Deterministic model ID resolution MCP server (`resolve_model`, `resolve_for_agent`, `verify_spawn`) + thin aggressive skill for Squad agent spawns |
 | `playwright-report-retrieval` plugin | `plugins/playwright-report-retrieval/` | Canonical Playwright reporting + AI-driven E2E standards skill, plus a retrieval CLI and MCP server (`fetch_report`, `list_failed_tests`) that downloads a CI HTML report by run ID or commit and deep-links to a test |
+| `copilot-byok-metadata` plugin | `plugins/copilot-byok-metadata/` | MCP server + thin skill that reads the GitHub Copilot app's BYOK models, fetches context-window and reasoning-effort metadata from provider sources of truth (OpenRouter today), and applies it to the app config interactively or automatically |
 
 Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/) for the issue-queue skill. The decision-model sender needs `OPENROUTER_API_KEY` in the environment.
 
@@ -35,6 +36,7 @@ copilot plugin install use-decision-model@corven-agent-tools
 copilot plugin install change-learn@corven-agent-tools
 copilot plugin install squad-model-resolver@corven-agent-tools
 copilot plugin install playwright-report-retrieval@corven-agent-tools
+copilot plugin install copilot-byok-metadata@corven-agent-tools
 ```
 
 The install source must be the qualified `plugin@marketplace` form — a bare `github-issues` is rejected with `Invalid plugin spec`.
@@ -47,7 +49,8 @@ You can also enable them declaratively in `.github/copilot/settings.json` (repos
     "github-issues@corven-agent-tools": true,
     "use-decision-model@corven-agent-tools": true,
     "squad-model-resolver@corven-agent-tools": true,
-    "playwright-report-retrieval@corven-agent-tools": true
+    "playwright-report-retrieval@corven-agent-tools": true,
+    "copilot-byok-metadata@corven-agent-tools": true
   },
   "extraKnownMarketplaces": {
     "corven-agent-tools": {
@@ -182,6 +185,36 @@ The script resolves the run, locates the `playwright-report` artifact, prunes na
 
 `GitHubActionsProvider` (backed by the `gh` CLI) is the only implementation today. Subclass `CIProvider`, implement `resolve_run_id`, `find_artifact`, and `download_artifact`, then register it in `PROVIDERS`.
 
+## Copilot BYOK metadata reference
+
+The `copilot-byok-metadata` plugin fills a gap in the GitHub Copilot desktop app: BYOK (bring-your-own-key) models are stored with `max_prompt_tokens`, `max_output_tokens`, and `supported_reasoning_efforts` all `NULL`, so the app cannot compact at the right point or offer reasoning levels for them. This plugin reads those models, fetches the real metadata from the provider's source of truth, and writes it into the app config.
+
+Scope today: **GitHub Copilot desktop app only**, and **OpenRouter only** as a metadata provider. GitHub Copilot CLI support is planned for a future release if its configuration turns out to be separate.
+
+### MCP tools
+
+- `list_byok_models`: Reads `~/.copilot/data.db` and returns every configured provider and BYOK model with its current metadata, plus counts of models with and without metadata.
+- `fetch_provider_metadata`: Fetches the provider catalog from its hardcoded source-of-truth URL and returns normalized metadata per model (`max_context_window_tokens`, `max_output_tokens`, `supported_reasoning_efforts`, `default_reasoning_effort`).
+- `plan_metadata_updates`: Computes a dry-run plan — per model, the current values, the proposed values, the changed fields, and a status of `update`, `unchanged`, `unresolved`, or `unsupported_provider`. Never writes.
+- `apply_metadata_updates`: Applies the plan. Defaults to `dry_run: true`; a real write takes a database backup first and runs in a single transaction.
+- `get_provider_registry`: Returns the provider registry (source-of-truth URLs, host/name match rules) and the supported targets.
+
+### Metadata derivation
+
+OpenRouter's `top_provider.max_completion_tokens` is an aggregate maximum, not a sane per-request output budget — several 1M-token models report `943718`, which would leave only ~100k of prompt budget and force compaction almost immediately. The server therefore clamps `max_output_tokens` to `min(provider value, 131072, context_window × 0.5)` and derives `max_prompt_tokens = context_window − max_output_tokens`, matching the app's own built-in catalog convention (output budgets never exceed 128000).
+
+Reasoning efforts are intersected with the Copilot vocabulary (`low`, `medium`, `high`, `xhigh`, `max`), so OpenRouter's `minimal` and `none` are dropped. Models with no `reasoning` object get `NULL`, which the app reads as "no reasoning effort".
+
+### Optional behaviors
+
+- `set_reasoning_defaults`: Seeds `copilot-reasoning-effort` with the provider's default effort, but only for models with no existing user pick — an explicit choice is never overwritten.
+- `set_context_tier`: Writes `copilot-context-tier` (`default` or `long_context`) for the affected models. Off by default.
+- `refresh_catalog_cache`: Also patches the cached `copilot-available-models-v2` entries so the model picker reflects the new limits without waiting for a refresh.
+
+### Safety
+
+Writes go to `~/.copilot/data.db` while the app may be running. The server uses `busy_timeout`, a single transaction, and a `data.db.byok-metadata-backup-<epochms>` backup before any write. `dry_run` defaults to `true`; the skill requires presenting the plan and getting confirmation unless the user is in autopilot mode.
+
 ## Repository layout
 
 ```text
@@ -216,6 +249,11 @@ corven-agent-tools/                         # Agent Plugins marketplace
     │   ├── scripts/fetch_report.py          # Retrieval CLI + CI provider seam
     │   ├── skills/playwright-report-retrieval/  # Canonical E2E + reporting standards
     │   └── tests/                           # Unit tests + MCP smoke tests
+    ├── copilot-byok-metadata/               # copilot-byok-metadata@corven-agent-tools
+    │   ├── plugin.json, mcp.json
+    │   ├── server.py                        # MCP server: list, fetch, plan, apply, registry
+    │   ├── skills/copilot-byok-metadata/    # Thin skill: read → plan → confirm → apply
+    │   └── tests/                           # Unit tests, apply tests, MCP smoke tests
     └── use-decision-model/                  # use-decision-model@corven-agent-tools
         ├── plugin.json
         └── skills/use-decision-model/       # Skill, sender, example payloads
@@ -227,6 +265,7 @@ corven-agent-tools/                         # Agent Plugins marketplace
 python3 -m unittest discover -s plugins/github-issues/skills/issue-work-queue/tests -v
 python3 -m unittest discover -s plugins/squad-model-resolver/tests -v
 python3 -m unittest discover -s plugins/playwright-report-retrieval/tests -v
+python3 -m unittest discover -s plugins/copilot-byok-metadata/tests -v
 python3 -m unittest discover -s plugins/change-learn/skills/change-learn/tests -v
 ```
 

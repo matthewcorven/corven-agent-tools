@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "copilot-byok-metadata",
+  "version": "0.1.0",
+  "description": "MCP server and skill that backfill GitHub Copilot app BYOK model metadata (context window, output budget, reasoning efforts) from provider source-of-truth APIs such as OpenRouter.",
+  "author": {
+    "name": "Matthew Corven"
+  },
+  "license": "MIT",
+  "keywords": [
+    "copilot",
+    "byok",
+    "openrouter",
+    "context-window",
+    "reasoning-effort",
+    "mcp",
+    "model-metadata"
+  ]
+}

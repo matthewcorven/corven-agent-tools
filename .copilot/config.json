@@ -14,6 +14,31 @@
       "kind": "mcp",
       "serverName": "squad-model-resolver",
       "toolName": "verify_spawn"
+    },
+    {
+      "kind": "mcp",
+      "serverName": "copilot-byok-metadata",
+      "toolName": "list_byok_models"
+    },
+    {
+      "kind": "mcp",
+      "serverName": "copilot-byok-metadata",
+      "toolName": "fetch_provider_metadata"
+    },
+    {
+      "kind": "mcp",
+      "serverName": "copilot-byok-metadata",
+      "toolName": "plan_metadata_updates"
+    },
+    {
+      "kind": "mcp",
+      "serverName": "copilot-byok-metadata",
+      "toolName": "apply_metadata_updates"
+    },
+    {
+      "kind": "mcp",
+      "serverName": "copilot-byok-metadata",
+      "toolName": "get_provider_registry"
     }
   ],
   "allowedTools": [
@@ -21,6 +46,13 @@
     "squad-model-resolver",
     "squad-model-resolver(resolve_for_agent)",
     "squad-model-resolver(resolve_model)",
-    "squad-model-resolver(verify_spawn)"
+    "squad-model-resolver(verify_spawn)",
+    "copilot-byok-metadata-*",
+    "copilot-byok-metadata",
+    "copilot-byok-metadata(list_byok_models)",
+    "copilot-byok-metadata(fetch_provider_metadata)",
+    "copilot-byok-metadata(plan_metadata_updates)",
+    "copilot-byok-metadata(apply_metadata_updates)",
+    "copilot-byok-metadata(get_provider_registry)"
   ]
 }
