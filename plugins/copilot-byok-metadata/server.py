@@ -63,7 +63,13 @@ MIN_PROMPT_FRACTION = 0.5
 APP_STATE_REASONING_KEY = "copilot-reasoning-effort"
 APP_STATE_CONTEXT_TIER_KEY = "copilot-context-tier"
 APP_STATE_CATALOG_KEY = "copilot-available-models-v2"
+APP_STATE_CLOUD_CATALOG_KEY = "copilot-cloud-available-models-v2"
 APP_STATE_SELECTED_MODEL_KEY = "copilot-selected-model"
+
+#: Catalog caches the app keeps in ``app_state``. They differ in shape: the
+#: local catalog is ``{"accountId": ..., "models": [...]}`` while the cloud
+#: catalog is a bare JSON list. Both carry BYOK entries and both are patched.
+CATALOG_CACHE_KEYS = (APP_STATE_CATALOG_KEY, APP_STATE_CLOUD_CATALOG_KEY)
 
 #: Substrings that mark a provider setting as credential-bearing. Matching
 #: values are replaced with ``<redacted>`` before anything leaves the server.
@@ -716,10 +722,10 @@ def read_byok_config(
         reasoning_state = load_app_state(conn, APP_STATE_REASONING_KEY) or {}
         context_tier_state = load_app_state(conn, APP_STATE_CONTEXT_TIER_KEY) or {}
         selected_model = load_app_state_scalar(conn, APP_STATE_SELECTED_MODEL_KEY)
-        catalog_cache = (
-            load_app_state(conn, APP_STATE_CATALOG_KEY)
+        catalog_caches = (
+            {key: load_app_state(conn, key) for key in CATALOG_CACHE_KEYS}
             if include_catalog_cache
-            else None
+            else {}
         )
         workspace = (
             resolve_workspace(conn, workspace_path) if workspace_path else None
@@ -774,15 +780,50 @@ def read_byok_config(
         )
 
     byok_catalog_entries: list[dict[str, Any]] = []
-    if isinstance(catalog_cache, dict):
-        for entry in catalog_cache.get("models") or []:
-            if isinstance(entry, dict) and entry.get("providerId"):
+    catalog_cache_summary: dict[str, Any] = {}
+    for cache_key in CATALOG_CACHE_KEYS:
+        cache = catalog_caches.get(cache_key)
+        entries = _catalog_entries(cache) if cache is not None else None
+        if entries is None:
+            catalog_cache_summary[cache_key] = {"present": False}
+            continue
+        byok_entries = [
+            entry
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("providerId")
+        ]
+        with_limits = sum(
+            1
+            for entry in byok_entries
+            if isinstance((entry.get("capabilities") or {}).get("limits"), dict)
+            and (entry.get("capabilities") or {}).get("limits")
+        )
+        with_efforts = sum(
+            1 for entry in byok_entries if entry.get("supportedReasoningEfforts")
+        )
+        catalog_cache_summary[cache_key] = {
+            "present": True,
+            "shape": "list" if isinstance(cache, list) else "object",
+            "entry_count": len(entries),
+            "byok_entry_count": len(byok_entries),
+            "byok_entries_with_limits": with_limits,
+            "byok_entries_with_reasoning_efforts": with_efforts,
+        }
+        if cache_key == APP_STATE_CATALOG_KEY:
+            for entry in byok_entries:
+                capabilities = entry.get("capabilities") or {}
+                limits = capabilities.get("limits") or {}
                 byok_catalog_entries.append(
                     {
                         "id": entry.get("id"),
                         "name": entry.get("name"),
                         "providerId": entry.get("providerId"),
-                        "capabilities": entry.get("capabilities"),
+                        "max_context_window_tokens": limits.get(
+                            "max_context_window_tokens"
+                        ),
+                        "max_prompt_tokens": limits.get("max_prompt_tokens"),
+                        "max_output_tokens": limits.get("max_output_tokens"),
+                        "has_limits": bool(limits),
                         "supportedReasoningEfforts": entry.get(
                             "supportedReasoningEfforts"
                         ),
@@ -799,6 +840,46 @@ def read_byok_config(
         p["name"] for p in enriched_providers if not p["provider_supported"]
     ]
 
+    notes = [
+        "BYOK model configuration is app-global, not per-workspace.",
+        "Provider settings are returned with credential values redacted.",
+        "Use plan_metadata_updates to see proposed changes, then "
+        "apply_metadata_updates to write them.",
+    ]
+    if include_catalog_cache and byok_catalog_entries:
+        missing_limits = sum(
+            1 for entry in byok_catalog_entries if not entry["has_limits"]
+        )
+        if missing_limits:
+            # Only models whose provider has a source-of-truth registry entry can
+            # ever be patched; the rest are expected to stay unset.
+            patchable = {
+                entry["id"]
+                for entry in byok_catalog_entries
+                if not entry["has_limits"]
+                and any(
+                    model["state_key"] == entry["id"]
+                    and model["provider_kind"] in PROVIDER_REGISTRY
+                    for model in enriched_models
+                )
+            }
+            if patchable:
+                notes.append(
+                    f"{len(patchable)} of {len(byok_catalog_entries)} BYOK catalog "
+                    "entries carry no capabilities.limits and belong to a provider "
+                    "with a source-of-truth registry. The app reads a BYOK model's "
+                    "context window from this cache, not from provider_models, so "
+                    "those models fall back to the app's default window. Run "
+                    "apply_metadata_updates with refresh_catalog_cache=true to patch it."
+                )
+            else:
+                notes.append(
+                    f"{missing_limits} of {len(byok_catalog_entries)} BYOK catalog "
+                    "entries carry no capabilities.limits. None of them belong to a "
+                    "provider with a source-of-truth registry, so there is nothing to "
+                    "patch — this is expected."
+                )
+
     return {
         "db_path": path,
         "workspace": workspace,
@@ -812,7 +893,11 @@ def read_byok_config(
         "catalog_cache": {
             "included": include_catalog_cache,
             "byok_entry_count": len(byok_catalog_entries),
+            "byok_entries_with_limits": sum(
+                1 for entry in byok_catalog_entries if entry["has_limits"]
+            ),
             "byok_entries": byok_catalog_entries,
+            "caches": catalog_cache_summary,
         },
         "summary": {
             "provider_count": len(enriched_providers),
@@ -829,12 +914,7 @@ def read_byok_config(
             "providers_with_supported_source": supported_kinds,
             "providers_without_supported_source": unsupported,
         },
-        "notes": [
-            "BYOK model configuration is app-global, not per-workspace.",
-            "Provider settings are returned with credential values redacted.",
-            "Use plan_metadata_updates to see proposed changes, then "
-            "apply_metadata_updates to write them.",
-        ],
+        "notes": notes,
     }
 
 
@@ -987,12 +1067,31 @@ def _backup_database(conn: sqlite3.Connection, db_path: str) -> str:
     return backup_path
 
 
+def _catalog_entries(cache: Any) -> Optional[list[Any]]:
+    """Return the model list from either catalog-cache shape.
+
+    The local catalog is ``{"accountId": ..., "models": [...]}``; the cloud
+    catalog is a bare JSON list. Returns ``None`` when the value is neither.
+    """
+    if isinstance(cache, list):
+        return cache
+    if isinstance(cache, dict):
+        models = cache.get("models")
+        if isinstance(models, list):
+            return models
+    return None
+
+
 def _patch_catalog_cache(
-    cache: dict[str, Any], updates: dict[str, dict[str, Any]]
-) -> tuple[dict[str, Any], int]:
-    """Patch BYOK entries in the cached model catalog. Returns (cache, patched)."""
-    models = cache.get("models")
-    if not isinstance(models, list):
+    cache: Any, updates: dict[str, dict[str, Any]]
+) -> tuple[Any, int]:
+    """Patch BYOK entries in a cached model catalog. Returns (cache, patched).
+
+    Accepts both catalog shapes (see :func:`_catalog_entries`) and mutates the
+    entries in place, so the caller can persist ``cache`` unchanged.
+    """
+    models = _catalog_entries(cache)
+    if models is None:
         return cache, 0
 
     patched = 0
@@ -1058,7 +1157,7 @@ def apply_metadata_updates(
     set_context_tier: Optional[str] = None,
     dry_run: bool = True,
     backup: bool = True,
-    refresh_catalog_cache: bool = False,
+    refresh_catalog_cache: bool = True,
     catalog: Optional[dict[str, Any]] = None,
     catalog_url: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -1107,6 +1206,7 @@ def apply_metadata_updates(
             "models_updated": 0,
             "app_state_entries_updated": 0,
             "catalog_cache_entries_patched": 0,
+            "catalog_caches_patched": {},
         },
         "backup_path": None,
         "notes": [],
@@ -1116,9 +1216,13 @@ def apply_metadata_updates(
         result["notes"].append("dry_run=true — no changes were written")
         return result
 
+    # The catalog cache is a separate channel from ``provider_models``: the app
+    # reads a BYOK model's context window from the cache, so the cache can be
+    # stale even when every database row is already correct. Build the patch
+    # set from every resolved entry, not only the ones needing a row update.
     updates = {
         entry["state_key"]: {
-            **entry["proposed"],
+            **(entry.get("proposed") or {}),
             "max_context_window_tokens": (entry.get("provider_metadata") or {}).get(
                 "max_context_window_tokens"
             ),
@@ -1127,10 +1231,35 @@ def apply_metadata_updates(
             ),
         }
         for entry in plan["entries"]
-        if entry["status"] == "update" and entry.get("proposed")
+        if entry.get("proposed") and entry.get("provider_metadata")
     }
 
-    if not updates and not any(entry["app_state_changes"] for entry in plan["entries"]):
+    # Probe the catalog caches so a stale cache still counts as work to do.
+    # ``_patch_catalog_cache`` mutates in place, so probe a throwaway copy.
+    cache_patch_counts: dict[str, int] = {}
+    if refresh_catalog_cache and updates:
+        probe = connect(path, readonly=True)
+        try:
+            for cache_key in CATALOG_CACHE_KEYS:
+                cache = load_app_state(probe, cache_key)
+                if cache is None:
+                    continue
+                _, patched = _patch_catalog_cache(
+                    json.loads(json.dumps(cache)), updates
+                )
+                if patched:
+                    cache_patch_counts[cache_key] = patched
+        finally:
+            probe.close()
+
+    has_row_updates = any(
+        entry["status"] == "update" and entry.get("proposed")
+        for entry in plan["entries"]
+    )
+    has_app_state_changes = any(
+        entry["app_state_changes"] for entry in plan["entries"]
+    )
+    if not has_row_updates and not has_app_state_changes and not cache_patch_counts:
         result["notes"].append("Nothing to apply — configuration already matches provider metadata")
         return result
 
@@ -1209,8 +1338,11 @@ def apply_metadata_updates(
                 result["applied"]["app_state_entries_updated"] += len(tier_updates)
 
             if refresh_catalog_cache:
-                cache = load_app_state(conn, APP_STATE_CATALOG_KEY)
-                if isinstance(cache, dict):
+                patched_total = 0
+                for cache_key in CATALOG_CACHE_KEYS:
+                    cache = load_app_state(conn, cache_key)
+                    if cache is None:
+                        continue
                     patched_cache, patched = _patch_catalog_cache(cache, updates)
                     if patched:
                         conn.execute(
@@ -1221,20 +1353,19 @@ def apply_metadata_updates(
                                 value = excluded.value,
                                 updated_at = excluded.updated_at
                             """,
-                            (APP_STATE_CATALOG_KEY, json.dumps(patched_cache)),
+                            (cache_key, json.dumps(patched_cache)),
                         )
-                        result["applied"]["catalog_cache_entries_patched"] = patched
-                    elif updates:
-                        result["notes"].append(
-                            f"WARNING: refresh_catalog_cache was requested and {len(updates)} "
-                            f"model(s) were updated, but 0 entries in {APP_STATE_CATALOG_KEY} "
-                            "matched. The app may not learn the context window for these "
-                            "models. Reopen the model picker to rebuild the catalog, then "
-                            "re-run with refresh_catalog_cache=true."
-                        )
-                else:
+                        patched_total += patched
+                        result["applied"]["catalog_caches_patched"][cache_key] = patched
+                result["applied"]["catalog_cache_entries_patched"] = patched_total
+                if not patched_total and updates:
                     result["notes"].append(
-                        f"{APP_STATE_CATALOG_KEY} not present or unreadable — cache not patched"
+                        f"WARNING: refresh_catalog_cache was requested and {len(updates)} "
+                        f"model(s) had provider metadata, but 0 entries in "
+                        f"{' or '.join(CATALOG_CACHE_KEYS)} matched. The app may not "
+                        "learn the context window for these models. Reopen the model "
+                        "picker to rebuild the catalog, then re-run with "
+                        "refresh_catalog_cache=true."
                     )
     finally:
         conn.close()
@@ -1441,10 +1572,12 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "refresh_catalog_cache": {
                     "type": "boolean",
-                    "default": False,
+                    "default": True,
                     "description": (
-                        "Also patch the cached model catalog so the app reflects the new "
-                        "limits without a restart."
+                        "Also patch the app's cached model catalogs so the app reflects "
+                        "the new limits without a restart. Defaults to true because the "
+                        "app reads a BYOK model's context window from the cache, not "
+                        "from provider_models."
                     ),
                 },
                 "catalog_url": {
@@ -1545,7 +1678,7 @@ def handle_rpc_message(msg: dict[str, Any]) -> Optional[dict[str, Any]]:
                     set_context_tier=tool_args.get("set_context_tier"),
                     dry_run=tool_args.get("dry_run", True),
                     backup=tool_args.get("backup", True),
-                    refresh_catalog_cache=tool_args.get("refresh_catalog_cache", False),
+                    refresh_catalog_cache=tool_args.get("refresh_catalog_cache", True),
                     catalog_url=tool_args.get("catalog_url"),
                 )
             elif tool_name == "get_provider_registry":
@@ -1564,7 +1697,10 @@ def handle_rpc_message(msg: dict[str, Any]) -> Optional[dict[str, Any]]:
                 "jsonrpc": "2.0",
                 "id": msg_id,
                 "result": {
-                    "content": [{"type": "text", "text": json.dumps(res, indent=2)}],
+                    # Single-line JSON: the harness writes this to a temp file
+                    # that agents then parse, and pretty-printing forces them to
+                    # hunt for the JSON boundary with grep/head.
+                    "content": [{"type": "text", "text": json.dumps(res)}],
                     "structuredContent": res,
                     "isError": False,
                 },

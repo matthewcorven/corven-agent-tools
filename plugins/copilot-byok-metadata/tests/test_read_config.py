@@ -318,6 +318,120 @@ class ReadByokConfigTest(unittest.TestCase):
         self.assertEqual(entry["providerId"], PROVIDER_ID)
         self.assertEqual(entry["supportedReasoningEfforts"], ["max", "high", "low"])
 
+    def test_catalog_cache_surfaces_limits_per_entry(self) -> None:
+        """The agent must be able to see whether the cache patch landed."""
+        res = self._read()
+        entry = res["catalog_cache"]["byok_entries"][0]
+        self.assertFalse(entry["has_limits"])
+        self.assertIsNone(entry["max_context_window_tokens"])
+        self.assertEqual(res["catalog_cache"]["byok_entries_with_limits"], 0)
+        self.assertTrue(
+            any("capabilities.limits" in note for note in res["notes"]),
+            f"expected a limits note, got {res['notes']}",
+        )
+
+    def test_catalog_cache_reports_both_caches(self) -> None:
+        res = self._read()
+        caches = res["catalog_cache"]["caches"]
+        self.assertEqual(
+            set(caches), {server.APP_STATE_CATALOG_KEY, server.APP_STATE_CLOUD_CATALOG_KEY}
+        )
+        self.assertEqual(caches[server.APP_STATE_CATALOG_KEY]["shape"], "object")
+        self.assertEqual(caches[server.APP_STATE_CATALOG_KEY]["byok_entry_count"], 1)
+        self.assertFalse(caches[server.APP_STATE_CLOUD_CATALOG_KEY]["present"])
+
+    def test_limits_are_surfaced_when_present(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE app_state SET value = ? WHERE key = ?",
+            (
+                json.dumps(
+                    {
+                        "accountId": "acct",
+                        "models": [
+                            {
+                                "id": f"{PROVIDER_ID}/vendor/reasoning-model",
+                                "name": "vendor/reasoning-model",
+                                "providerId": PROVIDER_ID,
+                                "capabilities": {
+                                    "limits": {
+                                        "max_context_window_tokens": 1000000,
+                                        "max_prompt_tokens": 872000,
+                                        "max_output_tokens": 128000,
+                                    }
+                                },
+                            }
+                        ],
+                    }
+                ),
+                server.APP_STATE_CATALOG_KEY,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        res = self._read()
+        entry = res["catalog_cache"]["byok_entries"][0]
+        self.assertTrue(entry["has_limits"])
+        self.assertEqual(entry["max_context_window_tokens"], 1000000)
+        self.assertEqual(entry["max_prompt_tokens"], 872000)
+        self.assertEqual(entry["max_output_tokens"], 128000)
+        self.assertEqual(res["catalog_cache"]["byok_entries_with_limits"], 1)
+        self.assertFalse(any("capabilities.limits" in note for note in res["notes"]))
+
+    def _seed_catalog(self, entries: list[dict]) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
+            (
+                server.APP_STATE_CATALOG_KEY,
+                json.dumps({"accountId": "acct", "models": entries}),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_limits_note_asks_for_apply_when_patchable(self) -> None:
+        self._seed_catalog(
+            [
+                {
+                    "id": f"{PROVIDER_ID}/vendor/reasoning-model",
+                    "name": "vendor/reasoning-model",
+                    "providerId": PROVIDER_ID,
+                    "capabilities": {"supports": {"reasoningEffort": True}},
+                }
+            ]
+        )
+
+        res = self._read()
+        self.assertEqual(res["catalog_cache"]["byok_entries_with_limits"], 0)
+        self.assertTrue(
+            any("Run apply_metadata_updates" in note for note in res["notes"]),
+            res["notes"],
+        )
+
+    def test_limits_note_is_expected_when_no_patchable_provider(self) -> None:
+        self._seed_catalog(
+            [
+                {
+                    "id": f"{LOCAL_PROVIDER_ID}/local-model",
+                    "name": "local-model",
+                    "providerId": LOCAL_PROVIDER_ID,
+                    "capabilities": {"supports": {"reasoningEffort": False}},
+                }
+            ]
+        )
+
+        res = self._read()
+        self.assertEqual(res["catalog_cache"]["byok_entries_with_limits"], 0)
+        self.assertFalse(
+            any("Run apply_metadata_updates" in note for note in res["notes"]),
+            res["notes"],
+        )
+        self.assertTrue(
+            any("nothing to patch" in note for note in res["notes"]), res["notes"]
+        )
+
     def test_missing_database_raises(self) -> None:
         with self.assertRaises(FileNotFoundError):
             server.read_byok_config(

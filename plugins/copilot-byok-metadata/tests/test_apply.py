@@ -354,6 +354,148 @@ class ApplyMetadataUpdatesTest(unittest.TestCase):
                 db_path=os.path.join(self.tmpdir.name, "nope.db"), catalog=CATALOG
             )
 
+    def test_cloud_catalog_bare_list_is_patched(self) -> None:
+        """The cloud catalog is a bare JSON list, not {"models": [...]}."""
+        cloud = [
+            {
+                "id": f"{PROVIDER_ID}/vendor/reasoning-model",
+                "name": "Reasoning",
+                "providerId": PROVIDER_ID,
+                "capabilities": {"supports": {"reasoningEffort": False}},
+            },
+            {
+                "id": "claude-sonnet-5",
+                "name": "Claude",
+                "capabilities": {"limits": {"max_context_window_tokens": 1000000}},
+            },
+        ]
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO app_state (key, value) VALUES (?, ?)",
+            (server.APP_STATE_CLOUD_CATALOG_KEY, json.dumps(cloud)),
+        )
+        conn.commit()
+        conn.close()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            dry_run=False,
+            backup=False,
+            refresh_catalog_cache=True,
+        )
+        self.assertEqual(result["applied"]["catalog_cache_entries_patched"], 1)
+        self.assertEqual(
+            result["applied"]["catalog_caches_patched"],
+            {server.APP_STATE_CLOUD_CATALOG_KEY: 1},
+        )
+
+        patched = self._app_state(server.APP_STATE_CLOUD_CATALOG_KEY)
+        self.assertIsInstance(patched, list)
+        limits = patched[0]["capabilities"]["limits"]
+        self.assertEqual(limits["max_context_window_tokens"], 1000000)
+        self.assertEqual(limits["max_prompt_tokens"], 872000)
+        self.assertEqual(patched[1]["capabilities"]["limits"], {"max_context_window_tokens": 1000000})
+
+    def test_both_catalogs_are_patched_and_counted(self) -> None:
+        entry = {
+            "id": f"{PROVIDER_ID}/vendor/reasoning-model",
+            "name": "Reasoning",
+            "providerId": PROVIDER_ID,
+            "capabilities": {"supports": {"reasoningEffort": False}},
+        }
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO app_state (key, value) VALUES (?, ?)",
+            (server.APP_STATE_CATALOG_KEY, json.dumps({"models": [dict(entry)]})),
+        )
+        conn.execute(
+            "INSERT INTO app_state (key, value) VALUES (?, ?)",
+            (server.APP_STATE_CLOUD_CATALOG_KEY, json.dumps([dict(entry)])),
+        )
+        conn.commit()
+        conn.close()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            dry_run=False,
+            backup=False,
+            refresh_catalog_cache=True,
+        )
+        self.assertEqual(result["applied"]["catalog_cache_entries_patched"], 2)
+        self.assertEqual(
+            result["applied"]["catalog_caches_patched"],
+            {server.APP_STATE_CATALOG_KEY: 1, server.APP_STATE_CLOUD_CATALOG_KEY: 1},
+        )
+        self.assertFalse(any("WARNING" in note for note in result["notes"]))
+
+    def test_patch_catalog_cache_ignores_unknown_shapes(self) -> None:
+        for value in (None, "text", 42, {"no_models": []}):
+            patched_cache, patched = server._patch_catalog_cache(value, {"a/b": {}})
+            self.assertEqual(patched, 0)
+            self.assertIs(patched_cache, value)
+
+    def test_stale_cache_is_repaired_when_rows_are_already_correct(self) -> None:
+        """The cache is a separate channel and can be stale on its own."""
+        first = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            dry_run=False,
+            backup=False,
+            refresh_catalog_cache=False,
+        )
+        self.assertGreater(first["applied"]["models_updated"], 0)
+
+        # Simulate the app rebuilding the catalog with no limits.
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
+            (
+                server.APP_STATE_CATALOG_KEY,
+                json.dumps(
+                    {
+                        "accountId": "acct",
+                        "models": [
+                            {
+                                "id": f"{PROVIDER_ID}/vendor/reasoning-model",
+                                "name": "Reasoning",
+                                "providerId": PROVIDER_ID,
+                                "capabilities": {"supports": {"reasoningEffort": False}},
+                            }
+                        ],
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        second = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            dry_run=False,
+            backup=False,
+            refresh_catalog_cache=True,
+        )
+        self.assertEqual(second["applied"]["models_updated"], 0)
+        self.assertEqual(second["applied"]["catalog_cache_entries_patched"], 1)
+        self.assertNotIn("Nothing to apply", " ".join(second["notes"]))
+        patched = self._app_state(server.APP_STATE_CATALOG_KEY)
+        self.assertEqual(
+            patched["models"][0]["capabilities"]["limits"]["max_context_window_tokens"],
+            1000000,
+        )
+
+    def test_refresh_catalog_cache_defaults_to_true(self) -> None:
+        """The context window only reaches the app through the cache."""
+        schema = next(
+            tool
+            for tool in server.TOOLS
+            if tool["name"] == "apply_metadata_updates"
+        )["inputSchema"]["properties"]["refresh_catalog_cache"]
+        self.assertTrue(schema["default"])
+
 
 if __name__ == "__main__":
     unittest.main()

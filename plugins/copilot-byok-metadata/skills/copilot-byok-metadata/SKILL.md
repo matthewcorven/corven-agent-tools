@@ -47,12 +47,22 @@ If these tools are deferred, load them with `tool_search_tool` using the query
 
 ## Protocol
 
-1. **Read.** Call `read_byok_config` with the user's workspace path. It returns
-   every provider (credentials redacted), every model with its stored metadata,
-   the user's selected reasoning effort and context tier, and which fields are
-   still missing. Report the provider count, model count, and how many models
-   are missing metadata. If every model already has metadata, say so and stop —
-   there is nothing to do.
+1. **Read.** Call `read_byok_config` with the user's workspace path and no
+   other arguments — `include_catalog_cache` already defaults to `true`, and
+   the catalog cache is where the app actually reads a BYOK model's context
+   window. It returns every provider (credentials redacted), every model with
+   its stored metadata, the user's selected reasoning effort and context tier,
+   and which fields are still missing. Report the provider count, model count,
+   and how many models are missing metadata.
+
+   Also read `catalog_cache.byok_entries_with_limits` and
+   `catalog_cache.caches`. `provider_models` has no context-window column, so a
+   model can have full metadata in the database and still show the app's
+   fallback window because the cache was never patched. If
+   `byok_entries_with_limits` is `0` while `summary.models_with_metadata` is
+   greater than `0`, the cache is stale — that is the state to repair, and
+   `notes` will say so. If every model has metadata *and* every BYOK cache
+   entry has limits, say so and stop; there is nothing to do.
 
    BYOK configuration is app-global, not per-workspace. The `workspace_path`
    input only identifies the calling project and workspace for context; never
@@ -75,17 +85,21 @@ If these tools are deferred, load them with `tool_search_tool` using the query
 4. **Decide.** Choose interactive or automatic per the rule below.
 
 5. **Apply.** Call `apply_metadata_updates` with `dry_run=false`. Leave `backup`
-   at its default of `true` unless the user explicitly declines a backup. Pass
-   `refresh_catalog_cache=true` — the app reads the context window from the
-   cached catalog, not from `provider_models`, so without this the model keeps
-   its fallback window and compaction still fires early.
+   and `refresh_catalog_cache` at their defaults of `true` unless the user
+   explicitly declines them — the app reads the context window from the cached
+   catalogs, not from `provider_models`, so without the cache patch the model
+   keeps its fallback window and compaction still fires early. Both catalogs
+   (`copilot-available-models-v2` and `copilot-cloud-available-models-v2`) are
+   patched; `applied.catalog_caches_patched` reports each one.
 
 6. **Report.** State how many models were updated, the backup path, and that the
    user should reopen the model picker (or restart the app) to see the change.
    List the applied `max_prompt_tokens` / `max_output_tokens` per model so the
    user can verify the outcome. If `applied.catalog_cache_entries_patched` is
    `0` while models were updated, surface the returned `WARNING` note verbatim —
-   it means the app will not learn the new context window.
+   it means the app will not learn the new context window. Confirm the outcome
+   by re-reading `catalog_cache.byok_entries_with_limits`; it should now equal
+   the number of models you updated.
 
 ## Interactive vs automatic
 
@@ -113,12 +127,12 @@ Both are off by default. Enable only when the user asks for them.
 - **`set_context_tier`** — writes `default` or `long_context` for every resolved
   model. Only use when the user explicitly wants a tier applied; the app's
   meaning for `long_context` on BYOK models is not documented.
-- **`refresh_catalog_cache`** — also patches the app's cached model catalog so
-  the new limits appear without a restart. **Recommended on every apply:** the
-  app resolves a BYOK model's context window from this cache, and
+- **`refresh_catalog_cache`** — also patches the app's cached model catalogs so
+  the new limits appear without a restart. **On by default; leave it on.** The
+  app resolves a BYOK model's context window from these caches, and
   `provider_models` has no context-window column, so skipping it leaves the
-  model on the app's fallback window. The app may overwrite the cache on its
-  next refresh; re-run if the window regresses.
+  model on the app's fallback window. The app may overwrite the caches on its
+  next refresh; re-run if `byok_entries_with_limits` drops back to `0`.
 
 ## Safety
 
