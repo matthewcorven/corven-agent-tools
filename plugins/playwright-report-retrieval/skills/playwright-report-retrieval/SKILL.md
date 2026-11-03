@@ -160,6 +160,7 @@ python3 scripts/fetch_report.py --run-id 123456789
 python3 scripts/fetch_report.py --run-id 123456789 --test "Login Flow"
 python3 scripts/fetch_report.py --commit abc1234 --test-id 3f2a1b
 python3 scripts/fetch_report.py --run-id 123456789 --no-open --json
+python3 scripts/fetch_report.py --run-id 123456789 --repo owner/repo
 ```
 
 The script:
@@ -167,15 +168,38 @@ The script:
 1. Resolves the run (by ID, or by commit SHA via the provider API).
 2. Locates the `playwright-report` artifact.
 3. Prunes namespace entries older than 7 days (`--max-age-days`, `0` disables).
-4. Downloads and extracts to `./playwright-reports/<run-id>/`
+4. Downloads and extracts to `<git-toplevel>/playwright-reports/<run-id>/`
    (override with `--namespace` or `PLAYWRIGHT_REPORT_NAMESPACE`).
 5. Builds a `file://` URL and appends the deep link:
    - `--test "Login Flow"` → `#?q=Login%20Flow`
    - `--test-id 3f2a1b` → `#?testId=3f2a1b`
 6. Launches the default browser (`--no-open` suppresses it).
 
+The repository is inferred from the `origin` remote when `--repo` is omitted, so
+the script works from any subdirectory of a checkout. Outside a git checkout, or
+when `origin` is not a GitHub remote, pass `--repo owner/repo` explicitly.
+
+`gh run download --dir <path>` **extracts** the artifact into `<path>`; it does
+not leave a `.zip` behind. The script therefore accepts either an extracted
+`index.html` (the normal case) or a `.zip` archive, and searches nested
+directories for the report root.
+
 Cached reports are reused without contacting CI, so retrieval still works offline
 or after the artifact has expired; pass `--force` to re-download.
+
+### Report format
+
+Modern Playwright HTML reports are **self-contained**: `index.html` embeds the
+entire report as a base64-encoded zip inside
+`<template id="playwrightReportBase64">`. The zip holds `report.json` plus one
+`<fileId>.json` per test file, and each per-file entry carries its own `tests[]`
+array. `report.json` has no top-level `tests` key.
+
+`list_failed_tests` decodes that embedded payload first, then falls back to the
+legacy `data/report.json` layout. A test counts as failed when its derived status
+is `unexpected`, `failed`, `timedOut` or `interrupted`; the status comes from the
+test's `outcome`, or from the first failing `results[*].status` when `outcome` is
+absent.
 
 ### MCP tools
 
