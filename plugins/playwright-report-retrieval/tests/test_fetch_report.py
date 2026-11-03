@@ -207,6 +207,35 @@ class FetchReportTest(unittest.TestCase):
         with self.assertRaises(fr.RetrievalError):
             fr.fetch_report(provider_name="fake", open_browser=False)
 
+    def test_default_namespace_is_used_when_cwd_is_gone(self) -> None:
+        """DEF-8: a server whose cwd was deleted must still resolve a namespace."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(fr, "_git_toplevel", return_value=None):
+                with mock.patch.object(fr, "_safe_cwd", return_value=None):
+                    with mock.patch.object(fr.tempfile, "gettempdir", return_value=tmp):
+                        result = fr.fetch_report(
+                            run_id="42", provider_name="fake", open_browser=False
+                        )
+
+            self.assertEqual(result.report_dir, Path(tmp) / fr.DEFAULT_NAMESPACE / "42")
+            self.assertTrue(result.index_html.is_file())
+
+    def test_unwritable_namespace_raises_an_actionable_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            blocker = Path(tmp) / "not-a-dir"
+            blocker.write_text("x", encoding="utf-8")
+            with self.assertRaises(fr.RetrievalError) as ctx:
+                fr.fetch_report(
+                    run_id="42",
+                    namespace=blocker / "nested",
+                    provider_name="fake",
+                    open_browser=False,
+                )
+
+        message = str(ctx.exception)
+        self.assertIn("namespace", message)
+        self.assertIn("PLAYWRIGHT_REPORT_NAMESPACE", message)
+
     def test_unknown_provider_raises(self) -> None:
         with self.assertRaises(fr.RetrievalError):
             fr.fetch_report(run_id="1", provider_name="nope", open_browser=False)
@@ -488,6 +517,47 @@ class DefaultNamespaceTest(unittest.TestCase):
     def test_env_override_wins(self) -> None:
         with mock.patch.dict(os.environ, {"PLAYWRIGHT_REPORT_NAMESPACE": "/tmp/ns"}):
             self.assertEqual(fr.default_namespace(), Path("/tmp/ns"))
+
+    def test_env_override_wins_even_when_cwd_is_gone(self) -> None:
+        with mock.patch.dict(os.environ, {"PLAYWRIGHT_REPORT_NAMESPACE": "/tmp/ns"}):
+            with mock.patch.object(fr, "_git_toplevel", return_value=None):
+                with mock.patch.object(fr, "_safe_cwd", return_value=None):
+                    self.assertEqual(fr.default_namespace(), Path("/tmp/ns"))
+
+    def test_falls_back_to_tempdir_when_cwd_is_gone(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PLAYWRIGHT_REPORT_NAMESPACE", None)
+            with mock.patch.object(fr, "_git_toplevel", return_value=None):
+                with mock.patch.object(fr, "_safe_cwd", return_value=None):
+                    self.assertEqual(
+                        fr.default_namespace(),
+                        Path(tempfile.gettempdir()) / fr.DEFAULT_NAMESPACE,
+                    )
+
+    def test_deleted_cwd_does_not_raise(self) -> None:
+        """A long-lived server can outlive the directory it was spawned in."""
+        original = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            doomed = Path(tmp) / "gone"
+            doomed.mkdir()
+            os.chdir(doomed)
+            try:
+                doomed.rmdir()
+                with mock.patch.dict(os.environ, {}, clear=False):
+                    os.environ.pop("PLAYWRIGHT_REPORT_NAMESPACE", None)
+                    namespace = fr.default_namespace()
+            finally:
+                os.chdir(original)
+
+        self.assertEqual(namespace, Path(tempfile.gettempdir()) / fr.DEFAULT_NAMESPACE)
+
+    def test_safe_cwd_returns_none_when_cwd_is_gone(self) -> None:
+        with mock.patch.object(Path, "cwd", side_effect=FileNotFoundError(2, "No such file or directory")):
+            self.assertIsNone(fr._safe_cwd())
+
+    def test_git_toplevel_returns_none_when_cwd_is_gone(self) -> None:
+        with mock.patch.object(fr, "_safe_cwd", return_value=None):
+            self.assertIsNone(fr._git_toplevel())
 
 
 class CliTest(unittest.TestCase):

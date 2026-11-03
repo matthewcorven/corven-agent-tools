@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -266,6 +267,73 @@ class PlaywrightReportRetrievalMCPSmokeTest(unittest.TestCase):
     def test_unknown_method_returns_rpc_error(self) -> None:
         res = self.send_request({"jsonrpc": "2.0", "id": 5, "method": "bogus", "params": {}})
         self.assertEqual(res["error"]["code"], -32601)
+
+
+class DeletedCwdTest(unittest.TestCase):
+    """DEF-8: the server must survive its working directory being removed."""
+
+    def test_list_failed_tests_works_after_cwd_is_deleted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            doomed = root / "gone"
+            doomed.mkdir()
+
+            # TMPDIR makes the child's tempfile.gettempdir() deterministic, so the
+            # namespace fallback lands somewhere this test controls.
+            env = dict(os.environ, TMPDIR=str(root))
+            env.pop("PLAYWRIGHT_REPORT_NAMESPACE", None)
+
+            proc = subprocess.Popen(
+                [sys.executable, str(SERVER_SCRIPT)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                cwd=str(doomed),
+                env=env,
+            )
+            try:
+                doomed.rmdir()
+
+                # Seed the cache the fallback namespace resolves to, so the call
+                # never reaches the network.
+                cached = root / "playwright-reports" / "42"
+                build_index_html(cached, modern_report_files(failing=True))
+
+                assert proc.stdin and proc.stdout
+                proc.stdin.write(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "tools/call",
+                            "params": {
+                                "name": "list_failed_tests",
+                                "arguments": {"run_id": "42"},
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+                proc.stdin.flush()
+                line = proc.stdout.readline()
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                for stream in (proc.stdin, proc.stdout, proc.stderr):
+                    if stream:
+                        stream.close()
+
+        self.assertTrue(line, "server closed the connection instead of answering")
+        result = json.loads(line)["result"]
+        self.assertFalse(result["isError"], result["structuredContent"])
+        self.assertEqual(result["structuredContent"]["total"], 2)
+        self.assertEqual(result["structuredContent"]["failed_count"], 1)
 
 
 if __name__ == "__main__":

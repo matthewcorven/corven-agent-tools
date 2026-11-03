@@ -36,7 +36,7 @@ from fetch_report import (  # noqa: E402
 )
 
 SERVER_NAME = "playwright-report-retrieval"
-SERVER_VERSION = "0.2.1"
+SERVER_VERSION = "0.2.2"
 PROTOCOL_VERSION = "2024-11-05"
 
 TOOLS: list[dict[str, Any]] = [
@@ -62,7 +62,12 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "namespace": {
                     "type": "string",
-                    "description": f"Extraction root (default: ./{DEFAULT_NAMESPACE}).",
+                    "description": (
+                        f"Extraction root (default: {DEFAULT_NAMESPACE} at the git worktree "
+                        "root, else the server's working directory, else the system temp "
+                        "directory). Pass it explicitly when the server's cwd is not your "
+                        "checkout."
+                    ),
                 },
                 "provider": {
                     "type": "string",
@@ -114,7 +119,15 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "Path to an already-extracted report directory.",
                 },
                 "artifact_name": {"type": "string", "default": DEFAULT_ARTIFACT_NAME},
-                "namespace": {"type": "string"},
+                "namespace": {
+                    "type": "string",
+                    "description": (
+                        f"Extraction root (default: {DEFAULT_NAMESPACE} at the git worktree "
+                        "root, else the server's working directory, else the system temp "
+                        "directory). Pass it explicitly when the server's cwd is not your "
+                        "checkout."
+                    ),
+                },
                 "provider": {"type": "string", "enum": sorted(PROVIDERS), "default": "github-actions"},
                 "repo": {"type": "string"},
                 "workflow": {"type": "string"},

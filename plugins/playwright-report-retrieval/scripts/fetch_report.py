@@ -68,12 +68,29 @@ def _parse_repo_slug(remote: str) -> Optional[str]:
     return f"{parts[-2]}/{parts[-1]}"
 
 
+def _safe_cwd() -> Optional[Path]:
+    """Return the process working directory, or None when it no longer exists.
+
+    Long-lived MCP servers can outlive the directory they were spawned in (a
+    plugin update, a removed scratch dir, a container restart). ``Path.cwd()``
+    raises ``FileNotFoundError`` in that state, so every caller must go through
+    this helper instead.
+    """
+    try:
+        return Path.cwd()
+    except OSError:
+        return None
+
+
 def _git_toplevel(start: Optional[Path] = None) -> Optional[Path]:
     """Return the enclosing git worktree root, or None when there is none."""
+    base = start or _safe_cwd()
+    if base is None:
+        return None
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(start or Path.cwd()),
+            cwd=str(base),
             check=True,
             capture_output=True,
             text=True,
@@ -337,12 +354,15 @@ def default_namespace() -> Path:
     """Project-local cache directory, overridable via ``PLAYWRIGHT_REPORT_NAMESPACE``.
 
     The cache lives at the root of the target checkout so it is stable no matter
-    which subdirectory the tool is invoked from.
+    which subdirectory the tool is invoked from. Resolution never raises: when
+    neither a git worktree nor a working directory is available the system temp
+    directory is used, which is always writable and independent of cwd.
     """
     override = os.environ.get("PLAYWRIGHT_REPORT_NAMESPACE")
     if override:
         return Path(override).expanduser()
-    return (_git_toplevel() or Path.cwd()) / DEFAULT_NAMESPACE
+    base = _git_toplevel() or _safe_cwd() or Path(tempfile.gettempdir())
+    return base / DEFAULT_NAMESPACE
 
 
 def prune_old_reports(namespace: Path, max_age_days: int, *, now: Optional[float] = None) -> list[Path]:
@@ -356,7 +376,13 @@ def prune_old_reports(namespace: Path, max_age_days: int, *, now: Optional[float
     cutoff = (now if now is not None else time.time()) - max_age_days * 86400
     removed: list[Path] = []
 
-    for entry in namespace.iterdir():
+    try:
+        entries = list(namespace.iterdir())
+    except OSError:
+        # The namespace can disappear between the is_dir() check and the listing.
+        return []
+
+    for entry in entries:
         try:
             if entry.stat().st_mtime >= cutoff:
                 continue
@@ -494,8 +520,23 @@ def fetch_report(
     if not run_id and not commit:
         raise RetrievalError("Either run_id or commit is required.")
 
-    namespace = namespace or default_namespace()
-    namespace.mkdir(parents=True, exist_ok=True)
+    if namespace is None:
+        try:
+            namespace = default_namespace()
+        except OSError as exc:
+            raise RetrievalError(
+                "Cannot resolve a report namespace: "
+                f"{exc.strerror or exc}. Pass an explicit 'namespace' argument "
+                "pointing at a writable directory, or set PLAYWRIGHT_REPORT_NAMESPACE."
+            ) from None
+    try:
+        namespace.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RetrievalError(
+            f"Cannot create the report namespace '{namespace}': {exc.strerror or exc}. "
+            "Pass an explicit 'namespace' argument pointing at a writable directory, "
+            "or set PLAYWRIGHT_REPORT_NAMESPACE."
+        ) from None
     pruned = prune_old_reports(namespace, max_age_days)
 
     # A cached report is served without touching the network, so retrieval keeps

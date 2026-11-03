@@ -170,7 +170,9 @@ The script:
 2. Locates the `playwright-report` artifact.
 3. Prunes namespace entries older than 7 days (`--max-age-days`, `0` disables).
 4. Downloads and extracts to `<git-toplevel>/playwright-reports/<run-id>/`
-   (override with `--namespace` or `PLAYWRIGHT_REPORT_NAMESPACE`).
+   (override with `--namespace` or `PLAYWRIGHT_REPORT_NAMESPACE`). The namespace
+   falls back to the process working directory, then to the system temp
+   directory, so a server whose cwd was deleted still resolves one.
 5. Builds a `file://` URL and appends the deep link:
    - `--test "Login Flow"` → `#?q=Login%20Flow`
    - `--test-id 3f2a1b` → `#?testId=3f2a1b`
@@ -179,8 +181,11 @@ The script:
 The repository is inferred from the `origin` remote when `--repo` is omitted, so
 the script works from any subdirectory of a checkout. Outside a git checkout, or
 when `origin` is not a GitHub remote, pass `--repo owner/repo` explicitly. **MCP
-callers must always pass `repo`** — the stdio server's working directory is the
-plugin install directory, not your checkout.
+callers must always pass `repo`** — the stdio server's working directory is
+whatever the CLI happened to spawn it in, not your checkout, and it may not
+exist at all. For the same reason, MCP callers should pass `namespace`
+explicitly when they care where the report lands; otherwise it resolves to the
+git worktree root, then the server's cwd, then the system temp directory.
 
 Resolving by commit SHA scans every workflow that ran for that SHA, so pass
 `--workflow e2e.yml` (or the numeric workflow id) whenever the repository has

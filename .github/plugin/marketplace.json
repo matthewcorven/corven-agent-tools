@@ -61,7 +61,7 @@
     {
       "name": "playwright-report-retrieval",
       "source": "plugins/playwright-report-retrieval",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "description": "Playwright reporting + AI-driven E2E standards skill and MCP server: fetch CI HTML reports by run ID or commit, deep-link to a test, and list failed tests",
       "keywords": [
         "playwright",
