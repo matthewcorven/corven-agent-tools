@@ -38,7 +38,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 SERVER_NAME = "copilot-byok-metadata"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 
 DEFAULT_DB_PATH = os.path.join("~", ".copilot", "data.db")
 

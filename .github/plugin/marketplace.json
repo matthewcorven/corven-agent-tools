@@ -77,7 +77,7 @@
     {
       "name": "copilot-byok-metadata",
       "source": "plugins/copilot-byok-metadata",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "description": "copilot-byok-metadata MCP server + thin skill: read GitHub Copilot app BYOK models, fetch context-window and reasoning-effort metadata from provider sources of truth, and apply it to the app config",
       "keywords": [
         "copilot",
