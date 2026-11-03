@@ -552,7 +552,7 @@ def build_plan(
         entry["proposed"] = proposed
         entry["provider_metadata"] = {
             "max_context_window_tokens": metadata.get("max_context_window_tokens"),
-            "max_output_tokens": metadata.get("max_output_tokens"),
+            "provider_max_output_tokens": metadata.get("max_output_tokens"),
             "supported_reasoning_efforts": metadata.get("supported_reasoning_efforts"),
             "default_reasoning_effort": metadata.get("default_reasoning_effort"),
         }
@@ -918,6 +918,11 @@ def fetch_provider_metadata(
             "resolved": len(resolved),
             "missing": len(missing),
         },
+        "notes": [
+            "Read `derived` for the values this plugin writes. `metadata` is the raw "
+            "provider payload; its max_output_tokens is an aggregate provider maximum "
+            "and is clamped before being written."
+        ],
     }
 
 
@@ -997,10 +1002,16 @@ def _patch_catalog_cache(
         provider_id = entry.get("providerId")
         if not provider_id:
             continue
-        model_id = entry.get("id")
-        if not isinstance(model_id, str):
+        entry_id = entry.get("id")
+        if not isinstance(entry_id, str):
             continue
-        state_key = f"{provider_id}/{model_id}"
+        # The app stores the full "<providerId>/<modelId>" key in `id` for BYOK
+        # entries, so only prefix it when it is not already present.
+        state_key = (
+            entry_id
+            if entry_id.startswith(f"{provider_id}/")
+            else f"{provider_id}/{entry_id}"
+        )
         update = updates.get(state_key)
         if update is None:
             continue
@@ -1213,6 +1224,14 @@ def apply_metadata_updates(
                             (APP_STATE_CATALOG_KEY, json.dumps(patched_cache)),
                         )
                         result["applied"]["catalog_cache_entries_patched"] = patched
+                    elif updates:
+                        result["notes"].append(
+                            f"WARNING: refresh_catalog_cache was requested and {len(updates)} "
+                            f"model(s) were updated, but 0 entries in {APP_STATE_CATALOG_KEY} "
+                            "matched. The app may not learn the context window for these "
+                            "models. Reopen the model picker to rebuild the catalog, then "
+                            "re-run with refresh_catalog_cache=true."
+                        )
                 else:
                     result["notes"].append(
                         f"{APP_STATE_CATALOG_KEY} not present or unreadable — cache not patched"

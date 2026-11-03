@@ -64,18 +64,28 @@ If these tools are deferred, load them with `tool_search_tool` using the query
 
 3. **Present.** Show the user a compact table of models with `status == "update"`:
    model id, proposed context window, proposed output budget, and reasoning
-   levels. Mention `unresolved` models by name — those ids are absent from the
-   provider catalog and need the user's attention. Do not list
+   levels. Read the numbers from `proposed` — never from `provider_metadata`.
+   `provider_metadata.provider_max_output_tokens` is the provider's raw aggregate
+   maximum (often 900k+), not the budget that gets written; showing it will
+   mislead the user. Mention `unresolved` models by name — those ids are absent
+   from the provider catalog and need the user's attention. Do not list
    `unsupported_provider` models individually; summarize them as "N models on
    providers without a source of truth".
 
 4. **Decide.** Choose interactive or automatic per the rule below.
 
 5. **Apply.** Call `apply_metadata_updates` with `dry_run=false`. Leave `backup`
-   at its default of `true` unless the user explicitly declines a backup.
+   at its default of `true` unless the user explicitly declines a backup. Pass
+   `refresh_catalog_cache=true` — the app reads the context window from the
+   cached catalog, not from `provider_models`, so without this the model keeps
+   its fallback window and compaction still fires early.
 
 6. **Report.** State how many models were updated, the backup path, and that the
    user should reopen the model picker (or restart the app) to see the change.
+   List the applied `max_prompt_tokens` / `max_output_tokens` per model so the
+   user can verify the outcome. If `applied.catalog_cache_entries_patched` is
+   `0` while models were updated, surface the returned `WARNING` note verbatim —
+   it means the app will not learn the new context window.
 
 ## Interactive vs automatic
 
@@ -104,8 +114,11 @@ Both are off by default. Enable only when the user asks for them.
   model. Only use when the user explicitly wants a tier applied; the app's
   meaning for `long_context` on BYOK models is not documented.
 - **`refresh_catalog_cache`** — also patches the app's cached model catalog so
-  the new limits appear without a restart. Safe, but the app may overwrite the
-  cache on its next refresh.
+  the new limits appear without a restart. **Recommended on every apply:** the
+  app resolves a BYOK model's context window from this cache, and
+  `provider_models` has no context-window column, so skipping it leaves the
+  model on the app's fallback window. The app may overwrite the cache on its
+  next refresh; re-run if the window regresses.
 
 ## Safety
 

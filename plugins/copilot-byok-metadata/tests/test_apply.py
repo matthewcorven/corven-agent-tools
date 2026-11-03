@@ -217,7 +217,8 @@ class ApplyMetadataUpdatesTest(unittest.TestCase):
             "accountId": "acct",
             "models": [
                 {
-                    "id": "vendor/reasoning-model",
+                    # The app stores the full "<providerId>/<modelId>" key in `id`.
+                    "id": f"{PROVIDER_ID}/vendor/reasoning-model",
                     "name": "Reasoning",
                     "providerId": PROVIDER_ID,
                     "capabilities": {"supports": {"reasoningEffort": False}},
@@ -260,6 +261,91 @@ class ApplyMetadataUpdatesTest(unittest.TestCase):
         builtin = patched["models"][1]
         self.assertEqual(
             builtin["capabilities"]["limits"], {"max_context_window_tokens": 1000000}
+        )
+
+    def test_catalog_cache_accepts_bare_id_entries(self) -> None:
+        """Entries whose `id` lacks the provider prefix must still be patched."""
+        cache = {
+            "models": [
+                {
+                    "id": "vendor/reasoning-model",
+                    "name": "Reasoning",
+                    "providerId": PROVIDER_ID,
+                    "capabilities": {"supports": {"reasoningEffort": False}},
+                }
+            ]
+        }
+        updates = {
+            f"{PROVIDER_ID}/vendor/reasoning-model": {
+                "max_prompt_tokens": 872000,
+                "max_output_tokens": 128000,
+                "max_context_window_tokens": 1000000,
+                "supported_reasoning_efforts": ["max", "high", "low"],
+                "default_reasoning_effort": "high",
+            }
+        }
+        patched_cache, patched = server._patch_catalog_cache(cache, updates)
+        self.assertEqual(patched, 1)
+        limits = patched_cache["models"][0]["capabilities"]["limits"]
+        self.assertEqual(limits["max_context_window_tokens"], 1000000)
+
+    def test_catalog_cache_does_not_double_provider_prefix(self) -> None:
+        """A full slash key must not become "<pid>/<pid>/<mid>"."""
+        cache = {
+            "models": [
+                {
+                    "id": f"{PROVIDER_ID}/vendor/reasoning-model",
+                    "name": "Reasoning",
+                    "providerId": PROVIDER_ID,
+                    "capabilities": {"supports": {"reasoningEffort": False}},
+                }
+            ]
+        }
+        updates = {
+            f"{PROVIDER_ID}/vendor/reasoning-model": {
+                "max_prompt_tokens": 872000,
+                "max_output_tokens": 128000,
+                "max_context_window_tokens": 1000000,
+                "supported_reasoning_efforts": ["max", "high", "low"],
+                "default_reasoning_effort": "high",
+            }
+        }
+        patched_cache, patched = server._patch_catalog_cache(cache, updates)
+        self.assertEqual(patched, 1)
+        self.assertEqual(
+            patched_cache["models"][0]["id"],
+            f"{PROVIDER_ID}/vendor/reasoning-model",
+        )
+
+    def test_refresh_catalog_cache_warns_when_nothing_matched(self) -> None:
+        cache = {
+            "models": [
+                {
+                    "id": f"{PROVIDER_ID}/some-other-model",
+                    "name": "Other",
+                    "providerId": PROVIDER_ID,
+                }
+            ]
+        }
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO app_state (key, value) VALUES (?, ?)",
+            (server.APP_STATE_CATALOG_KEY, json.dumps(cache)),
+        )
+        conn.commit()
+        conn.close()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            dry_run=False,
+            backup=False,
+            refresh_catalog_cache=True,
+        )
+        self.assertEqual(result["applied"]["catalog_cache_entries_patched"], 0)
+        self.assertTrue(
+            any("WARNING" in note for note in result["notes"]),
+            f"expected a WARNING note, got {result['notes']}",
         )
 
     def test_missing_database_raises(self) -> None:

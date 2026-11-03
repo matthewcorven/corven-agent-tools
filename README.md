@@ -195,7 +195,7 @@ Scope today: **GitHub Copilot desktop app only**, and **OpenRouter only** as a m
 
 - `read_byok_config`: Returns a complete snapshot in one call — every provider (credentials redacted), every model with its stored metadata, the user's selected reasoning effort and context tier, the cached catalog entries, and which metadata fields are still missing. Takes an optional `workspace_path` to identify the calling project and workspace; BYOK configuration itself is app-global.
 - `list_byok_models`: Reads `~/.copilot/data.db` and returns every configured provider and BYOK model with its current metadata, plus counts of models with and without metadata.
-- `fetch_provider_metadata`: Fetches the provider catalog from its hardcoded source-of-truth URL and returns normalized metadata per model (`max_context_window_tokens`, `max_output_tokens`, `supported_reasoning_efforts`, `default_reasoning_effort`).
+- `fetch_provider_metadata`: Fetches the provider catalog from its hardcoded source-of-truth URL and returns normalized metadata per model. Read `derived` for the values that get written; `metadata` is the raw provider payload whose `max_output_tokens` is an unclamped aggregate maximum.
 - `plan_metadata_updates`: Computes a dry-run plan — per model, the current values, the proposed values, the changed fields, and a status of `update`, `unchanged`, `unresolved`, or `unsupported_provider`. Never writes.
 - `apply_metadata_updates`: Applies the plan. Defaults to `dry_run: true`; a real write takes a database backup first and runs in a single transaction.
 - `get_provider_registry`: Returns the provider registry (source-of-truth URLs, host/name match rules) and the supported targets.
@@ -210,7 +210,7 @@ Reasoning efforts are intersected with the Copilot vocabulary (`low`, `medium`, 
 
 - `set_reasoning_defaults`: Seeds `copilot-reasoning-effort` with the provider's default effort, but only for models with no existing user pick — an explicit choice is never overwritten.
 - `set_context_tier`: Writes `copilot-context-tier` (`default` or `long_context`) for the affected models. Off by default.
-- `refresh_catalog_cache`: Also patches the cached `copilot-available-models-v2` entries so the model picker reflects the new limits without waiting for a refresh.
+- `refresh_catalog_cache`: Also patches the cached `copilot-available-models-v2` entries so the model picker reflects the new limits without waiting for a refresh. **Recommended on every apply** — `provider_models` has no context-window column, so the cached catalog is the only path by which the app learns a BYOK model's real window. Without it the model stays on the app's fallback window and compaction still fires early. The server emits a `WARNING` note when a refresh was requested but matched no entries.
 
 ### Safety
 
