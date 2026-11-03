@@ -13,8 +13,13 @@ inside the report namespace.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import io
 import json
+import re
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -31,7 +36,7 @@ from fetch_report import (  # noqa: E402
 )
 
 SERVER_NAME = "playwright-report-retrieval"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 TOOLS: list[dict[str, Any]] = [
@@ -114,31 +119,121 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
-def _read_report_data(report_dir: Path) -> dict[str, Any]:
-    """Load the report's embedded data file.
+def _decode_embedded_report(index_html: Path) -> dict[str, Any]:
+    """Decode the zip payload Playwright embeds in a self-contained ``index.html``.
 
-    Playwright's HTML reporter writes a single self-contained ``index.html`` plus
-    (in newer versions) a ``data/`` directory. Both shapes are supported: the
-    ``data/`` files are preferred because they are plain JSON.
+    Modern Playwright HTML reports ship as one ``index.html`` with the whole
+    report base64-encoded inside ``<template id="playwrightReportBase64">``. The
+    payload is a zip of ``report.json`` plus one ``<fileId>.json`` per test file.
     """
+    try:
+        html = index_html.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+
+    match = re.search(
+        r'<template[^>]*id="playwrightReportBase64"[^>]*>(.*?)</template>',
+        html,
+        re.DOTALL,
+    )
+    if not match:
+        return {}
+
+    payload = match.group(1).strip()
+    if payload.startswith("data:"):
+        _, _, payload = payload.partition(",")
+    payload = "".join(payload.split())
+    # The payload is not always padded; base64 requires a multiple of four.
+    payload += "=" * (-len(payload) % 4)
+
+    try:
+        raw = base64.b64decode(payload)
+        archive = zipfile.ZipFile(io.BytesIO(raw))
+    except (binascii.Error, ValueError, zipfile.BadZipFile):
+        return {}
+
+    data: dict[str, Any] = {}
+    with archive:
+        for name in archive.namelist():
+            if not name.endswith(".json"):
+                continue
+            try:
+                data[name] = json.loads(archive.read(name).decode("utf-8"))
+            except (KeyError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+    return data
+
+
+def _read_report_data(report_dir: Path) -> dict[str, Any]:
+    """Load the report's data, keyed by source file name.
+
+    Playwright's HTML reporter writes a single self-contained ``index.html`` with
+    the report embedded as base64. Older versions wrote a ``data/`` directory of
+    plain JSON; both shapes are supported.
+    """
+    index_html = report_dir / "index.html"
+    if index_html.is_file():
+        embedded = _decode_embedded_report(index_html)
+        if embedded:
+            return embedded
+
     data_dir = report_dir / "data"
     if data_dir.is_dir():
         for name in ("report.json", "index.json"):
             candidate = data_dir / name
             if candidate.is_file():
-                return json.loads(candidate.read_text(encoding="utf-8"))
+                return {name: json.loads(candidate.read_text(encoding="utf-8"))}
 
     for candidate in sorted(report_dir.glob("*.json")):
         try:
-            return json.loads(candidate.read_text(encoding="utf-8"))
+            return {candidate.name: json.loads(candidate.read_text(encoding="utf-8"))}
         except (OSError, json.JSONDecodeError):
             continue
 
     return {}
 
 
+def _test_status(test: dict[str, Any]) -> str:
+    """Derive a single status for a test from its outcome and result statuses."""
+    outcome = test.get("outcome")
+    if outcome:
+        return str(outcome)
+
+    statuses = [r.get("status") for r in test.get("results") or [] if r.get("status")]
+    if not statuses:
+        return "unknown"
+    for status in ("failed", "timedOut", "interrupted"):
+        if status in statuses:
+            return status
+    return str(statuses[-1])
+
+
+def _flatten_modern_tests(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten the per-file ``{fileId}.json`` entries into test records."""
+    found: list[dict[str, Any]] = []
+
+    for name, payload in data.items():
+        if name == "report.json" or not isinstance(payload, dict):
+            continue
+        file_name = payload.get("fileName") or ""
+        for test in payload.get("tests") or []:
+            location = test.get("location") or {}
+            found.append(
+                {
+                    "title": test.get("title") or "",
+                    "file": file_name or location.get("file") or "",
+                    "suite": test.get("path") and " › ".join(test["path"]) or "",
+                    "status": _test_status(test),
+                    "test_id": test.get("testId") or "",
+                    "project": test.get("projectName") or "",
+                }
+            )
+
+    return found
+
+
 def _walk_suites(suites: list[dict[str, Any]], path: Optional[list[str]] = None) -> list[dict[str, Any]]:
-    """Flatten the nested suite tree into a list of test records."""
+    """Flatten the legacy nested suite tree into a list of test records."""
     path = path or []
     found: list[dict[str, Any]] = []
 
@@ -153,7 +248,9 @@ def _walk_suites(suites: list[dict[str, Any]], path: Optional[list[str]] = None)
                         "title": spec.get("title") or test.get("title") or "",
                         "file": suite.get("file") or "",
                         "suite": " › ".join(here),
-                        "status": test.get("status") or spec.get("ok") and "passed" or "unknown",
+                        "status": _test_status(test) if test.get("outcome") else (
+                            test.get("status") or ("passed" if spec.get("ok") else "unknown")
+                        ),
                         "test_id": test.get("testId") or spec.get("id") or "",
                         "project": test.get("projectName") or "",
                     }
@@ -162,6 +259,18 @@ def _walk_suites(suites: list[dict[str, Any]], path: Optional[list[str]] = None)
         found.extend(_walk_suites(suite.get("suites") or [], here))
 
     return found
+
+
+def _collect_tests(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return every test in the report, modern shape first, legacy second."""
+    tests = _flatten_modern_tests(data)
+    if tests:
+        return tests
+
+    for payload in data.values():
+        if isinstance(payload, dict) and payload.get("suites"):
+            tests.extend(_walk_suites(payload["suites"]))
+    return tests
 
 
 def list_failed_tests(
@@ -198,7 +307,7 @@ def list_failed_tests(
         raise RetrievalError("Provide run_id, commit, or report_dir.")
 
     data = _read_report_data(root)
-    tests = _walk_suites(data.get("suites") or [])
+    tests = _collect_tests(data)
     failed = [t for t in tests if t["status"] in {"unexpected", "failed", "timedOut", "interrupted"}]
 
     return {
