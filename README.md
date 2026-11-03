@@ -193,6 +193,7 @@ Scope today: **GitHub Copilot desktop app only**, and **OpenRouter only** as a m
 
 ### MCP tools
 
+- `read_byok_config`: Returns a complete snapshot in one call — every provider (credentials redacted), every model with its stored metadata, the user's selected reasoning effort and context tier, the cached catalog entries, and which metadata fields are still missing. Takes an optional `workspace_path` to identify the calling project and workspace; BYOK configuration itself is app-global.
 - `list_byok_models`: Reads `~/.copilot/data.db` and returns every configured provider and BYOK model with its current metadata, plus counts of models with and without metadata.
 - `fetch_provider_metadata`: Fetches the provider catalog from its hardcoded source-of-truth URL and returns normalized metadata per model (`max_context_window_tokens`, `max_output_tokens`, `supported_reasoning_efforts`, `default_reasoning_effort`).
 - `plan_metadata_updates`: Computes a dry-run plan — per model, the current values, the proposed values, the changed fields, and a status of `update`, `unchanged`, `unresolved`, or `unsupported_provider`. Never writes.

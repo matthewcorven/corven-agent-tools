@@ -18,6 +18,11 @@
     {
       "kind": "mcp",
       "serverName": "copilot-byok-metadata",
+      "toolName": "read_byok_config"
+    },
+    {
+      "kind": "mcp",
+      "serverName": "copilot-byok-metadata",
       "toolName": "list_byok_models"
     },
     {
@@ -49,6 +54,7 @@
     "squad-model-resolver(verify_spawn)",
     "copilot-byok-metadata-*",
     "copilot-byok-metadata",
+    "copilot-byok-metadata(read_byok_config)",
     "copilot-byok-metadata(list_byok_models)",
     "copilot-byok-metadata(fetch_provider_metadata)",
     "copilot-byok-metadata(plan_metadata_updates)",

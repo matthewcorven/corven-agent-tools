@@ -66,7 +66,8 @@ class CopilotByokMetadataMCPSmokeTest(unittest.TestCase):
         self.assertEqual(
             tool_names,
             {
-                    "list_byok_models",
+                "read_byok_config",
+                "list_byok_models",
                 "fetch_provider_metadata",
                 "plan_metadata_updates",
                 "apply_metadata_updates",

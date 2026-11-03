@@ -35,6 +35,7 @@ own source of truth.
 
 | Tool | Purpose |
 |------|---------|
+| `read_byok_config` | Full awareness in one call — providers, models, metadata, selections, gaps |
 | `list_byok_models` | Read configured providers/models and their current metadata |
 | `fetch_provider_metadata` | Fetch source-of-truth values and show what Copilot would get |
 | `plan_metadata_updates` | Dry-run diff of current vs proposed — never writes |
@@ -46,9 +47,16 @@ If these tools are deferred, load them with `tool_search_tool` using the query
 
 ## Protocol
 
-1. **Read.** Call `list_byok_models`. Report the provider count, model count, and
-   how many models are missing metadata. If every model already has metadata,
-   say so and stop — there is nothing to do.
+1. **Read.** Call `read_byok_config` with the user's workspace path. It returns
+   every provider (credentials redacted), every model with its stored metadata,
+   the user's selected reasoning effort and context tier, and which fields are
+   still missing. Report the provider count, model count, and how many models
+   are missing metadata. If every model already has metadata, say so and stop —
+   there is nothing to do.
+
+   BYOK configuration is app-global, not per-workspace. The `workspace_path`
+   input only identifies the calling project and workspace for context; never
+   claim the config is scoped to that workspace.
 
 2. **Plan.** Call `plan_metadata_updates`. This fetches the provider catalog and
    returns a per-model diff with `status` of `update`, `unchanged`, `unresolved`,

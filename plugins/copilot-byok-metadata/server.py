@@ -63,6 +63,18 @@ MIN_PROMPT_FRACTION = 0.5
 APP_STATE_REASONING_KEY = "copilot-reasoning-effort"
 APP_STATE_CONTEXT_TIER_KEY = "copilot-context-tier"
 APP_STATE_CATALOG_KEY = "copilot-available-models-v2"
+APP_STATE_SELECTED_MODEL_KEY = "copilot-selected-model"
+
+#: Substrings that mark a provider setting as credential-bearing. Matching
+#: values are replaced with ``<redacted>`` before anything leaves the server.
+SECRET_SETTING_MARKERS = (
+    "apikey",
+    "api_key",
+    "token",
+    "secret",
+    "password",
+    "authorization",
+)
 
 #: Hardcoded provider source-of-truth registry. Only OpenRouter is wired up
 #: today; the shape is intentionally extensible so additional providers (and
@@ -127,6 +139,7 @@ def load_providers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "wire_api": settings.get("wireApi"),
                 "auth_kind": settings.get("authKind"),
                 "account_id": row["account_id"],
+                "settings": redact_settings(settings),
             }
         )
     return providers
@@ -171,6 +184,19 @@ def load_app_state(conn: sqlite3.Connection, key: str) -> Optional[Any]:
         return None
 
 
+def load_app_state_scalar(conn: sqlite3.Connection, key: str) -> Optional[str]:
+    """Read an app-state value that may be stored as a bare string or JSON."""
+    row = conn.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return None
+    raw = row["value"]
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+    return parsed if isinstance(parsed, str) else raw
+
+
 def parse_efforts(raw: Optional[str]) -> Optional[list[str]]:
     """Parse the stored ``supported_reasoning_efforts`` JSON array string."""
     if raw is None:
@@ -182,6 +208,131 @@ def parse_efforts(raw: Optional[str]) -> Optional[list[str]]:
     if not isinstance(parsed, list):
         return None
     return [str(item) for item in parsed]
+
+
+def redact_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Return provider settings with credential-bearing values masked."""
+    redacted: dict[str, Any] = {}
+    for key, value in settings.items():
+        lowered = key.lower()
+        if any(marker in lowered for marker in SECRET_SETTING_MARKERS):
+            redacted[key] = "<redacted>" if value else value
+        else:
+            redacted[key] = value
+    return redacted
+
+
+def resolve_workspace(conn: sqlite3.Connection, workspace_path: str) -> dict[str, Any]:
+    """Map a filesystem path onto the app's project/workspace records.
+
+    BYOK model configuration is app-global, so this only supplies context:
+    which project and workspace the calling agent is working in. Matching is
+    longest-prefix over ``projects.main_repo_path`` and
+    ``workspace_checkout_bindings.checkout_path`` so worktrees resolve to
+    their owning project.
+    """
+    target = os.path.abspath(os.path.expanduser(workspace_path))
+    result: dict[str, Any] = {
+        "workspace_path": target,
+        "matched": False,
+        "project": None,
+        "workspace": None,
+        "note": (
+            "BYOK model configuration is app-global; workspace_path is used "
+            "only to identify the calling project and workspace."
+        ),
+    }
+
+    best_project: Optional[dict[str, Any]] = None
+    best_len = -1
+    try:
+        rows = conn.execute(
+            "SELECT id, name, main_repo_path, default_branch FROM projects"
+        ).fetchall()
+    except sqlite3.Error:
+        rows = []
+    project_rows = list(rows)
+
+    def _match_project(root: Optional[str]) -> Optional[dict[str, Any]]:
+        if not root:
+            return None
+        root = os.path.abspath(root)
+        if target == root or target.startswith(root + os.sep):
+            return {"root": root}
+        return None
+
+    for row in project_rows:
+        hit = _match_project(row["main_repo_path"])
+        if hit and len(hit["root"]) > best_len:
+            best_len = len(hit["root"])
+            best_project = {
+                "id": row["id"],
+                "name": row["name"],
+                "main_repo_path": hit["root"],
+                "default_branch": row["default_branch"],
+            }
+
+    best_workspace: Optional[dict[str, Any]] = None
+    best_ws_len = -1
+    try:
+        rows = conn.execute(
+            """
+            SELECT b.workspace_id, b.checkout_path, b.checkout_kind, b.repo_path,
+                   w.name, w.branch, w.workspace_type
+            FROM workspace_checkout_bindings b
+            LEFT JOIN workspaces w ON w.id = b.workspace_id
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        rows = []
+    for row in rows:
+        checkout = row["checkout_path"]
+        if not checkout:
+            continue
+        checkout = os.path.abspath(checkout)
+        if target == checkout or target.startswith(checkout + os.sep):
+            if len(checkout) > best_ws_len:
+                best_ws_len = len(checkout)
+                best_workspace = {
+                    "id": row["workspace_id"],
+                    "name": row["name"],
+                    "branch": row["branch"],
+                    "workspace_type": row["workspace_type"],
+                    "checkout_path": checkout,
+                    "checkout_kind": row["checkout_kind"],
+                    "repo_path": row["repo_path"],
+                }
+
+    # A worktree checkout lives outside main_repo_path, so fall back to the
+    # binding's repo_path to identify the owning project.
+    if best_project is None and best_workspace is not None:
+        repo_path = best_workspace.get("repo_path")
+        for row in project_rows:
+            if repo_path and row["main_repo_path"] and os.path.abspath(
+                row["main_repo_path"]
+            ) == os.path.abspath(repo_path):
+                best_project = {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "main_repo_path": os.path.abspath(row["main_repo_path"]),
+                    "default_branch": row["default_branch"],
+                }
+                break
+
+    if best_project is not None:
+        result["matched"] = True
+        result["project"] = best_project
+
+    if best_workspace is not None:
+        result["matched"] = True
+        result["workspace"] = best_workspace
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Provider detection and metadata normalization
+# ---------------------------------------------------------------------------
 
 
 def detect_provider_kind(provider: dict[str, Any]) -> Optional[str]:
@@ -539,6 +690,151 @@ def list_byok_models(db_path: Optional[str] = None) -> dict[str, Any]:
                 1 for model in enriched if not model["has_metadata"]
             ),
         },
+    }
+
+
+def read_byok_config(
+    workspace_path: Optional[str] = None,
+    db_path: Optional[str] = None,
+    include_catalog_cache: bool = True,
+) -> dict[str, Any]:
+    """Return a complete, self-contained snapshot of the BYOK model config.
+
+    This is the awareness entry point: a consuming agent gets every provider,
+    every model, the metadata currently stored for each, the user's selected
+    reasoning effort and context tier, and what is still missing — without
+    locating or reading the app database itself.
+    """
+    path = resolve_db_path(db_path)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Copilot app database not found at {path}")
+
+    conn = connect(path, readonly=True)
+    try:
+        providers = load_providers(conn)
+        models = load_models(conn)
+        reasoning_state = load_app_state(conn, APP_STATE_REASONING_KEY) or {}
+        context_tier_state = load_app_state(conn, APP_STATE_CONTEXT_TIER_KEY) or {}
+        selected_model = load_app_state_scalar(conn, APP_STATE_SELECTED_MODEL_KEY)
+        catalog_cache = (
+            load_app_state(conn, APP_STATE_CATALOG_KEY)
+            if include_catalog_cache
+            else None
+        )
+        workspace = (
+            resolve_workspace(conn, workspace_path) if workspace_path else None
+        )
+    finally:
+        conn.close()
+
+    provider_by_id = {provider["id"]: provider for provider in providers}
+
+    enriched_models = []
+    for model in models:
+        provider = provider_by_id.get(model["provider_id"], {})
+        kind = detect_provider_kind(provider) if provider else None
+        efforts = model["supported_reasoning_efforts"]
+        missing = [
+            field
+            for field in (
+                "max_prompt_tokens",
+                "max_output_tokens",
+                "supported_reasoning_efforts",
+            )
+            if model[field] is None
+        ]
+        enriched_models.append(
+            {
+                **model,
+                "provider_name": provider.get("name"),
+                "provider_kind": kind,
+                "provider_supported": kind is not None,
+                "reasoning_effort": reasoning_state.get(model["state_key"]),
+                "context_tier": context_tier_state.get(model["state_key"]),
+                "has_metadata": len(missing) < 3,
+                "missing_metadata": missing,
+                "supports_reasoning": bool(efforts),
+            }
+        )
+
+    enriched_providers = []
+    for provider in providers:
+        kind = detect_provider_kind(provider)
+        spec = PROVIDER_REGISTRY.get(kind) if kind else None
+        enriched_providers.append(
+            {
+                **provider,
+                "provider_kind": kind,
+                "provider_supported": kind is not None,
+                "catalog_url": spec["catalog_url"] if spec else None,
+                "model_count": sum(
+                    1 for model in models if model["provider_id"] == provider["id"]
+                ),
+            }
+        )
+
+    byok_catalog_entries: list[dict[str, Any]] = []
+    if isinstance(catalog_cache, dict):
+        for entry in catalog_cache.get("models") or []:
+            if isinstance(entry, dict) and entry.get("providerId"):
+                byok_catalog_entries.append(
+                    {
+                        "id": entry.get("id"),
+                        "name": entry.get("name"),
+                        "providerId": entry.get("providerId"),
+                        "capabilities": entry.get("capabilities"),
+                        "supportedReasoningEfforts": entry.get(
+                            "supportedReasoningEfforts"
+                        ),
+                        "defaultReasoningEffort": entry.get(
+                            "defaultReasoningEffort"
+                        ),
+                    }
+                )
+
+    supported_kinds = sorted(
+        {p["provider_kind"] for p in enriched_providers if p["provider_kind"]}
+    )
+    unsupported = [
+        p["name"] for p in enriched_providers if not p["provider_supported"]
+    ]
+
+    return {
+        "db_path": path,
+        "workspace": workspace,
+        "providers": enriched_providers,
+        "models": enriched_models,
+        "selections": {
+            "selected_model": selected_model,
+            "reasoning_effort": reasoning_state,
+            "context_tier": context_tier_state,
+        },
+        "catalog_cache": {
+            "included": include_catalog_cache,
+            "byok_entry_count": len(byok_catalog_entries),
+            "byok_entries": byok_catalog_entries,
+        },
+        "summary": {
+            "provider_count": len(enriched_providers),
+            "model_count": len(enriched_models),
+            "models_with_metadata": sum(
+                1 for m in enriched_models if m["has_metadata"]
+            ),
+            "models_without_metadata": sum(
+                1 for m in enriched_models if not m["has_metadata"]
+            ),
+            "models_supporting_reasoning": sum(
+                1 for m in enriched_models if m["supports_reasoning"]
+            ),
+            "providers_with_supported_source": supported_kinds,
+            "providers_without_supported_source": unsupported,
+        },
+        "notes": [
+            "BYOK model configuration is app-global, not per-workspace.",
+            "Provider settings are returned with credential values redacted.",
+            "Use plan_metadata_updates to see proposed changes, then "
+            "apply_metadata_updates to write them.",
+        ],
     }
 
 
@@ -966,6 +1262,42 @@ def get_provider_registry() -> dict[str, Any]:
 
 TOOLS: list[dict[str, Any]] = [
     {
+        "name": "read_byok_config",
+        "description": (
+            "Reads the complete GitHub Copilot desktop app BYOK model configuration "
+            "in one call: every provider (with credentials redacted), every model "
+            "with its stored context-window, output-token, and reasoning-effort "
+            "metadata, the user's selected reasoning effort and context tier, the "
+            "cached catalog entries, and what metadata is still missing. Use this "
+            "for awareness instead of locating or reading the app database."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_path": {
+                    "type": "string",
+                    "description": (
+                        "The calling agent's workspace path. Used to identify the "
+                        "project and workspace for context; BYOK configuration "
+                        "itself is app-global."
+                    ),
+                },
+                "db_path": {
+                    "type": "string",
+                    "description": "Optional override for the Copilot app database path.",
+                },
+                "include_catalog_cache": {
+                    "type": "boolean",
+                    "description": (
+                        "Include the cached model-catalog entries for BYOK models. "
+                        "Defaults to true."
+                    ),
+                    "default": True,
+                },
+            },
+        },
+    },
+    {
         "name": "list_byok_models",
         "description": (
             "Lists every BYOK provider and model configured in the GitHub Copilot "
@@ -1162,7 +1494,15 @@ def handle_rpc_message(msg: dict[str, Any]) -> Optional[dict[str, Any]]:
         tool_args = params.get("arguments", {}) or {}
 
         try:
-            if tool_name == "list_byok_models":
+            if tool_name == "read_byok_config":
+                res = read_byok_config(
+                    workspace_path=tool_args.get("workspace_path"),
+                    db_path=tool_args.get("db_path"),
+                    include_catalog_cache=tool_args.get(
+                        "include_catalog_cache", True
+                    ),
+                )
+            elif tool_name == "list_byok_models":
                 res = list_byok_models(db_path=tool_args.get("db_path"))
             elif tool_name == "fetch_provider_metadata":
                 res = fetch_provider_metadata(
