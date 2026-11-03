@@ -40,9 +40,49 @@ DEFAULT_ARTIFACT_NAME = "playwright-report"
 DEFAULT_MAX_AGE_DAYS = 7
 DEFAULT_NAMESPACE = "playwright-reports"
 
+# `gh api` has no --repo flag; these subcommands do.
+REPO_FLAG_SUBCOMMANDS = frozenset({"run", "pr", "workflow", "release", "issue", "repo"})
+
 
 class RetrievalError(RuntimeError):
     """Raised when a report cannot be located, downloaded or extracted."""
+
+
+def _parse_repo_slug(remote: str) -> Optional[str]:
+    """Extract ``owner/repo`` from a git remote URL or a bare slug."""
+    remote = (remote or "").strip()
+    if not remote:
+        return None
+
+    if remote.startswith("git@"):
+        _, _, path = remote.partition(":")
+    elif "://" in remote:
+        path = urllib.parse.urlparse(remote).path.lstrip("/")
+    else:
+        path = remote
+
+    path = path.removesuffix(".git").strip("/")
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 2:
+        return None
+    return f"{parts[-2]}/{parts[-1]}"
+
+
+def _git_toplevel(start: Optional[Path] = None) -> Optional[Path]:
+    """Return the enclosing git worktree root, or None when there is none."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(start or Path.cwd()),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, OSError, subprocess.CalledProcessError):
+        return None
+
+    root = result.stdout.strip()
+    return Path(root) if root else None
 
 
 # --------------------------------------------------------------------------- #
@@ -92,16 +132,60 @@ class GitHubActionsProvider(CIProvider):
 
     # -- helpers ---------------------------------------------------------- #
 
+    def _resolve_repo(self) -> str:
+        """Return ``owner/repo``, inferring it from the current checkout if needed."""
+        if self.repo:
+            return self.repo
+
+        toplevel = _git_toplevel()
+        if toplevel is None:
+            raise RetrievalError(
+                "No --repo was given and the current directory is not inside a git "
+                "repository, so the GitHub repository could not be inferred. "
+                "Pass --repo owner/repo (or run from inside the target checkout)."
+            )
+
+        try:
+            remote = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=str(toplevel),
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        except (FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
+            raise RetrievalError(
+                f"No --repo was given and '{toplevel}' has no 'origin' remote to infer "
+                "the GitHub repository from. Pass --repo owner/repo."
+            ) from exc
+
+        slug = _parse_repo_slug(remote)
+        if not slug:
+            raise RetrievalError(
+                f"No --repo was given and the 'origin' remote ('{remote.strip()}') is not "
+                "a GitHub repository URL. Pass --repo owner/repo."
+            )
+
+        self.repo = slug
+        return slug
+
     def _gh(self, args: list[str], *, binary: bool = False) -> Any:
         cmd = ["gh", *args]
-        if self.repo:
-            cmd.extend(["--repo", self.repo])
+        env = dict(os.environ)
+
+        # `gh api` rejects --repo, so the repository is passed via GH_REPO instead.
+        if args and args[0] in REPO_FLAG_SUBCOMMANDS:
+            cmd.extend(["--repo", self._resolve_repo()])
+        elif args and args[0] == "api":
+            env["GH_REPO"] = self._resolve_repo()
+
         try:
             result = subprocess.run(
                 cmd,
                 check=True,
                 capture_output=True,
                 text=not binary,
+                env=env,
             )
         except FileNotFoundError as exc:
             raise RetrievalError(
@@ -126,7 +210,7 @@ class GitHubActionsProvider(CIProvider):
         if not commit:
             raise RetrievalError("Either --run-id or --commit is required.")
 
-        query = f"/repos/{{owner}}/{{repo}}/actions/runs?head_sha={commit}&per_page=20"
+        query = f"/repos/{self._resolve_repo()}/actions/runs?head_sha={commit}&per_page=20"
         if self.workflow:
             query += f"&workflow_id={urllib.parse.quote(self.workflow)}"
 
@@ -144,7 +228,7 @@ class GitHubActionsProvider(CIProvider):
         return str(chosen["id"])
 
     def find_artifact(self, run_id: str, artifact_name: str) -> ArtifactRef:
-        payload = self._api(f"/repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts")
+        payload = self._api(f"/repos/{self._resolve_repo()}/actions/runs/{run_id}/artifacts")
         artifacts = payload.get("artifacts") or []
 
         matches = [a for a in artifacts if a.get("name") == artifact_name]
@@ -176,7 +260,7 @@ class GitHubActionsProvider(CIProvider):
             )
 
         destination.parent.mkdir(parents=True, exist_ok=True)
-        # `gh run download` resolves the artifact by name and writes the zip for us.
+        # `gh run download` extracts the artifact contents into --dir (no zip is kept).
         self._gh(
             [
                 "run",
@@ -202,11 +286,15 @@ PROVIDERS: dict[str, type[CIProvider]] = {
 
 
 def default_namespace() -> Path:
-    """Project-local cache directory, overridable via ``PLAYWRIGHT_REPORT_NAMESPACE``."""
+    """Project-local cache directory, overridable via ``PLAYWRIGHT_REPORT_NAMESPACE``.
+
+    The cache lives at the root of the target checkout so it is stable no matter
+    which subdirectory the tool is invoked from.
+    """
     override = os.environ.get("PLAYWRIGHT_REPORT_NAMESPACE")
     if override:
         return Path(override).expanduser()
-    return Path.cwd() / DEFAULT_NAMESPACE
+    return (_git_toplevel() or Path.cwd()) / DEFAULT_NAMESPACE
 
 
 def prune_old_reports(namespace: Path, max_age_days: int, *, now: Optional[float] = None) -> list[Path]:
@@ -236,13 +324,24 @@ def prune_old_reports(namespace: Path, max_age_days: int, *, now: Optional[float
     return removed
 
 
-def extract_zip(archive: Path, destination: Path) -> Path:
-    """Extract ``archive`` into ``destination`` and return the report root.
+def _find_report_root(path: Path) -> Optional[Path]:
+    """Return the directory holding ``index.html`` under ``path``, or None.
 
     CI uploads the *contents* of ``playwright-report/``, so ``index.html`` is
-    usually at the archive root. Some pipelines wrap it in a directory; both
-    shapes are handled.
+    usually at the root. Some pipelines wrap it in a directory; both shapes are
+    handled by searching one level at a time, shallowest first.
     """
+    if not path.is_dir():
+        return None
+    if (path / "index.html").is_file():
+        return path
+    for candidate in sorted(path.rglob("index.html")):
+        return candidate.parent
+    return None
+
+
+def extract_zip(archive: Path, destination: Path) -> Path:
+    """Extract ``archive`` into ``destination`` and return the report root."""
     destination.mkdir(parents=True, exist_ok=True)
 
     with zipfile.ZipFile(archive) as zf:
@@ -253,16 +352,13 @@ def extract_zip(archive: Path, destination: Path) -> Path:
                 raise RetrievalError(f"Refusing to extract unsafe archive member: {member}")
         zf.extractall(destination)
 
-    if (destination / "index.html").is_file():
-        return destination
-
-    for candidate in sorted(destination.rglob("index.html")):
-        return candidate.parent
-
-    raise RetrievalError(
-        f"No index.html found in the extracted artifact at {destination}. "
-        "The artifact may not be a Playwright HTML report."
-    )
+    root = _find_report_root(destination)
+    if root is None:
+        raise RetrievalError(
+            f"No index.html found in the extracted artifact at {destination}. "
+            "The artifact may not be a Playwright HTML report."
+        )
+    return root
 
 
 def build_report_url(index_html: Path, *, test: Optional[str] = None, test_id: Optional[str] = None) -> str:
@@ -402,20 +498,29 @@ def fetch_report(
         staging = Path(tmp) / "artifact"
         provider.download_artifact(ref, staging)
 
-        archives = sorted(staging.rglob("*.zip"))
-        if not archives:
-            raise RetrievalError(
-                f"The downloaded artifact '{artifact_name}' contained no .zip archive."
-            )
-
         report_dir.mkdir(parents=True, exist_ok=True)
-        index_html: Optional[Path] = None
-        for archive in archives:
-            root = extract_zip(archive, report_dir)
-            index_html = index_html or (root / "index.html")
 
-    if index_html is None or not index_html.is_file():
+        # `gh run download` extracts the artifact for us, so the common case is a
+        # directory that already contains index.html. Local archives are still
+        # supported for providers that hand back a zip.
+        root = _find_report_root(staging)
+        if root is not None:
+            shutil.copytree(root, report_dir, dirs_exist_ok=True)
+        else:
+            archives = sorted(staging.rglob("*.zip"))
+            if not archives:
+                raise RetrievalError(
+                    f"The downloaded artifact '{artifact_name}' contained no index.html "
+                    f"and no .zip archive (searched {staging})."
+                )
+            for archive in archives:
+                extract_zip(archive, report_dir)
+
+    root = _find_report_root(report_dir)
+    if root is None:
         raise RetrievalError(f"Extraction produced no index.html under {report_dir}.")
+    report_dir = root
+    index_html = root / "index.html"
 
     url = build_report_url(index_html, test=test, test_id=test_id)
     opened = webbrowser.open(url) if open_browser else False
