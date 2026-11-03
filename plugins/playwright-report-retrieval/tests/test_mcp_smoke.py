@@ -3,15 +3,83 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 SERVER_SCRIPT = PLUGIN_ROOT / "server.py"
+
+
+def build_index_html(directory: Path, files: dict[str, object], *, pad: bool = True) -> Path:
+    """Write a self-contained ``index.html`` shaped like a real Playwright report.
+
+    Playwright embeds the whole report as a base64 zip inside
+    ``<template id="playwrightReportBase64">``.
+    """
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        for name, payload in files.items():
+            zf.writestr(name, json.dumps(payload))
+
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    if not pad:
+        encoded = encoded.rstrip("=")
+
+    directory.mkdir(parents=True, exist_ok=True)
+    index_html = directory / "index.html"
+    index_html.write_text(
+        "<!DOCTYPE html><html><body>"
+        f'<template id="playwrightReportBase64">data:application/zip;base64,{encoded}</template>'
+        "</body></html>",
+        encoding="utf-8",
+    )
+    return index_html
+
+
+def modern_report_files(*, failing: bool = False) -> dict[str, object]:
+    """Return the per-file JSON entries a modern Playwright report contains."""
+    tests = [
+        {
+            "testId": "aaa",
+            "title": "happy path: streams a reply",
+            "projectName": "chromium",
+            "location": {"file": "e2e/tests/chat.spec.ts", "line": 10, "column": 1},
+            "path": ["chat.spec.ts", "happy path"],
+            "outcome": "expected",
+            "results": [{"status": "passed", "retry": 0}],
+            "ok": True,
+        },
+        {
+            "testId": "bbb",
+            "title": "edge case: blank message",
+            "projectName": "chromium",
+            "location": {"file": "e2e/tests/chat.spec.ts", "line": 40, "column": 1},
+            "path": ["chat.spec.ts", "edge case"],
+            "outcome": "unexpected" if failing else "expected",
+            "results": [{"status": "failed" if failing else "passed", "retry": 0}],
+            "ok": not failing,
+        },
+    ]
+    return {
+        "report.json": {
+            "metadata": {},
+            "files": [],
+            "projectNames": ["chromium"],
+            "stats": {"expected": 2 - int(failing), "unexpected": int(failing)},
+        },
+        "chat-abc123.json": {
+            "fileId": "chat-abc123",
+            "fileName": "chat.spec.ts",
+            "tests": tests,
+        },
+    }
 
 
 class PlaywrightReportRetrievalMCPSmokeTest(unittest.TestCase):
@@ -71,6 +139,75 @@ class PlaywrightReportRetrievalMCPSmokeTest(unittest.TestCase):
     def test_list_failed_tests_reads_a_report_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp)
+            build_index_html(report, modern_report_files(failing=True))
+
+            res = self.send_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_failed_tests",
+                        "arguments": {"report_dir": str(report)},
+                    },
+                }
+            )
+
+        payload = res["result"]["structuredContent"]
+        self.assertFalse(res["result"]["isError"])
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(payload["failed_count"], 1)
+        self.assertEqual(payload["failed"][0]["title"], "edge case: blank message")
+        self.assertEqual(payload["failed"][0]["test_id"], "bbb")
+        self.assertEqual(payload["failed"][0]["file"], "chat.spec.ts")
+
+    def test_all_passing_report_reports_a_non_zero_total(self) -> None:
+        """A green report must still count its tests (DEF-4 regression guard)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp)
+            build_index_html(report, modern_report_files(failing=False))
+
+            res = self.send_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 6,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_failed_tests",
+                        "arguments": {"report_dir": str(report)},
+                    },
+                }
+            )
+
+        payload = res["result"]["structuredContent"]
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(payload["failed_count"], 0)
+        self.assertEqual(payload["failed"], [])
+
+    def test_unpadded_base64_payload_is_decoded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp)
+            build_index_html(report, modern_report_files(failing=True), pad=False)
+
+            res = self.send_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_failed_tests",
+                        "arguments": {"report_dir": str(report)},
+                    },
+                }
+            )
+
+        payload = res["result"]["structuredContent"]
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(payload["failed_count"], 1)
+
+    def test_legacy_data_directory_is_still_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp)
             (report / "data").mkdir()
             (report / "data" / "report.json").write_text(
                 json.dumps(
@@ -101,7 +238,7 @@ class PlaywrightReportRetrievalMCPSmokeTest(unittest.TestCase):
             res = self.send_request(
                 {
                     "jsonrpc": "2.0",
-                    "id": 3,
+                    "id": 8,
                     "method": "tools/call",
                     "params": {
                         "name": "list_failed_tests",
@@ -111,10 +248,8 @@ class PlaywrightReportRetrievalMCPSmokeTest(unittest.TestCase):
             )
 
         payload = res["result"]["structuredContent"]
-        self.assertFalse(res["result"]["isError"])
         self.assertEqual(payload["total"], 2)
         self.assertEqual(payload["failed_count"], 1)
-        self.assertEqual(payload["failed"][0]["title"], "edge case: blank message")
         self.assertEqual(payload["failed"][0]["test_id"], "bbb")
 
     def test_unknown_tool_returns_tool_error(self) -> None:

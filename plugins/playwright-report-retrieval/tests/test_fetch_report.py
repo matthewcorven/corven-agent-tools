@@ -111,6 +111,8 @@ class ExtractZipTest(unittest.TestCase):
 
 
 class FakeProvider(fr.CIProvider):
+    """Mimics ``gh run download``, which extracts the artifact into ``--dir``."""
+
     name = "fake"
 
     def __init__(self, **_: object) -> None:
@@ -121,6 +123,18 @@ class FakeProvider(fr.CIProvider):
 
     def find_artifact(self, run_id, artifact_name):
         return fr.ArtifactRef(run_id=run_id, name=artifact_name)
+
+    def download_artifact(self, ref, destination):
+        self.downloads += 1
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "index.html").write_text("<html></html>", encoding="utf-8")
+        return destination
+
+
+class ZipProvider(FakeProvider):
+    """A provider that hands back a zip archive instead of an extracted tree."""
+
+    name = "zip"
 
     def download_artifact(self, ref, destination):
         self.downloads += 1
@@ -211,6 +225,61 @@ class FetchReportTest(unittest.TestCase):
             self.assertFalse(stale.exists())
             self.assertEqual([Path(p).name for p in result.pruned], ["stale-run"])
 
+    def test_extracted_artifact_without_zip_is_accepted(self) -> None:
+        """`gh run download` extracts the artifact, so no .zip is ever present."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = fr.fetch_report(
+                run_id="42", namespace=Path(tmp), provider_name="fake", open_browser=False
+            )
+            self.assertTrue(result.index_html.is_file())
+            self.assertEqual(result.index_html, Path(tmp) / "42" / "index.html")
+
+    def test_zip_artifact_is_still_supported(self) -> None:
+        provider = ZipProvider()
+        fr.PROVIDERS["zip"] = lambda **_: provider
+        with tempfile.TemporaryDirectory() as tmp:
+            result = fr.fetch_report(
+                run_id="42", namespace=Path(tmp), provider_name="zip", open_browser=False
+            )
+            self.assertTrue(result.index_html.is_file())
+
+    def test_nested_report_root_is_detected(self) -> None:
+        class NestedProvider(FakeProvider):
+            name = "nested"
+
+            def download_artifact(self, ref, destination):
+                self.downloads += 1
+                nested = destination / "playwright-report"
+                nested.mkdir(parents=True, exist_ok=True)
+                (nested / "index.html").write_text("<html></html>", encoding="utf-8")
+                return destination
+
+        fr.PROVIDERS["nested"] = lambda **_: NestedProvider()
+        with tempfile.TemporaryDirectory() as tmp:
+            result = fr.fetch_report(
+                run_id="42", namespace=Path(tmp), provider_name="nested", open_browser=False
+            )
+            self.assertTrue(result.index_html.is_file())
+            self.assertEqual(result.report_dir, Path(tmp) / "42")
+
+    def test_missing_index_html_names_the_searched_dir(self) -> None:
+        class EmptyProvider(FakeProvider):
+            name = "empty"
+
+            def download_artifact(self, ref, destination):
+                self.downloads += 1
+                destination.mkdir(parents=True, exist_ok=True)
+                (destination / "readme.txt").write_text("nope", encoding="utf-8")
+                return destination
+
+        fr.PROVIDERS["empty"] = lambda **_: EmptyProvider()
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(fr.RetrievalError) as ctx:
+                fr.fetch_report(
+                    run_id="42", namespace=Path(tmp), provider_name="empty", open_browser=False
+                )
+        self.assertIn("index.html", str(ctx.exception))
+
 
 class GitHubActionsProviderTest(unittest.TestCase):
     def test_resolve_run_id_prefers_completed_run(self) -> None:
@@ -256,6 +325,81 @@ class GitHubActionsProviderTest(unittest.TestCase):
         ref = fr.ArtifactRef(run_id="7", name="playwright-report", expired=True)
         with self.assertRaises(fr.RetrievalError):
             provider.download_artifact(ref, Path("/tmp/never"))
+
+    def test_gh_api_does_not_pass_repo_flag(self) -> None:
+        """`gh api` rejects --repo; the repository must go through GH_REPO."""
+        provider = fr.GitHubActionsProvider(repo="o/r")
+        with mock.patch.object(fr.subprocess, "run") as run:
+            run.return_value = mock.Mock(stdout="{}")
+            provider._gh(["api", "/repos/o/r/actions/runs"])
+
+        cmd = run.call_args.args[0]
+        self.assertNotIn("--repo", cmd)
+        self.assertEqual(run.call_args.kwargs["env"]["GH_REPO"], "o/r")
+
+    def test_gh_run_download_passes_repo_flag(self) -> None:
+        provider = fr.GitHubActionsProvider(repo="o/r")
+        with mock.patch.object(fr.subprocess, "run") as run:
+            run.return_value = mock.Mock(stdout="")
+            provider._gh(["run", "download", "7", "--name", "playwright-report"])
+
+        cmd = run.call_args.args[0]
+        self.assertEqual(cmd[-2:], ["--repo", "o/r"])
+
+    def test_api_path_has_no_placeholder_segments(self) -> None:
+        provider = fr.GitHubActionsProvider(repo="o/r")
+        with mock.patch.object(provider, "_api", return_value={"artifacts": []}) as api:
+            with self.assertRaises(fr.RetrievalError):
+                provider.find_artifact("7", "playwright-report")
+        path = api.call_args.args[0]
+        self.assertNotIn("{owner}", path)
+        self.assertNotIn("{repo}", path)
+        self.assertIn("/repos/o/r/", path)
+
+    def test_repo_is_inferred_from_origin_remote(self) -> None:
+        provider = fr.GitHubActionsProvider()
+        with mock.patch.object(fr, "_git_toplevel", return_value=Path("/repo")):
+            with mock.patch.object(fr.subprocess, "run") as run:
+                run.return_value = mock.Mock(
+                    stdout="git@github.com:matthewcorven/AGUIWebChat.git\n"
+                )
+                self.assertEqual(provider._resolve_repo(), "matthewcorven/AGUIWebChat")
+
+    def test_missing_repo_outside_a_checkout_is_actionable(self) -> None:
+        provider = fr.GitHubActionsProvider()
+        with mock.patch.object(fr, "_git_toplevel", return_value=None):
+            with self.assertRaises(fr.RetrievalError) as ctx:
+                provider._resolve_repo()
+        self.assertIn("--repo", str(ctx.exception))
+
+
+class ParseRepoSlugTest(unittest.TestCase):
+    def test_https_remote(self) -> None:
+        self.assertEqual(
+            fr._parse_repo_slug("https://github.com/o/r.git"), "o/r"
+        )
+
+    def test_ssh_remote(self) -> None:
+        self.assertEqual(fr._parse_repo_slug("git@github.com:o/r.git"), "o/r")
+
+    def test_bare_slug(self) -> None:
+        self.assertEqual(fr._parse_repo_slug("o/r"), "o/r")
+
+    def test_unparseable_returns_none(self) -> None:
+        self.assertIsNone(fr._parse_repo_slug("not-a-repo"))
+        self.assertIsNone(fr._parse_repo_slug(""))
+
+
+class DefaultNamespaceTest(unittest.TestCase):
+    def test_uses_repo_root_when_available(self) -> None:
+        with mock.patch.object(fr, "_git_toplevel", return_value=Path("/repo")):
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("PLAYWRIGHT_REPORT_NAMESPACE", None)
+                self.assertEqual(fr.default_namespace(), Path("/repo") / "playwright-reports")
+
+    def test_env_override_wins(self) -> None:
+        with mock.patch.dict(os.environ, {"PLAYWRIGHT_REPORT_NAMESPACE": "/tmp/ns"}):
+            self.assertEqual(fr.default_namespace(), Path("/tmp/ns"))
 
 
 class CliTest(unittest.TestCase):
