@@ -77,12 +77,13 @@
     {
       "name": "copilot-byok-metadata",
       "source": "plugins/copilot-byok-metadata",
-      "version": "0.3.0",
-      "description": "copilot-byok-metadata MCP server + thin skill: read GitHub Copilot app BYOK models, fetch context-window and reasoning-effort metadata from provider sources of truth, and apply it to the app config",
+      "version": "0.4.0",
+      "description": "copilot-byok-metadata MCP server + thin skill: read GitHub Copilot app BYOK models, fetch context-window and reasoning-effort metadata from provider sources of truth (OpenRouter, local oMLX), and apply it to the app config",
       "keywords": [
         "copilot",
         "byok",
         "openrouter",
+        "omlx",
         "context-window",
         "reasoning-effort",
         "mcp",

@@ -17,7 +17,7 @@ Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository dis
 | Change-learn MCP host | `hosts/ChangeLearn.Host/` | Dual-transport MCP host (on-demand stdio from a configured source checkout; Blazor Server UI + `:5190/mcp` HTTP) exposing 8 tools, with a Squad agent team on the GitHub Copilot SDK + Microsoft Agent Framework — see [`plugins/change-learn/README.md`](plugins/change-learn/README.md) |
 | `squad-model-resolver` plugin | `plugins/squad-model-resolver/` | Deterministic model ID resolution MCP server (`resolve_model`, `resolve_for_agent`, `verify_spawn`) + thin aggressive skill for Squad agent spawns |
 | `playwright-report-retrieval` plugin | `plugins/playwright-report-retrieval/` | Canonical Playwright reporting + AI-driven E2E standards skill, plus a retrieval CLI and MCP server (`fetch_report`, `list_failed_tests`) that downloads a CI HTML report by run ID or commit and deep-links to a test |
-| `copilot-byok-metadata` plugin | `plugins/copilot-byok-metadata/` | MCP server + thin skill that reads the GitHub Copilot app's BYOK models, fetches context-window and reasoning-effort metadata from provider sources of truth (OpenRouter today), and applies it to the app config interactively or automatically |
+| `copilot-byok-metadata` plugin | `plugins/copilot-byok-metadata/` | MCP server + thin skill that reads the GitHub Copilot app's BYOK models, fetches context-window and reasoning-effort metadata from provider sources of truth (OpenRouter and local oMLX servers), and applies it to the app config interactively or automatically |
 
 Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/) for the issue-queue skill. The decision-model sender needs `OPENROUTER_API_KEY` in the environment.
 
@@ -40,6 +40,18 @@ copilot plugin install copilot-byok-metadata@corven-agent-tools
 ```
 
 The install source must be the qualified `plugin@marketplace` form — a bare `github-issues` is rejected with `Invalid plugin spec`.
+
+### Upgrading a plugin that ships an MCP server
+
+Several plugins in this marketplace (`copilot-byok-metadata`, `squad-model-resolver`, `playwright-report-retrieval`, `use-decision-model`, and the `change-learn` MCP host) start a long-lived MCP server process. **After an upgrade, that server process from the previous version may still be running.** An AI harness that already has it open keeps calling the old tools and will not see new tools, new tool arguments, or changed behavior.
+
+Before concluding an upgrade did not take effect:
+
+1. Shut down the existing MCP server instance — usually by restarting the AI harness session that owns it.
+2. If the harness does not stop it (an orphaned `server.py`, or a `change-learn` host that outlived its session), force-close that process.
+3. Reopen the harness and confirm the new version's tools are listed.
+
+A newly launched harness session picks up the installed version automatically; only already-open sessions hold the stale process.
 
 You can also enable them declaratively in `.github/copilot/settings.json` (repository-level) or `~/.copilot/settings.json` (user-level). The `enabledPlugins` keys must be the qualified `plugin@corven-agent-tools` forms, and a non-default marketplace must also be registered under `extraKnownMarketplaces`:
 
@@ -189,13 +201,13 @@ The script resolves the run, locates the `playwright-report` artifact, prunes na
 
 The `copilot-byok-metadata` plugin fills a gap in the GitHub Copilot desktop app: BYOK (bring-your-own-key) models are stored with `max_prompt_tokens`, `max_output_tokens`, and `supported_reasoning_efforts` all `NULL`, so the app cannot compact at the right point or offer reasoning levels for them. This plugin reads those models, fetches the real metadata from the provider's source of truth, and writes it into the app config.
 
-Scope today: **GitHub Copilot desktop app only**, and **OpenRouter only** as a metadata provider. GitHub Copilot CLI support is planned for a future release if its configuration turns out to be separate.
+Scope today: **GitHub Copilot desktop app only**, with **OpenRouter** and local **oMLX** servers as metadata providers. GitHub Copilot CLI support is planned for a future release if its configuration turns out to be separate.
 
 ### MCP tools
 
 - `read_byok_config`: Returns a complete snapshot in one call — every provider (credentials redacted), every model with its stored metadata, the user's selected reasoning effort and context tier, the cached catalog entries, and which metadata fields are still missing. Takes an optional `workspace_path` to identify the calling project and workspace; BYOK configuration itself is app-global. `catalog_cache.byok_entries` surfaces each entry's `max_context_window_tokens`, `max_prompt_tokens`, `max_output_tokens`, and `has_limits`, and `catalog_cache.caches` reports both catalog caches with a `byok_entries_with_limits` count — so an agent can tell at a glance whether the cache patch actually landed.
 - `list_byok_models`: Reads `~/.copilot/data.db` and returns every configured provider and BYOK model with its current metadata, plus counts of models with and without metadata.
-- `fetch_provider_metadata`: Fetches the provider catalog from its hardcoded source-of-truth URL and returns normalized metadata per model. Read `derived` for the values that get written; `metadata` is the raw provider payload whose `max_output_tokens` is an unclamped aggregate maximum.
+- `fetch_provider_metadata`: Fetches each provider's source of truth — OpenRouter's public catalog, or a local oMLX server's `/v1/models` enriched by `/v1/models/status` — and returns normalized metadata per model. Read `derived` for the values that get written; `metadata` is the raw provider payload whose `max_output_tokens` is an unclamped aggregate maximum. Unreachable local servers are returned in `warnings` instead of failing the call.
 - `plan_metadata_updates`: Computes a dry-run plan — per model, the current values, the proposed values, the changed fields, and a status of `update`, `unchanged`, `unresolved`, or `unsupported_provider`. Never writes.
 - `apply_metadata_updates`: Applies the plan. Defaults to `dry_run: true`; a real write takes a database backup first and runs in a single transaction.
 - `get_provider_registry`: Returns the provider registry (source-of-truth URLs, host/name match rules) and the supported targets.
@@ -205,6 +217,17 @@ Scope today: **GitHub Copilot desktop app only**, and **OpenRouter only** as a m
 OpenRouter's `top_provider.max_completion_tokens` is an aggregate maximum, not a sane per-request output budget — several 1M-token models report `943718`, which would leave only ~100k of prompt budget and force compaction almost immediately. The server therefore clamps `max_output_tokens` to `min(provider value, 131072, context_window × 0.5)` and derives `max_prompt_tokens = context_window − max_output_tokens`, matching the app's own built-in catalog convention (output budgets never exceed 128000).
 
 Reasoning efforts are intersected with the Copilot vocabulary (`low`, `medium`, `high`, `xhigh`, `max`), so OpenRouter's `minimal` and `none` are dropped. Models with no `reasoning` object get `NULL`, which the app reads as "no reasoning effort".
+
+### oMLX provider
+
+oMLX is a local inference server, so there is no shared catalog: each configured provider is queried at its own base URL.
+
+- `GET <baseUrl>/v1/models` returns `id` and `max_model_len` — the effective context window, exposed as a vLLM-style extension.
+- `GET <baseUrl>/v1/models/status` returns the same value as `max_context_window`, plus `model_context_length` (the discovered native length) and `max_tokens` (the per-model generation ceiling). The status value wins when both are available; if the endpoint is missing or fails, the `/v1/models` value is used instead.
+- oMLX resolves the effective window as: per-model override → discovered native context (optionally clamped by the operator's `max_context_window_policy`) → the oMLX app default. `provider_metadata.context_source` records which tier supplied the value.
+- oMLX accepts reasoning-effort strings but does not advertise a per-model level set, so **no reasoning efforts are derived for oMLX models** and an existing user selection is left untouched. `derives_reasoning_efforts` in `read_byok_config` reports this per provider.
+- A provider is detected as oMLX when its name contains `omlx` and it has a base URL; the URL may be configured with or without the trailing `/v1`. Models on a server that is not running come back `unresolved`, and `plan_metadata_updates`/`apply_metadata_updates` report the failure in `warnings`. Start oMLX and re-run.
+- oMLX's model list also contains non-chat models (OCR, rerankers, MarkItDown). They are planned like any other entry; entries that advertise no context window stay `unchanged` with a `context_source` of `unresolved`.
 
 ### Optional behaviors
 
