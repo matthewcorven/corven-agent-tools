@@ -3,8 +3,17 @@
 
 Reads the GitHub Copilot desktop app's BYOK model configuration from
 ``~/.copilot/data.db``, fetches authoritative context-window and
-reasoning-effort metadata from provider source-of-truth APIs (OpenRouter
-only for now), and applies that metadata back to the app config.
+reasoning-effort metadata from provider source-of-truth APIs, and applies
+that metadata back to the app config.
+
+Two provider sources are wired up:
+
+* ``openrouter`` — the public model catalog plus per-endpoint limits.
+* ``omlx`` — a local oMLX server's OpenAI-compatible ``/v1/models`` listing,
+  enriched by ``/v1/models/status``, which reports the *effective* context
+  window (per-model override, discovered model native length, or the oMLX
+  app default) and the per-model generation ceiling. oMLX does not expose
+  Copilot-style reasoning levels, so no reasoning efforts are derived.
 
 The server is deliberately stdlib-only and speaks raw JSON-RPC 2.0 over
 stdio, matching the other plugins in this repository.
@@ -38,7 +47,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 SERVER_NAME = "copilot-byok-metadata"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.4.0"
 
 DEFAULT_DB_PATH = os.path.join("~", ".copilot", "data.db")
 
@@ -82,9 +91,9 @@ SECRET_SETTING_MARKERS = (
     "authorization",
 )
 
-#: Hardcoded provider source-of-truth registry. Only OpenRouter is wired up
-#: today; the shape is intentionally extensible so additional providers (and
-#: a future GitHub Copilot CLI target) can be added without changing tools.
+#: Hardcoded provider source-of-truth registry. Providers with a ``catalog_url``
+#: use a single public catalog; providers with ``base_url_params`` query the
+#: configured BYOK base URL itself (local inference servers).
 PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
     "openrouter": {
         "display_name": "OpenRouter",
@@ -93,6 +102,20 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         "match_hosts": ["openrouter.ai"],
         "match_names": ["openrouter"],
         "docs_url": "https://openrouter.ai/docs/api-reference/list-available-models",
+        "reasoning_efforts": True,
+    },
+    "omlx": {
+        "display_name": "oMLX",
+        # oMLX is a local server: the catalog lives at whatever base URL the
+        # provider was configured with, so ``catalog_url`` is derived per
+        # provider rather than hardcoded.
+        "catalog_url": None,
+        "catalog_path": "/models",
+        "status_path": "/models/status",
+        "base_url_params": ["base_url"],
+        "match_names": ["omlx"],
+        "docs_url": "https://github.com/jundot/omlx/blob/main/docs/admin-api.md",
+        "reasoning_efforts": False,
     },
 }
 
@@ -341,6 +364,46 @@ def resolve_workspace(conn: sqlite3.Connection, workspace_path: str) -> dict[str
 # ---------------------------------------------------------------------------
 
 
+def provider_base_url(provider: dict[str, Any]) -> str:
+    """Return the provider's configured base URL without a trailing slash."""
+    return (provider.get("base_url") or "").strip().rstrip("/")
+
+
+def provider_api_root(base_url: str) -> str:
+    """Return the ``/v1`` API root for a provider base URL.
+
+    oMLX serves the OpenAI-compatible surface at ``<host>/v1``; users may
+    configure the base URL with or without the trailing ``/v1``.
+    """
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if base.endswith("/v1"):
+        return base
+    return f"{base}/v1"
+
+
+def provider_catalog_url(kind: str, provider: Optional[dict[str, Any]] = None,
+                         catalog_url: Optional[str] = None) -> Optional[str]:
+    """Resolve the source-of-truth catalog URL for a provider kind.
+
+    Public catalogs come from the registry. Providers registered with
+    ``base_url_params`` derive the URL from the configured provider instead,
+    so every local oMLX instance is queried at its own address.
+    """
+    if catalog_url:
+        return catalog_url
+    spec = PROVIDER_REGISTRY.get(kind)
+    if spec is None:
+        return None
+    if spec.get("base_url_params"):
+        if not provider:
+            return None
+        base = provider_api_root(provider_base_url(provider))
+        return f"{base}{spec['catalog_path']}" if base else None
+    return spec.get("catalog_url")
+
+
 def detect_provider_kind(provider: dict[str, Any]) -> Optional[str]:
     """Map a configured provider onto a registry key, or ``None``."""
     base_url = (provider.get("base_url") or "").strip()
@@ -352,11 +415,21 @@ def detect_provider_kind(provider: dict[str, Any]) -> Optional[str]:
             host = ""
 
     name = (provider.get("name") or "").strip().lower()
+    if not host and not base_url and not name:
+        return None
 
     for kind, spec in PROVIDER_REGISTRY.items():
         for match_host in spec.get("match_hosts", []):
             if host and (host == match_host or host.endswith("." + match_host)):
                 return kind
+        if spec.get("base_url_params"):
+            # Local servers have no meaningful host to match on, so require a
+            # name match plus a usable base URL to query.
+            if base_url and any(
+                match_name in name for match_name in spec.get("match_names", [])
+            ):
+                return kind
+            continue
         for match_name in spec.get("match_names", []):
             if name and match_name in name:
                 return kind
@@ -443,12 +516,17 @@ def derive_copilot_limits(metadata: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def http_get_json(url: str, timeout: int = HTTP_TIMEOUT_SECONDS) -> Any:
+def http_get_json(
+    url: str,
+    timeout: int = HTTP_TIMEOUT_SECONDS,
+    headers: Optional[dict[str, str]] = None,
+) -> Any:
     request = urllib.request.Request(
         url,
         headers={
             "Accept": "application/json",
             "User-Agent": f"{SERVER_NAME}/{SERVER_VERSION}",
+            **(headers or {}),
         },
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -456,25 +534,195 @@ def http_get_json(url: str, timeout: int = HTTP_TIMEOUT_SECONDS) -> Any:
     return json.loads(payload)
 
 
-def fetch_catalog(kind: str, catalog_url: Optional[str] = None) -> dict[str, dict[str, Any]]:
+def provider_request_headers(provider: Optional[dict[str, Any]]) -> dict[str, str]:
+    """Build auth headers for a provider query, without logging the secret.
+
+    oMLX accepts its main API key on the inference surface, so a protected
+    instance can still be queried. API keys are redacted in every tool
+    response but must be sent on the wire; loopback servers usually need none.
+    """
+    settings = (provider or {}).get("settings") or {}
+    api_key = settings.get("apiKey")
+    if not isinstance(api_key, str) or not api_key or api_key == "<redacted>":
+        return {}
+    return {"Authorization": "Bearer " + api_key}
+
+
+def normalize_omlx_model(
+    entry: dict[str, Any], status_entry: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
+    """Normalize one oMLX model listing entry into Copilot metadata terms.
+
+    ``/v1/models`` reports ``max_model_len`` (the effective context window) and
+    ``/v1/models/status`` repeats it as ``max_context_window`` plus the
+    per-model generation ceiling ``max_tokens``. The status entry wins when
+    both are present because it reflects runtime overrides, and its
+    ``model_context_length`` is kept as the discovered native length for
+    diagnostics.
+
+    oMLX also accepts and forwards reasoning-effort strings, but it does not
+    advertise a per-model level set the way a hosted provider does, so no
+    reasoning efforts are derived; the existing user selection is left alone.
+    """
+    status_entry = status_entry or {}
+    context_window = status_entry.get("max_context_window")
+    if context_window is None:
+        context_window = status_entry.get("model_context_length")
+    if context_window is None:
+        context_window = entry.get("max_model_len")
+    if context_window is None:
+        context_window = entry.get("context_length")
+
+    max_output = status_entry.get("max_tokens")
+
+    return {
+        "model_id": entry.get("id") or status_entry.get("id"),
+        "name": entry.get("id") or status_entry.get("id"),
+        "max_context_window_tokens": context_window,
+        "max_output_tokens": max_output,
+        "supported_reasoning_efforts": None,
+        "default_reasoning_effort": None,
+        "supports_reasoning": False,
+        "context_source": (
+            "status.max_context_window"
+            if status_entry.get("max_context_window") is not None
+            else "status.model_context_length"
+            if status_entry.get("model_context_length") is not None
+            else "models.max_model_len"
+            if entry.get("max_model_len") is not None
+            else "unresolved"
+        ),
+        "native_context_window_tokens": status_entry.get("model_context_length"),
+        "model_type": status_entry.get("model_type") or entry.get("model_type"),
+        "loaded": status_entry.get("loaded"),
+    }
+
+
+def normalize_provider_model(
+    kind: str,
+    entry: dict[str, Any],
+    status: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Dispatch a raw catalog entry to the provider-specific normalizer."""
+    if kind == "omlx":
+        status_entry = (status or {}).get(str(entry.get("id")))
+        return normalize_omlx_model(entry, status_entry)
+    return normalize_openrouter_model(entry)
+
+
+def fetch_catalog(
+    kind: str,
+    catalog_url: Optional[str] = None,
+    provider: Optional[dict[str, Any]] = None,
+) -> dict[str, dict[str, Any]]:
     """Fetch and normalize a provider catalog, keyed by model id."""
     spec = PROVIDER_REGISTRY.get(kind)
     if spec is None:
         raise ValueError(f"Unsupported provider kind '{kind}'")
 
-    url = catalog_url or spec["catalog_url"]
-    payload = http_get_json(url)
+    url = provider_catalog_url(kind, provider=provider, catalog_url=catalog_url)
+    if not url:
+        raise ValueError(
+            f"No catalog URL could be resolved for provider kind '{kind}'"
+        )
+    headers = provider_request_headers(provider)
+    payload = http_get_json(url, headers=headers)
 
     entries = payload.get("data") if isinstance(payload, dict) else payload
     if not isinstance(entries, list):
         raise ValueError(f"Unexpected catalog payload from {url}")
 
+    status: dict[str, dict[str, Any]] = {}
+    status_path = spec.get("status_path")
+    if status_path:
+        if url.endswith(spec["catalog_path"]):
+            status_url = url[: -len(spec["catalog_path"])] + status_path
+        elif provider:
+            status_url = f"{provider_api_root(provider_base_url(provider))}{status_path}"
+        else:
+            status_url = None
+        status_payload = None
+        try:
+            if status_url:
+                status_payload = http_get_json(status_url, headers=headers)
+        except (OSError, ValueError):
+            # The status endpoint is an enrichment; a server that only speaks
+            # the OpenAI surface still yields usable ``max_model_len`` values.
+            status_payload = None
+        if isinstance(status_payload, dict):
+            for status_entry in status_payload.get("models") or []:
+                if isinstance(status_entry, dict) and status_entry.get("id"):
+                    status[str(status_entry["id"])] = status_entry
+
     catalog: dict[str, dict[str, Any]] = {}
     for entry in entries:
         if not isinstance(entry, dict) or not entry.get("id"):
             continue
-        catalog[str(entry["id"])] = normalize_openrouter_model(entry)
+        catalog[str(entry["id"])] = normalize_provider_model(kind, entry, status)
     return catalog
+
+
+def collect_catalogs(
+    providers: list[dict[str, Any]],
+    kinds: list[str],
+    catalog_url: Optional[str] = None,
+    catalog: Optional[dict[str, Any]] = None,
+) -> tuple[dict[str, dict[str, dict[str, Any]]], list[str]]:
+    """Fetch every needed provider catalog.
+
+    Public providers contribute one catalog keyed by provider kind. Providers
+    registered with ``base_url_params`` (local inference servers) contribute
+    one catalog per *provider* instead, keyed by provider id, because two
+    configured servers can expose different model sets under the same kind.
+
+    An unreachable local server is reported as a warning rather than raising:
+    a stopped oMLX instance must not block metadata repair for other providers.
+    """
+    catalogs: dict[str, dict[str, dict[str, Any]]] = {}
+    warnings: list[str] = []
+
+    for kind in kinds:
+        spec = PROVIDER_REGISTRY.get(kind)
+        if spec is None:
+            continue
+        if catalog is not None:
+            catalogs[kind] = catalog
+            continue
+        if not spec.get("base_url_params"):
+            catalogs[kind] = fetch_catalog(kind, catalog_url=catalog_url)
+            continue
+
+        by_base: dict[str, dict[str, dict[str, Any]]] = {}
+        for provider in providers:
+            if detect_provider_kind(provider) != kind:
+                continue
+            base = provider_base_url(provider)
+            if not base:
+                continue
+            if base not in by_base:
+                try:
+                    by_base[base] = fetch_catalog(
+                        kind, provider=provider, catalog_url=catalog_url
+                    )
+                except (OSError, ValueError) as exc:
+                    by_base[base] = {}
+                    warnings.append(
+                        f"Could not query {spec['display_name']} at "
+                        f"{provider_api_root(base)}: {exc}. Models on this provider "
+                        "will be reported as unresolved."
+                    )
+            catalogs[provider["id"]] = by_base[base]
+
+    return catalogs, warnings
+
+
+def catalog_for_model(
+    catalogs: dict[str, dict[str, dict[str, Any]]],
+    provider_id: str,
+    kind: str,
+) -> dict[str, dict[str, Any]]:
+    """Look up the catalog that applies to one model's provider."""
+    return catalogs.get(provider_id) or catalogs.get(kind) or {}
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +794,7 @@ def build_plan(
             entries.append(entry)
             continue
 
-        catalog = catalogs.get(kind) or {}
+        catalog = catalog_for_model(catalogs, model["provider_id"], kind)
         metadata = catalog.get(model["model_id"])
         if metadata is None:
             entry["status"] = "unresolved"
@@ -561,6 +809,11 @@ def build_plan(
             "provider_max_output_tokens": metadata.get("max_output_tokens"),
             "supported_reasoning_efforts": metadata.get("supported_reasoning_efforts"),
             "default_reasoning_effort": metadata.get("default_reasoning_effort"),
+            "context_source": metadata.get("context_source"),
+            "native_context_window_tokens": metadata.get(
+                "native_context_window_tokens"
+            ),
+            "model_type": metadata.get("model_type"),
         }
 
         changes: list[str] = []
@@ -626,6 +879,9 @@ def build_plan(
                 "type": provider["type"],
                 "base_url": provider["base_url"],
                 "provider_kind": detect_provider_kind(provider),
+                "catalog_url": provider_catalog_url(
+                    detect_provider_kind(provider), provider=provider
+                ),
             }
             for provider in providers
         ],
@@ -772,7 +1028,10 @@ def read_byok_config(
                 **provider,
                 "provider_kind": kind,
                 "provider_supported": kind is not None,
-                "catalog_url": spec["catalog_url"] if spec else None,
+                "catalog_url": provider_catalog_url(kind, provider=provider),
+                "derives_reasoning_efforts": bool(
+                    spec.get("reasoning_efforts") if spec else False
+                ),
                 "model_count": sum(
                     1 for model in models if model["provider_id"] == provider["id"]
                 ),
@@ -925,6 +1184,7 @@ def fetch_provider_metadata(
     catalog: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Fetch provider source-of-truth metadata for configured BYOK models."""
+    warnings: list[str] = []
     if catalog is not None:
         kinds = [provider] if provider else sorted(PROVIDER_REGISTRY)
         catalogs = {kind: catalog for kind in kinds}
@@ -955,9 +1215,9 @@ def fetch_provider_metadata(
                 )
             kinds = [provider]
 
-        catalogs = {}
-        for kind in kinds:
-            catalogs[kind] = fetch_catalog(kind, catalog_url=catalog_url)
+        catalogs, warnings = collect_catalogs(
+            providers, kinds, catalog_url=catalog_url
+        )
 
     resolved: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
@@ -968,7 +1228,9 @@ def fetch_provider_metadata(
         kind = detect_provider_kind(provider_entry) if provider_entry else None
         if kind is None:
             continue
-        metadata = (catalogs.get(kind) or {}).get(model["model_id"])
+        metadata = catalog_for_model(catalogs, model["provider_id"], kind).get(
+            model["model_id"]
+        )
         if metadata is None:
             missing.append(
                 {
@@ -991,13 +1253,14 @@ def fetch_provider_metadata(
 
     return {
         "providers_queried": kinds,
-        "catalog_sizes": {kind: len(entries) for kind, entries in catalogs.items()},
+        "catalog_sizes": {key: len(entries) for key, entries in catalogs.items()},
         "resolved": resolved,
         "missing": missing,
         "summary": {
             "resolved": len(resolved),
             "missing": len(missing),
         },
+        "warnings": warnings,
         "notes": [
             "Read `derived` for the values this plugin writes. `metadata` is the raw "
             "provider payload; its max_output_tokens is an aggregate provider maximum "
@@ -1038,8 +1301,11 @@ def plan_metadata_updates(
 
     if catalog is not None:
         catalogs = {kind: catalog for kind in kinds}
+        warnings: list[str] = []
     else:
-        catalogs = {kind: fetch_catalog(kind, catalog_url=catalog_url) for kind in kinds}
+        catalogs, warnings = collect_catalogs(
+            providers, kinds, catalog_url=catalog_url
+        )
 
     plan = build_plan(
         providers=providers,
@@ -1053,6 +1319,7 @@ def plan_metadata_updates(
     )
     plan["db_path"] = path
     plan["dry_run"] = True
+    plan["warnings"] = warnings
     return plan
 
 
@@ -1184,8 +1451,11 @@ def apply_metadata_updates(
     )
     if catalog is not None:
         catalogs = {kind: catalog for kind in kinds}
+        warnings: list[str] = []
     else:
-        catalogs = {kind: fetch_catalog(kind, catalog_url=catalog_url) for kind in kinds}
+        catalogs, warnings = collect_catalogs(
+            providers, kinds, catalog_url=catalog_url
+        )
 
     plan = build_plan(
         providers=providers,
@@ -1202,6 +1472,7 @@ def apply_metadata_updates(
         "db_path": path,
         "dry_run": dry_run,
         "plan": plan,
+        "warnings": warnings,
         "applied": {
             "models_updated": 0,
             "app_state_entries_updated": 0,
@@ -1382,10 +1653,14 @@ def get_provider_registry() -> dict[str, Any]:
         "providers": {
             kind: {
                 "display_name": spec["display_name"],
-                "catalog_url": spec["catalog_url"],
+                "catalog_url": spec.get("catalog_url"),
+                "catalog_path": spec.get("catalog_path"),
+                "status_path": spec.get("status_path"),
+                "derives_catalog_url_from": spec.get("base_url_params", []),
                 "endpoints_url_template": spec.get("endpoints_url_template"),
                 "match_hosts": spec.get("match_hosts", []),
                 "match_names": spec.get("match_names", []),
+                "reasoning_efforts": bool(spec.get("reasoning_efforts")),
                 "docs_url": spec.get("docs_url"),
             }
             for kind, spec in PROVIDER_REGISTRY.items()
@@ -1468,16 +1743,21 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "fetch_provider_metadata",
         "description": (
-            "Fetches authoritative context-window and reasoning-effort metadata from "
-            "the provider source-of-truth API (OpenRouter only for now) for every "
-            "configured BYOK model, and returns the values derived for Copilot."
+            "Fetches authoritative context-window metadata from each provider's "
+            "source of truth (OpenRouter's catalog, or a local oMLX server's "
+            "/v1/models and /v1/models/status) for every configured BYOK model, "
+            "and returns the values derived for Copilot. Reasoning-effort metadata "
+            "is only derived for providers that advertise a level set, so oMLX "
+            "models report none."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "provider": {
                     "type": "string",
-                    "description": "Optional provider kind to query, e.g. 'openrouter'.",
+                    "description": (
+                        "Optional provider kind to query: 'openrouter' or 'omlx'."
+                    ),
                 },
                 "db_path": {
                     "type": "string",

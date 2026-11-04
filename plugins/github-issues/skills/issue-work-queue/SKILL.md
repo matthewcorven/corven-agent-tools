@@ -20,6 +20,13 @@ Compute which GitHub issues are **ready to work on** versus **blocked**, from th
 - Raw GitHub queries (`gh issue view`, `gh pr view`, `gh pr list`, `gh issue list`) are **follow-up only** — permitted after the helper has identified the specific issue or PR to inspect.
 - Issue bodies' `## Depends On` and `## Blocked By` sections are the source of truth for readiness and ordering; issue titles are never used for readiness or prioritization.
 
+## Upgrading the plugin
+
+If this plugin was just upgraded, an MCP server or helper process started by an
+earlier version may still be running. A harness session that already has the
+server open keeps using the old tools; restart the AI harness (or force-quit
+the stale server process) before concluding the upgrade did not take effect.
+
 ## Consumer-project guidance
 
 For reliable use across coordinator sessions and spawned agents, add an equivalent repository-specific rule to the consuming project's `AGENTS.md` or `.github/copilot-instructions.md`. This makes the helper's precedence visible even when an agent is not actively reading this skill.

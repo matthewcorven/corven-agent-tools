@@ -17,6 +17,13 @@ This skill is the canonical source for how E2E tests are written, reported and
 retrieved. Repository-level instruction files should reference it rather than
 restate it.
 
+## Upgrading the plugin
+
+This plugin ships an MCP server. After an upgrade, a server process started by
+the previous version can still be running, and a harness session that already
+has it open keeps calling the old tools. Restart the AI harness (or force-quit
+the stale server process) before checking for new tools or behavior.
+
 ## 1. Tooling constraint
 
 **Playwright is the only permitted E2E UI automation tool.** Do not introduce

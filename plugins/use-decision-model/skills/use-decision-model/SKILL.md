@@ -187,3 +187,9 @@ read the typed result.
   with `output_tokens` of 3.
 - `probabilities` for `score` are keyed by **index strings** (`"0"`, `"1"`, ...), and `legend` maps
   index → label — easy to get backwards when parsing.
+
+## Upgrading the plugin
+
+The decision-model sender and its MCP surface are loaded per session. After an
+upgrade, restart the AI harness (or force-quit any stale server process) so the
+new version is the one actually called.

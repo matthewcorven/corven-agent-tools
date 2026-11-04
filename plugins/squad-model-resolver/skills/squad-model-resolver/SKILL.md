@@ -15,6 +15,13 @@ description: >-
 
 MANDATORY before spawning ANY Squad agent/sub-agent session via `task` when the target model is set, provider-qualified (`provider://…`), or non-default: call `resolve_for_agent` first, pass only the returned `model_id`, and run `verify_spawn` after. Never guess or hand-construct model IDs. If status is not `resolved`, stop and report; do not fall back or substitute.
 
+## Upgrading the plugin
+
+The resolver MCP server must be restarted after an upgrade. A harness that
+already has the server open keeps the old tool schemas and resolution rules;
+restart the harness (or force-quit the stale server process) before expecting
+the new version to resolve models.
+
 ## Pre-Approval Verification
 
 Before attempting invocation or spawning subagents, verify that `squad-model-resolver-*` tools are pre-approved in `.copilot/config.json` (under `tool_approvals` or `allowedTools`).

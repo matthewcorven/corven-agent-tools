@@ -6,10 +6,11 @@ description: >-
   levels — for example when compaction triggers too early, when the reasoning
   picker is missing or empty for an OpenRouter model, or when the user asks to
   sync, refresh, or repair BYOK model metadata. Reads the app database, fetches
-  authoritative values from the provider source-of-truth API, and applies them
-  interactively or automatically. USE FOR: BYOK context window, BYOK reasoning
-  effort, reasoning levels missing, compaction too aggressive, sync model
-  metadata, refresh BYOK models, OpenRouter model limits, provider_models
+  authoritative values from the provider source-of-truth API or a local oMLX
+  server, and applies them interactively or automatically. USE FOR: BYOK
+  context window, BYOK reasoning effort, reasoning levels missing, compaction
+  too aggressive, sync model metadata, refresh BYOK models, OpenRouter model
+  limits, oMLX model limits, local MLX context window, provider_models
   metadata. DO NOT USE FOR: GitHub Copilot CLI configuration (not yet
   supported), built-in Copilot models, adding or removing BYOK providers, or
   editing API keys.
@@ -26,10 +27,23 @@ own source of truth.
 ## Scope
 
 - **Supported target:** GitHub Copilot **desktop app** (`~/.copilot/data.db`).
-- **Supported providers:** OpenRouter only. Other providers are reported as
-  `unsupported_provider` and left untouched.
+- **Supported providers:** OpenRouter (public catalog) and a local **oMLX**
+  server (queried at the provider's configured base URL). Other providers are
+  reported as `unsupported_provider` and left untouched.
+- **Reasoning levels:** derived only from providers that advertise a level set.
+  oMLX accepts reasoning-effort values but does not publish a per-model level
+  set, so oMLX models are planned with no reasoning efforts and any existing
+  user selection is left alone. Say so instead of inventing levels.
 - **Not supported yet:** GitHub Copilot CLI. If the user asks for CLI support,
   say it is planned and stop — do not improvise a CLI write path.
+
+## Upgrading
+
+If you just updated this plugin, an MCP server process started by an earlier
+version may still be running. A harness that already has the server open keeps
+serving the old tools until it shuts that process down: restart the harness (or
+force-quit the stale server process) before expecting the new version's tools
+and behavior.
 
 ## Tools
 
@@ -44,6 +58,34 @@ own source of truth.
 
 If these tools are deferred, load them with `tool_search_tool` using the query
 `copilot-byok-metadata` before proceeding.
+
+## oMLX source
+
+oMLX is a local inference server, so its "catalog" is whatever server the
+provider's `baseUrl` points at. The server queries:
+
+- `GET <baseUrl>/v1/models` — `id` and `max_model_len` (the effective context
+  window, a vLLM-style extension).
+- `GET <baseUrl>/v1/models/status` — the same window as `max_context_window`,
+  plus `model_context_length` (discovered native length) and `max_tokens` (the
+  per-model generation ceiling). Status wins when both are present.
+
+oMLX resolves the effective window in this order: a per-model override, then
+the model's discovered native context (optionally clamped by an operator
+policy), then the oMLX app default. `provider_metadata.context_source` reports
+which tier supplied the value. If the status endpoint is unavailable the
+`/v1/models` value is used instead.
+
+A provider is treated as oMLX when its name contains "omlx" and it has a base
+URL. Providers without a matching registry entry stay `unsupported_provider`.
+
+## Upgrading the plugin
+
+This plugin ships an MCP server. After an upgrade, a server process started by
+the previous version can still be alive — a harness session that already has it
+open keeps calling the old tools and will not see new tools or behavior. Shut
+that instance down (restart the AI harness, or force-quit the stale `server.py`
+process) before concluding the upgrade did not take effect.
 
 ## Protocol
 
@@ -68,19 +110,28 @@ If these tools are deferred, load them with `tool_search_tool` using the query
    input only identifies the calling project and workspace for context; never
    claim the config is scoped to that workspace.
 
-2. **Plan.** Call `plan_metadata_updates`. This fetches the provider catalog and
+2. **Plan.** Call `plan_metadata_updates`. This queries every provider that has
+   a source of truth — OpenRouter's catalog, and each configured oMLX server at
+   its own `base URL + /v1/models` (enriched by `/v1/models/status`) — and
    returns a per-model diff with `status` of `update`, `unchanged`, `unresolved`,
-   or `unsupported_provider`.
+   or `unsupported_provider`. Read `warnings` too: an oMLX server that is not
+   running is reported there and its models come back `unresolved` rather than
+   failing the whole plan. Tell the user to start oMLX and re-run if that
+   happens.
 
 3. **Present.** Show the user a compact table of models with `status == "update"`:
    model id, proposed context window, proposed output budget, and reasoning
    levels. Read the numbers from `proposed` — never from `provider_metadata`.
    `provider_metadata.provider_max_output_tokens` is the provider's raw aggregate
    maximum (often 900k+), not the budget that gets written; showing it will
-   mislead the user. Mention `unresolved` models by name — those ids are absent
-   from the provider catalog and need the user's attention. Do not list
-   `unsupported_provider` models individually; summarize them as "N models on
-   providers without a source of truth".
+   mislead the user. For oMLX, `provider_metadata.context_source` says whether
+   the window came from the server's per-model override, the discovered model
+   native length, or the oMLX app default — mention it when the user asks where
+   the number came from. oMLX models have no reasoning levels: show that column
+   as "n/a (oMLX)" rather than listing invented values. Mention `unresolved`
+   models by name — those ids are absent from the provider catalog and need the
+   user's attention. Do not list `unsupported_provider` models individually;
+   summarize them as "N models on providers without a source of truth".
 
 4. **Decide.** Choose interactive or automatic per the rule below.
 

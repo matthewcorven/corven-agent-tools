@@ -275,14 +275,17 @@ class ReadByokConfigTest(unittest.TestCase):
             by_name["OpenRouter"]["catalog_url"],
             "https://openrouter.ai/api/v1/models",
         )
-        self.assertIsNone(by_name["oMLX"]["provider_kind"])
-        self.assertFalse(by_name["oMLX"]["provider_supported"])
+        self.assertEqual(by_name["oMLX"]["provider_kind"], "omlx")
+        self.assertTrue(by_name["oMLX"]["provider_supported"])
         self.assertEqual(
-            res["summary"]["providers_with_supported_source"], ["openrouter"]
+            by_name["oMLX"]["catalog_url"],
+            "http://127.0.0.1:8001/v1/models",
         )
         self.assertEqual(
-            res["summary"]["providers_without_supported_source"], ["oMLX"]
+            res["summary"]["providers_with_supported_source"],
+            ["omlx", "openrouter"],
         )
+        self.assertEqual(res["summary"]["providers_without_supported_source"], [])
 
     def test_workspace_path_resolves_project_and_workspace(self) -> None:
         res = self._read(workspace_path=self.worktree_path)
@@ -411,12 +414,24 @@ class ReadByokConfigTest(unittest.TestCase):
         )
 
     def test_limits_note_is_expected_when_no_patchable_provider(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO model_providers (id, name, type, settings_json) VALUES (?, ?, ?, ?)",
+            (
+                "unknown-provider",
+                "Some Other Server",
+                "custom",
+                json.dumps({"baseUrl": "http://127.0.0.1:9099/v1"}),
+            ),
+        )
+        conn.commit()
+        conn.close()
         self._seed_catalog(
             [
                 {
-                    "id": f"{LOCAL_PROVIDER_ID}/local-model",
+                    "id": "unknown-provider/local-model",
                     "name": "local-model",
-                    "providerId": LOCAL_PROVIDER_ID,
+                    "providerId": "unknown-provider",
                     "capabilities": {"supports": {"reasoningEffort": False}},
                 }
             ]
@@ -430,6 +445,28 @@ class ReadByokConfigTest(unittest.TestCase):
         )
         self.assertTrue(
             any("nothing to patch" in note for note in res["notes"]), res["notes"]
+        )
+
+    def test_omlx_models_are_patchable(self) -> None:
+        self._seed_catalog(
+            [
+                {
+                    "id": f"{LOCAL_PROVIDER_ID}/local-model",
+                    "name": "local-model",
+                    "providerId": LOCAL_PROVIDER_ID,
+                    "capabilities": {"supports": {"reasoningEffort": False}},
+                }
+            ]
+        )
+
+        res = self._read()
+        by_name = {p["name"]: p for p in res["providers"]}
+        self.assertEqual(by_name["oMLX"]["provider_kind"], "omlx")
+        self.assertTrue(by_name["oMLX"]["provider_supported"])
+        self.assertFalse(by_name["oMLX"]["derives_reasoning_efforts"])
+        self.assertTrue(
+            any("Run apply_metadata_updates" in note for note in res["notes"]),
+            res["notes"],
         )
 
     def test_missing_database_raises(self) -> None:

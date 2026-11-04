@@ -135,8 +135,15 @@ class DetectProviderKindTest(unittest.TestCase):
         provider = {"name": "OpenRouter", "base_url": "http://127.0.0.1:8001/v1"}
         self.assertEqual(server.detect_provider_kind(provider), "openrouter")
 
-    def test_returns_none_for_unknown_provider(self) -> None:
+    def test_matches_omlx_by_name_and_base_url(self) -> None:
         provider = {"name": "oMLX", "base_url": "http://127.0.0.1:8001/v1"}
+        self.assertEqual(server.detect_provider_kind(provider), "omlx")
+
+    def test_omlx_requires_a_base_url(self) -> None:
+        self.assertIsNone(server.detect_provider_kind({"name": "oMLX", "base_url": ""}))
+
+    def test_returns_none_for_unknown_provider(self) -> None:
+        provider = {"name": "Local Llama", "base_url": "http://127.0.0.1:8001/v1"}
         self.assertIsNone(server.detect_provider_kind(provider))
 
     def test_returns_none_for_empty_provider(self) -> None:
@@ -234,14 +241,56 @@ class BuildPlanTest(unittest.TestCase):
         self.assertIn("not present", entry["reason"])
 
     def test_unsupported_provider_when_no_registry_match(self) -> None:
+        providers = [
+            _provider("unknown", "Local Llama", "http://127.0.0.1:9099/v1"),
+        ]
         plan = server.build_plan(
-            providers=self.providers,
-            models=[_model("local", "some-local-model")],
+            providers=providers,
+            models=[_model("unknown", "some-local-model")],
             catalogs=self.catalogs,
         )
         entry = plan["entries"][0]
         self.assertEqual(entry["status"], "unsupported_provider")
         self.assertIn("openrouter", entry["reason"])
+        self.assertIn("omlx", entry["reason"])
+
+    def test_omlx_model_is_planned_from_its_own_catalog(self) -> None:
+        catalogs = {
+            "local": {
+                "flint-oQ4e": {
+                    "model_id": "flint-oQ4e",
+                    "max_context_window_tokens": 262144,
+                    "max_output_tokens": 32768,
+                    "supported_reasoning_efforts": None,
+                    "default_reasoning_effort": None,
+                }
+            }
+        }
+        plan = server.build_plan(
+            providers=self.providers,
+            models=[_model("local", "flint-oQ4e")],
+            catalogs=catalogs,
+        )
+        entry = plan["entries"][0]
+        self.assertEqual(entry["status"], "update")
+        self.assertEqual(entry["changes"], ["max_prompt_tokens", "max_output_tokens"])
+        self.assertEqual(entry["proposed"]["max_prompt_tokens"], 229376)
+        self.assertEqual(entry["proposed"]["max_output_tokens"], 32768)
+        self.assertIsNone(entry["proposed"]["supported_reasoning_efforts"])
+
+    def test_omlx_model_missing_from_its_server_catalog_is_unresolved(self) -> None:
+        catalogs = {
+            "openrouter": self.catalogs["openrouter"],
+            "local": {"other-model": {"model_id": "other-model"}},
+        }
+        plan = server.build_plan(
+            providers=self.providers,
+            models=[_model("local", "flint-oQ4e")],
+            catalogs=catalogs,
+        )
+        entry = plan["entries"][0]
+        self.assertEqual(entry["status"], "unresolved")
+        self.assertEqual(entry["provider_kind"], "omlx")
 
     def test_model_ids_filter_accepts_model_id_and_state_key(self) -> None:
         models = [_model("or", "vendor/model"), _model("or", "vendor/other")]
@@ -311,7 +360,186 @@ class BuildPlanTest(unittest.TestCase):
         )
         kinds = {p["name"]: p["provider_kind"] for p in plan["providers"]}
         self.assertEqual(kinds["OpenRouter"], "openrouter")
-        self.assertIsNone(kinds["oMLX"])
+        self.assertEqual(kinds["oMLX"], "omlx")
+        by_name = {p["name"]: p for p in plan["providers"]}
+        self.assertEqual(
+            by_name["OpenRouter"]["catalog_url"],
+            "https://openrouter.ai/api/v1/models",
+        )
+        self.assertEqual(
+            by_name["oMLX"]["catalog_url"], "http://127.0.0.1:8001/v1/models"
+        )
+
+
+class CollectCatalogsTest(unittest.TestCase):
+    def test_unreachable_local_server_warns_instead_of_raising(self) -> None:
+        providers = [
+            _provider("or", "OpenRouter", "https://openrouter.ai/api/v1"),
+            _provider("local", "oMLX", "http://127.0.0.1:9/v1"),
+        ]
+        original = server.fetch_catalog
+
+        def fake_fetch(kind, catalog_url=None, provider=None):
+            if kind == "omlx":
+                raise OSError("connection refused")
+            return {"vendor/model": {"model_id": "vendor/model"}}
+
+        server.fetch_catalog = fake_fetch
+        try:
+            catalogs, warnings = server.collect_catalogs(
+                providers, ["openrouter", "omlx"]
+            )
+        finally:
+            server.fetch_catalog = original
+
+        self.assertIn("openrouter", catalogs)
+        self.assertEqual(catalogs["local"], {})
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("oMLX", warnings[0])
+        self.assertIn("http://127.0.0.1:9/v1", warnings[0])
+
+    def test_local_catalogs_are_keyed_per_provider(self) -> None:
+        providers = [
+            _provider("a", "oMLX", "http://127.0.0.1:8001/v1"),
+            _provider("b", "oMLX", "http://127.0.0.1:8002/v1"),
+        ]
+        original = server.fetch_catalog
+        seen: list[str] = []
+
+        def fake_fetch(kind, catalog_url=None, provider=None):
+            seen.append(provider["base_url"])
+            return {"m": {"model_id": "m"}}
+
+        server.fetch_catalog = fake_fetch
+        try:
+            catalogs, warnings = server.collect_catalogs(providers, ["omlx"])
+        finally:
+            server.fetch_catalog = original
+
+        self.assertEqual(sorted(seen), ["http://127.0.0.1:8001/v1", "http://127.0.0.1:8002/v1"])
+        self.assertEqual(set(catalogs), {"a", "b"})
+        self.assertEqual(warnings, [])
+
+
+class NormalizeOmlxModelTest(unittest.TestCase):
+    def test_status_wins_over_listing_for_effective_context(self) -> None:
+        entry = {"id": "Qwen3.8-27B-4bit", "max_model_len": 262144}
+        status = {
+            "id": "Qwen3.8-27B-4bit",
+            "model_context_length": 262144,
+            "max_context_window": 128000,
+            "max_tokens": 32768,
+            "model_type": "llm",
+            "loaded": True,
+        }
+        result = server.normalize_omlx_model(entry, status)
+        self.assertEqual(result["max_context_window_tokens"], 128000)
+        self.assertEqual(result["max_output_tokens"], 32768)
+        self.assertEqual(result["context_source"], "status.max_context_window")
+        self.assertEqual(result["native_context_window_tokens"], 262144)
+        self.assertTrue(result["loaded"])
+        self.assertEqual(result["model_type"], "llm")
+
+    def test_falls_back_to_listing_max_model_len(self) -> None:
+        result = server.normalize_omlx_model({"id": "flint-oQ4e", "max_model_len": 262144})
+        self.assertEqual(result["max_context_window_tokens"], 262144)
+        self.assertEqual(result["context_source"], "models.max_model_len")
+        self.assertIsNone(result["max_output_tokens"])
+
+    def test_reports_unresolved_when_no_context_is_advertised(self) -> None:
+        result = server.normalize_omlx_model({"id": "MarkItDown"})
+        self.assertIsNone(result["max_context_window_tokens"])
+        self.assertEqual(result["context_source"], "unresolved")
+
+    def test_never_derives_reasoning_efforts(self) -> None:
+        result = server.normalize_omlx_model(
+            {"id": "Qwen3.8-27B-4bit", "max_model_len": 262144},
+            {"reasoning_efforts": ["low", "high"], "max_tokens": 4096},
+        )
+        self.assertIsNone(result["supported_reasoning_efforts"])
+        self.assertIsNone(result["default_reasoning_effort"])
+        self.assertFalse(result["supports_reasoning"])
+
+
+class ProviderUrlTest(unittest.TestCase):
+    def test_api_root_adds_v1_once(self) -> None:
+        self.assertEqual(
+            server.provider_api_root("http://127.0.0.1:8001"), "http://127.0.0.1:8001/v1"
+        )
+        self.assertEqual(
+            server.provider_api_root("http://127.0.0.1:8001/v1/"),
+            "http://127.0.0.1:8001/v1",
+        )
+
+    def test_omlx_catalog_url_comes_from_the_provider_base_url(self) -> None:
+        provider = {"name": "oMLX", "base_url": "http://127.0.0.1:8001/v1"}
+        self.assertEqual(
+            server.provider_catalog_url("omlx", provider=provider),
+            "http://127.0.0.1:8001/v1/models",
+        )
+
+    def test_omlx_catalog_url_is_none_without_a_provider(self) -> None:
+        self.assertIsNone(server.provider_catalog_url("omlx"))
+
+    def test_public_provider_uses_the_registry_url(self) -> None:
+        self.assertEqual(
+            server.provider_catalog_url("openrouter"),
+            "https://openrouter.ai/api/v1/models",
+        )
+
+
+class FetchOmlxCatalogTest(unittest.TestCase):
+    def test_merges_status_into_the_listing(self) -> None:
+        provider = _provider("local", "oMLX", "http://127.0.0.1:8001/v1")
+        original = server.http_get_json
+        requested: list[str] = []
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            requested.append(url)
+            if url.endswith("/models/status"):
+                return {
+                    "models": [
+                        {
+                            "id": "flint-oQ4e",
+                            "model_context_length": 262144,
+                            "max_context_window": 131072,
+                            "max_tokens": 32768,
+                            "model_type": "vlm",
+                        }
+                    ]
+                }
+            return {"object": "list", "data": [{"id": "flint-oQ4e", "max_model_len": 262144}]}
+
+        server.http_get_json = fake_get
+        try:
+            catalog = server.fetch_catalog("omlx", provider=provider)
+        finally:
+            server.http_get_json = original
+
+        self.assertEqual(
+            requested,
+            ["http://127.0.0.1:8001/v1/models", "http://127.0.0.1:8001/v1/models/status"],
+        )
+        self.assertEqual(catalog["flint-oQ4e"]["max_context_window_tokens"], 131072)
+        self.assertEqual(catalog["flint-oQ4e"]["max_output_tokens"], 32768)
+
+    def test_status_failure_falls_back_to_the_listing(self) -> None:
+        provider = _provider("local", "oMLX", "http://127.0.0.1:8001")
+        original = server.http_get_json
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            if url.endswith("/models/status"):
+                raise OSError("no status endpoint")
+            return {"data": [{"id": "m", "max_model_len": 65536}]}
+
+        server.http_get_json = fake_get
+        try:
+            catalog = server.fetch_catalog("omlx", provider=provider)
+        finally:
+            server.http_get_json = original
+
+        self.assertEqual(catalog["m"]["max_context_window_tokens"], 65536)
+        self.assertEqual(catalog["m"]["context_source"], "models.max_model_len")
 
 
 class ParseEffortsTest(unittest.TestCase):

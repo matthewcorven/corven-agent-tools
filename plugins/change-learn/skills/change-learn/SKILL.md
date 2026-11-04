@@ -41,6 +41,13 @@ then per-area design, then per-file detail — never the reverse.
    PlantUML only when the user asks for it or the repo config sets
    `"deck": {"diagrams": "plantuml"}`.
 
+## Upgrading the plugin
+
+The `change-learn` MCP host must be restarted after an upgrade. A host process
+an AI harness already has open keeps serving the old tools, so close/restart
+that harness (or force-quit the stale host process) before checking for new or
+changed MCP tools.
+
 ## Workflow
 
 ### Step 1 — analyze the change window (token-efficient)
