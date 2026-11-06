@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -1034,6 +1035,139 @@ class ApplyVisionFlagsTest(unittest.TestCase):
         )
         self.assertEqual(result["applied"]["vision_flags_written"], 1)
         self.assertEqual(self._rows()["vendor/vlm"]["supports_vision"], 1)
+
+
+
+class ApplyNoReasoningEvidenceTest(unittest.TestCase):
+    """No definitive reasoning evidence must never clear stored metadata.
+
+    A 401 from oMLX's admin surface is absence of evidence, not evidence that
+    the model lost its effort vocabulary. The ``provider_models`` column and
+    both catalog-cache arrays must survive such a run untouched.
+    """
+
+    PREVIOUS_EFFORTS = ["low", "medium", "high"]
+
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmpdir.name, "data.db")
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(SCHEMA)
+        conn.execute(
+            "INSERT INTO model_providers (id, name, type, settings_json) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                LOCAL_PROVIDER_ID,
+                "oMLX",
+                "ollama",
+                json.dumps(
+                    {
+                        "baseUrl": "http://127.0.0.1:8001/v1",
+                        "authKind": "api_key",
+                        "apiKey": "REALKEY",
+                    }
+                ),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO provider_models (id, provider_id, model_id, display_name, "
+            "max_prompt_tokens, max_output_tokens, supported_reasoning_efforts) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "row-flint",
+                LOCAL_PROVIDER_ID,
+                "flint-oQ4e",
+                "flint-oQ4e",
+                99328,
+                32768,
+                json.dumps(self.PREVIOUS_EFFORTS),
+            ),
+        )
+        cache = {
+            "accountId": "acct",
+            "models": [
+                {
+                    "id": "flint-oQ4e",
+                    "providerId": LOCAL_PROVIDER_ID,
+                    "capabilities": {
+                        "limits": {
+                            "max_prompt_tokens": 99328,
+                            "max_output_tokens": 32768,
+                            "max_context_window_tokens": 131072,
+                        },
+                        "supports": {"reasoningEffort": True},
+                    },
+                    "supportedReasoningEfforts": list(self.PREVIOUS_EFFORTS),
+                    "defaultReasoningEffort": "low",
+                }
+            ],
+        }
+        for key in server.CATALOG_CACHE_KEYS:
+            conn.execute(
+                "INSERT INTO app_state (key, value) VALUES (?, ?)",
+                (key, json.dumps(cache)),
+            )
+        conn.commit()
+        conn.close()
+
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
+
+    def _install_admin_401(self) -> None:
+        original = server.http_get_json
+        self.addCleanup(setattr, server, "http_get_json", original)
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            if url.endswith("/admin/api/models"):
+                raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+            if url.endswith("/models/status"):
+                return {"models": [{"id": "flint-oQ4e", "model_type": "vlm"}]}
+            return {"data": [{"id": "flint-oQ4e", "max_model_len": 131072}]}
+
+        server.http_get_json = fake_get
+
+    def test_401_run_leaves_stored_efforts_and_caches_untouched(self) -> None:
+        self._install_admin_401()
+        result = server.apply_metadata_updates(
+            db_path=self.db_path, dry_run=False, backup=False
+        )
+        self.assertTrue(result["dry_run"] is False)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT supported_reasoning_efforts FROM provider_models "
+                "WHERE id = 'row-flint'"
+            ).fetchone()
+            caches = {
+                key: json.loads(
+                    conn.execute(
+                        "SELECT value FROM app_state WHERE key = ?", (key,)
+                    ).fetchone()["value"]
+                )
+                for key in server.CATALOG_CACHE_KEYS
+            }
+        finally:
+            conn.close()
+
+        self.assertEqual(
+            json.loads(row["supported_reasoning_efforts"]), self.PREVIOUS_EFFORTS
+        )
+        for key, cache in caches.items():
+            entry = cache["models"][0]
+            self.assertEqual(
+                entry["supportedReasoningEfforts"], self.PREVIOUS_EFFORTS, key
+            )
+            self.assertEqual(entry["defaultReasoningEffort"], "low", key)
+            self.assertTrue(entry["capabilities"]["supports"]["reasoningEffort"], key)
+
+    def test_401_plan_proposes_no_reasoning_change(self) -> None:
+        self._install_admin_401()
+        plan = server.plan_metadata_updates(db_path=self.db_path)
+        entry = plan["entries"][0]
+        self.assertNotIn("supported_reasoning_efforts", entry["changes"])
+        self.assertFalse(entry["proposed"]["reasoning_efforts_definitive"])
 
 
 if __name__ == "__main__":

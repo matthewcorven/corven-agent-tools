@@ -185,7 +185,16 @@ def connect(db_path: str, readonly: bool = True) -> sqlite3.Connection:
     return conn
 
 
-def load_providers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def load_providers(
+    conn: sqlite3.Connection, redact: bool = True
+) -> list[dict[str, Any]]:
+    """Load configured BYOK providers.
+
+    ``redact`` defaults to ``True`` because every tool result must show
+    ``<redacted>`` credentials. Internal call sites that need to *use* the
+    provider (the oMLX admin fetch) pass ``redact=False`` and must never place
+    the returned ``settings`` in a tool result, plan, warning, or exception.
+    """
     rows = conn.execute(
         "SELECT id, name, type, settings_json, account_id FROM model_providers ORDER BY name"
     ).fetchall()
@@ -209,7 +218,7 @@ def load_providers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "wire_api": settings.get("wireApi"),
                 "auth_kind": settings.get("authKind"),
                 "account_id": row["account_id"],
-                "settings": redact_settings(settings),
+                "settings": redact_settings(settings) if redact else dict(settings),
             }
         )
     return providers
@@ -570,6 +579,9 @@ def normalize_openrouter_model(entry: dict[str, Any]) -> dict[str, Any]:
         "supported_reasoning_efforts": efforts,
         "default_reasoning_effort": default_effort,
         "supports_reasoning": efforts is not None,
+        # OpenRouter declares its effort vocabulary authoritatively: an empty
+        # or absent list means the model has no efforts, not "unknown".
+        "reasoning_efforts_definitive": True,
         "supports_vision": supports_vision,
         "vision_media_types": media_types,
         "vision_source": vision_source,
@@ -608,6 +620,12 @@ def derive_copilot_limits(metadata: dict[str, Any]) -> dict[str, Any]:
         "max_prompt_tokens": max_prompt,
         "max_output_tokens": max_output,
         "supported_reasoning_efforts": metadata.get("supported_reasoning_efforts"),
+        # True only when the provider gave definitive effort evidence. ``None``
+        # means "unknown", which tells the plan to propose no reasoning change
+        # rather than clearing metadata that is already stored.
+        "reasoning_efforts_definitive": metadata.get(
+            "reasoning_efforts_definitive", True
+        ),
         # Vision is tri-state: True (definitive provider evidence), False
         # (provider declared the model text-only), or None (unknown). Only True
         # is ever written; see ``build_plan``.
@@ -739,6 +757,10 @@ def normalize_omlx_model(
 
     efforts: Optional[list[str]] = None
     default_effort: Optional[str] = None
+    # True only when the provider gave definitive reasoning evidence. Without
+    # it (no admin access, unknown/untrusted model type) the plan must propose
+    # no reasoning change at all rather than clearing what is already stored.
+    efforts_known = False
     reasoning_levels: Optional[list[str]] = None
     thinking_default = None
     if is_omlx_reasoning_model_type(
@@ -751,6 +773,7 @@ def normalize_omlx_model(
     ):
         efforts = _copilot_efforts(admin_entry.get("reasoning_effort_options"))
         if efforts is not None:
+            efforts_known = True
             candidate = admin_entry.get("reasoning_effort_default")
             if candidate is not None:
                 candidate = str(candidate)
@@ -774,6 +797,7 @@ def normalize_omlx_model(
         "supported_reasoning_efforts": efforts,
         "default_reasoning_effort": default_effort,
         "supports_reasoning": efforts is not None,
+        "reasoning_efforts_definitive": efforts_known,
         "reasoning_levels": reasoning_levels,
         "thinking_default": thinking_default,
         "supports_vision": supports_vision,
@@ -818,7 +842,9 @@ def fetch_omlx_admin_models(base_url: str, api_key: Optional[str]) -> dict[str, 
     only accepts the oMLX main key: a sub key gets a 401. Every failure mode
     (401/404, connection failure, malformed payload) is silent and returns an
     empty mapping so callers fall back to ``/v1/models/status``. The key is
-    never logged; it only travels in the request header.
+    passed in by the caller from unredacted provider settings; it is never
+    logged, never returned, and never included in an error message — it only
+    travels in the request header.
     """
     root = (base_url or "").strip().rstrip("/")
     if root.endswith("/v1"):
@@ -1050,6 +1076,9 @@ def build_plan(
             "provider_max_output_tokens": metadata.get("max_output_tokens"),
             "supported_reasoning_efforts": metadata.get("supported_reasoning_efforts"),
             "default_reasoning_effort": metadata.get("default_reasoning_effort"),
+            "reasoning_efforts_definitive": metadata.get(
+                "reasoning_efforts_definitive", True
+            ),
             "context_source": metadata.get("context_source"),
             "native_context_window_tokens": metadata.get(
                 "native_context_window_tokens"
@@ -1079,7 +1108,8 @@ def build_plan(
             proposed["max_output_tokens"] != model["max_output_tokens"]
         ):
             changes.append("max_output_tokens")
-        if not _efforts_equal(
+        efforts_indeterminate = not proposed.get("reasoning_efforts_definitive", True)
+        if not efforts_indeterminate and not _efforts_equal(
             model["supported_reasoning_efforts"], proposed["supported_reasoning_efforts"]
         ):
             changes.append("supported_reasoning_efforts")
@@ -1467,7 +1497,9 @@ def fetch_provider_metadata(
             raise FileNotFoundError(f"Copilot app database not found at {path}")
         conn = connect(path, readonly=True)
         try:
-            providers = load_providers(conn)
+            # Raw settings only so the oMLX admin fetch can authenticate; this
+            # provider list never reaches a tool result or the plan.
+            providers = load_providers(conn, redact=False)
             models = load_models(conn)
         finally:
             conn.close()
@@ -1555,7 +1587,7 @@ def plan_metadata_updates(
 
     conn = connect(path, readonly=True)
     try:
-        providers = load_providers(conn)
+        providers = load_providers(conn, redact=False)
         models = load_models(conn)
         reasoning_state = load_app_state(conn, APP_STATE_REASONING_KEY) or {}
         context_tier_state = load_app_state(conn, APP_STATE_CONTEXT_TIER_KEY) or {}
@@ -1708,24 +1740,25 @@ def _patch_catalog_cache(
         if not isinstance(supports, dict):
             supports = {}
             capabilities["supports"] = supports
-        efforts = update.get("supported_reasoning_efforts")
-        if supports.get("reasoningEffort") != bool(efforts):
-            supports["reasoningEffort"] = bool(efforts)
-            changed = True
-        if efforts:
-            if entry.get("supportedReasoningEfforts") != list(efforts):
-                entry["supportedReasoningEfforts"] = list(efforts)
+        if update.get("patch_reasoning", True):
+            efforts = update.get("supported_reasoning_efforts")
+            if supports.get("reasoningEffort") != bool(efforts):
+                supports["reasoningEffort"] = bool(efforts)
                 changed = True
-            default_effort = update.get("default_reasoning_effort")
-            if default_effort:
-                if entry.get("defaultReasoningEffort") != default_effort:
-                    entry["defaultReasoningEffort"] = default_effort
+            if efforts:
+                if entry.get("supportedReasoningEfforts") != list(efforts):
+                    entry["supportedReasoningEfforts"] = list(efforts)
                     changed = True
-        else:
-            for stale_key in ("supportedReasoningEfforts", "defaultReasoningEffort"):
-                if stale_key in entry:
-                    entry.pop(stale_key, None)
-                    changed = True
+                default_effort = update.get("default_reasoning_effort")
+                if default_effort:
+                    if entry.get("defaultReasoningEffort") != default_effort:
+                        entry["defaultReasoningEffort"] = default_effort
+                        changed = True
+            else:
+                for stale_key in ("supportedReasoningEfforts", "defaultReasoningEffort"):
+                    if stale_key in entry:
+                        entry.pop(stale_key, None)
+                        changed = True
 
         # Vision is written only from definitive provider evidence. A model the
         # provider does not declare as vision-capable keeps whatever the cache
@@ -1768,7 +1801,7 @@ def apply_metadata_updates(
 
     conn = connect(path, readonly=True)
     try:
-        providers = load_providers(conn)
+        providers = load_providers(conn, redact=False)
         models = load_models(conn)
         reasoning_state = load_app_state(conn, APP_STATE_REASONING_KEY) or {}
         context_tier_state = load_app_state(conn, APP_STATE_CONTEXT_TIER_KEY) or {}
@@ -1834,6 +1867,12 @@ def apply_metadata_updates(
             ),
             "default_reasoning_effort": (entry.get("provider_metadata") or {}).get(
                 "default_reasoning_effort"
+            ),
+            # With no definitive reasoning evidence the row is untouched, so
+            # the cache must be left alone too: passing an explicit ``False``
+            # here would wipe an existing effort list on a single 401 run.
+            "patch_reasoning": (entry.get("proposed") or {}).get(
+                "reasoning_efforts_definitive", True
             ),
         }
         for entry in plan["entries"]
@@ -1909,10 +1948,21 @@ def apply_metadata_updates(
                 params: tuple[Any, ...] = (
                     proposed["max_prompt_tokens"],
                     proposed["max_output_tokens"],
-                    None
-                    if proposed["supported_reasoning_efforts"] is None
-                    else json.dumps(proposed["supported_reasoning_efforts"]),
                 )
+                # With no definitive reasoning evidence the column keeps its
+                # value; only an authoritative provider list (or an explicit
+                # empty one, for providers that declare efforts themselves)
+                # may rewrite it.
+                reasoning_assignment = ""
+                if proposed.get("reasoning_efforts_definitive", True):
+                    reasoning_assignment = (
+                        ",\n                        supported_reasoning_efforts = ?"
+                    )
+                    params += (
+                        None
+                        if proposed["supported_reasoning_efforts"] is None
+                        else json.dumps(proposed["supported_reasoning_efforts"]),
+                    )
                 if vision_assignment:
                     params += (vision_flag,)
                 params += (entry["row_id"],)
@@ -1920,8 +1970,8 @@ def apply_metadata_updates(
                     f"""
                     UPDATE provider_models
                     SET max_prompt_tokens = COALESCE(?, max_prompt_tokens),
-                        max_output_tokens = COALESCE(?, max_output_tokens),
-                        supported_reasoning_efforts = ?{vision_assignment},
+                        max_output_tokens = COALESCE(?, max_output_tokens)
+                        {reasoning_assignment}{vision_assignment},
                         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                     WHERE id = ?
                     """,

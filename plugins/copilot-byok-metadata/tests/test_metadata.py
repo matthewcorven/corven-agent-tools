@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Unit tests for the pure metadata-mapping functions in the server."""
 
+import json
+import os
+import sqlite3
 import sys
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
@@ -10,6 +14,10 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 import server  # noqa: E402
+
+#: Fake key used by the pure-function tests below. It is only passed in by
+#: callers; the tests that need a real DB row seed one instead.
+TEST_API_KEY = "test-api-key"
 
 
 class NormalizeOpenRouterModelTest(unittest.TestCase):
@@ -1055,6 +1063,165 @@ class ParseEffortsTest(unittest.TestCase):
 
     def test_non_list_returns_none(self) -> None:
         self.assertIsNone(server.parse_efforts('{"low": true}'))
+
+
+#: Minimal schema matching what the server reads. Deliberately seeded with a
+#: real ``settings_json.apiKey``: the fabricated ``_provider(api_key=...)``
+#: dicts used by the pure-function tests cannot be produced by any real code
+#: path, so they can never prove the key reaches the wire.
+TEMP_DB_SCHEMA = """
+CREATE TABLE model_providers (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'openai',
+    settings_json TEXT,
+    account_id TEXT
+);
+CREATE TABLE provider_models (
+    id TEXT PRIMARY KEY NOT NULL,
+    provider_id TEXT NOT NULL REFERENCES model_providers(id) ON DELETE CASCADE,
+    model_id TEXT NOT NULL,
+    wire_model TEXT,
+    display_name TEXT NOT NULL,
+    max_prompt_tokens INTEGER,
+    max_output_tokens INTEGER,
+    supported_reasoning_efforts TEXT,
+    supports_vision INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (provider_id, model_id)
+);
+CREATE TABLE app_state (
+    key TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+"""
+
+
+class _TempDbTestCase(unittest.TestCase):
+    """Base class that seeds a real oMLX provider row into a temp database."""
+
+    API_KEY = "REALKEY"
+
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmpdir.name, "data.db")
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(TEMP_DB_SCHEMA)
+        conn.execute(
+            "INSERT INTO model_providers (id, name, type, settings_json) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                "local",
+                "oMLX",
+                "ollama",
+                json.dumps(
+                    {
+                        "baseUrl": "http://127.0.0.1:8001/v1",
+                        "authKind": "api_key",
+                        "apiKey": self.API_KEY,
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
+
+    def _admin_payload(self) -> dict:
+        return {
+            "models": [
+                {
+                    "id": "flint-oQ4e",
+                    "model_type": "vlm",
+                    "reasoning_effort_options": [
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max",
+                    ],
+                    "reasoning_effort_default": "low",
+                }
+            ]
+        }
+
+
+class ProviderKeyOnTheWireTest(_TempDbTestCase):
+    """The provider key must reach the admin request from a real DB row."""
+
+    def test_real_db_key_is_sent_as_a_bearer_header(self) -> None:
+        conn = server.connect(self.db_path, readonly=True)
+        try:
+            providers = server.load_providers(conn, redact=False)
+        finally:
+            conn.close()
+        self.assertEqual(
+            providers[0]["settings"]["apiKey"], "REALKEY",
+            "the internal loader must expose the usable key",
+        )
+
+        seen: list[tuple[str, dict]] = []
+        original = server.http_get_json
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            seen.append((url, dict(headers or {})))
+            if url.endswith("/admin/api/models"):
+                return self._admin_payload()
+            if url.endswith("/models/status"):
+                return {"models": [{"id": "flint-oQ4e", "model_type": "vlm"}]}
+            return {"data": [{"id": "flint-oQ4e", "max_model_len": 131072}]}
+
+        server.http_get_json = fake_get
+        try:
+            catalog = server.collect_catalogs(providers, ["omlx"])[0]["local"]
+        finally:
+            server.http_get_json = original
+
+        admin_headers = [
+            headers
+            for url, headers in seen
+            if url.endswith("/admin/api/models")
+        ]
+        self.assertEqual(len(admin_headers), 1)
+        self.assertEqual(
+            admin_headers[0].get("Authorization"), "Bearer REALKEY"
+        )
+        self.assertEqual(
+            catalog["flint-oQ4e"]["supported_reasoning_efforts"],
+            ["low", "medium", "high", "xhigh", "max"],
+        )
+        self.assertEqual(catalog["flint-oQ4e"]["default_reasoning_effort"], "low")
+
+    def test_default_loader_redacts_the_key(self) -> None:
+        conn = server.connect(self.db_path, readonly=True)
+        try:
+            providers = server.load_providers(conn)
+        finally:
+            conn.close()
+        self.assertEqual(providers[0]["settings"]["apiKey"], "<redacted>")
+
+        original = server.http_get_json
+        seen: list[dict] = []
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            if url.endswith("/admin/api/models"):
+                seen.append(dict(headers or {}))
+            if url.endswith("/models/status"):
+                return {"models": [{"id": "flint-oQ4e", "model_type": "vlm"}]}
+            return {"data": [{"id": "flint-oQ4e", "max_model_len": 131072}]}
+
+        server.http_get_json = fake_get
+        try:
+            server.collect_catalogs(providers, ["omlx"])
+        finally:
+            server.http_get_json = original
+
+        # A redacted value must never be sent: it would be a fake credential.
+        self.assertEqual(len(seen), 1)
+        self.assertIsNone(seen[0].get("Authorization"))
+        self.assertNotIn("<redacted>", json.dumps(seen))
 
 
 if __name__ == "__main__":
