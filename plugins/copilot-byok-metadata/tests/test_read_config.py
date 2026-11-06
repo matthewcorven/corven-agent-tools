@@ -464,6 +464,7 @@ class ReadByokConfigTest(unittest.TestCase):
         self.assertEqual(by_name["oMLX"]["provider_kind"], "omlx")
         self.assertTrue(by_name["oMLX"]["provider_supported"])
         self.assertFalse(by_name["oMLX"]["derives_reasoning_efforts"])
+        self.assertEqual(by_name["oMLX"]["reasoning_efforts_mode"], "conditional")
         self.assertTrue(
             any("Run apply_metadata_updates" in note for note in res["notes"]),
             res["notes"],

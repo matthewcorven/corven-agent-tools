@@ -12,8 +12,10 @@ Two provider sources are wired up:
 * ``omlx`` — a local oMLX server's OpenAI-compatible ``/v1/models`` listing,
   enriched by ``/v1/models/status``, which reports the *effective* context
   window (per-model override, discovered model native length, or the oMLX
-  app default) and the per-model generation ceiling. oMLX does not expose
-  Copilot-style reasoning levels, so no reasoning efforts are derived.
+  app default) and the per-model generation ceiling. Reasoning efforts come
+  from ``/admin/api/models`` (which publishes the exact Copilot level
+  vocabulary), falling back to the coarse ``reasoning_levels`` toggle list in
+  ``/v1/models/status``, and finally to no reasoning metadata at all.
 
 The server is deliberately stdlib-only and speaks raw JSON-RPC 2.0 over
 stdio, matching the other plugins in this repository.
@@ -72,6 +74,19 @@ INPUT_MODALITY_MEDIA_TYPES: dict[str, tuple[str, ...]] = {
 
 #: oMLX model/engine types that denote a vision-language model.
 OMLX_VISION_MODEL_TYPES = ("vlm",)
+
+#: oMLX admin path that publishes per-model reasoning metadata. It sits on the
+#: server root, not under the OpenAI-compatible ``/v1`` API root.
+OMLX_ADMIN_MODELS_PATH = "/admin/api/models"
+
+#: oMLX model/engine types whose reasoning metadata is trustworthy.
+#:
+#: ``/admin/api/models`` returns the same server-wide ``reasoning_effort_options``
+#: for every model, including rerankers and TTS engines, so the list is a server
+#: default rather than per-model truth. Reasoning is therefore only applied to
+#: types that run chat completions. This is the single gate issue #4 will extend
+#: into a full non-chat exclusion list.
+OMLX_REASONING_MODEL_TYPES = ("vlm", "llm", "text")
 
 #: Ceiling applied to provider-reported output budgets. The Copilot app's own
 #: built-in catalog never exceeds 128000 output tokens, while some providers
@@ -133,7 +148,15 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         "base_url_params": ["base_url"],
         "match_names": ["omlx"],
         "docs_url": "https://github.com/jundot/omlx/blob/main/docs/admin-api.md",
-        "reasoning_efforts": False,
+        # The admin surface publishes Copilot-shaped levels, but only for the
+        # server's main key; status levels alone have no Copilot vocabulary.
+        "reasoning_efforts": "conditional",
+        "reasoning_effort_fallback": (
+            "/admin/api/models reasoning_effort_options -> "
+            "/v1/models/status reasoning_levels (reported only, no levels "
+            "written) -> none"
+        ),
+        "admin_models_path": OMLX_ADMIN_MODELS_PATH,
     },
 }
 
@@ -631,8 +654,35 @@ def provider_request_headers(provider: Optional[dict[str, Any]]) -> dict[str, st
     return {"Authorization": "Bearer " + api_key}
 
 
+def is_omlx_reasoning_model_type(*declared_types: Any) -> bool:
+    """Whether any declared oMLX model/engine type may carry reasoning.
+
+    Kept as a standalone predicate so the trust gate lives in exactly one
+    place. An absent type is *not* trusted: the admin endpoint reports a
+    server-wide option list, so an unidentified model must not inherit it.
+    """
+    for value in declared_types:
+        if value and str(value).strip().lower() in OMLX_REASONING_MODEL_TYPES:
+            return True
+    return False
+
+
+def _copilot_efforts(raw_efforts: Any) -> Optional[list[str]]:
+    """Intersect a provider effort list with the Copilot vocabulary."""
+    if not isinstance(raw_efforts, list):
+        return None
+    efforts = [
+        str(item) for item in raw_efforts if str(item) in COPILOT_REASONING_EFFORTS
+    ]
+    seen: set[str] = set()
+    efforts = [item for item in efforts if not (item in seen or seen.add(item))]
+    return efforts or None
+
+
 def normalize_omlx_model(
-    entry: dict[str, Any], status_entry: Optional[dict[str, Any]] = None
+    entry: dict[str, Any],
+    status_entry: Optional[dict[str, Any]] = None,
+    admin_entry: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Normalize one oMLX model listing entry into Copilot metadata terms.
 
@@ -643,11 +693,16 @@ def normalize_omlx_model(
     ``model_context_length`` is kept as the discovered native length for
     diagnostics.
 
-    oMLX also accepts and forwards reasoning-effort strings, but it does not
-    advertise a per-model level set the way a hosted provider does, so no
-    reasoning efforts are derived; the existing user selection is left alone.
+    Reasoning is best-effort. ``/admin/api/models`` publishes Copilot-shaped
+    ``reasoning_effort_options`` and is preferred. When the admin surface is
+    unavailable (sub keys get a 401) the coarse ``reasoning_levels`` toggle
+    list from ``/v1/models/status`` is reported for diagnostics only: it has
+    no Copilot level vocabulary, so no efforts are written. Both surfaces are
+    gated on the model type so server-wide defaults never leak onto rerankers
+    or TTS engines.
     """
     status_entry = status_entry or {}
+    admin_entry = admin_entry or {}
     context_window = status_entry.get("max_context_window")
     if context_window is None:
         context_window = status_entry.get("model_context_length")
@@ -658,8 +713,16 @@ def normalize_omlx_model(
 
     max_output = status_entry.get("max_tokens")
 
-    model_type = status_entry.get("model_type") or entry.get("model_type")
-    engine_type = status_entry.get("engine_type") or entry.get("engine_type")
+    model_type = (
+        status_entry.get("model_type")
+        or entry.get("model_type")
+        or admin_entry.get("model_type")
+    )
+    engine_type = (
+        status_entry.get("engine_type")
+        or entry.get("engine_type")
+        or admin_entry.get("engine_type")
+    )
     # oMLX declares the model class rather than an input-modality list, so a
     # ``vlm`` type is the only definitive vision signal. Absent both fields,
     # vision stays unknown.
@@ -674,14 +737,45 @@ def normalize_omlx_model(
         if supports_vision:
             vision_source = "omlx.model_type"
 
+    efforts: Optional[list[str]] = None
+    default_effort: Optional[str] = None
+    reasoning_levels: Optional[list[str]] = None
+    thinking_default = None
+    if is_omlx_reasoning_model_type(
+        status_entry.get("model_type"),
+        status_entry.get("engine_type"),
+        entry.get("model_type"),
+        entry.get("engine_type"),
+        admin_entry.get("model_type"),
+        admin_entry.get("engine_type"),
+    ):
+        efforts = _copilot_efforts(admin_entry.get("reasoning_effort_options"))
+        if efforts is not None:
+            candidate = admin_entry.get("reasoning_effort_default")
+            if candidate is not None:
+                candidate = str(candidate)
+                default_effort = candidate if candidate in efforts else None
+
+        raw_levels = status_entry.get("reasoning_levels")
+        if raw_levels is None:
+            raw_levels = admin_entry.get("reasoning_levels")
+        if isinstance(raw_levels, list) and raw_levels:
+            reasoning_levels = [str(item) for item in raw_levels]
+
+        thinking_default = status_entry.get("thinking_default")
+        if thinking_default is None:
+            thinking_default = admin_entry.get("thinking_default")
+
     return {
         "model_id": entry.get("id") or status_entry.get("id"),
         "name": entry.get("id") or status_entry.get("id"),
         "max_context_window_tokens": context_window,
         "max_output_tokens": max_output,
-        "supported_reasoning_efforts": None,
-        "default_reasoning_effort": None,
-        "supports_reasoning": False,
+        "supported_reasoning_efforts": efforts,
+        "default_reasoning_effort": default_effort,
+        "supports_reasoning": efforts is not None,
+        "reasoning_levels": reasoning_levels,
+        "thinking_default": thinking_default,
         "supports_vision": supports_vision,
         "vision_media_types": (
             list(INPUT_MODALITY_MEDIA_TYPES["image"]) if supports_vision else []
@@ -706,12 +800,48 @@ def normalize_provider_model(
     kind: str,
     entry: dict[str, Any],
     status: Optional[dict[str, Any]] = None,
+    admin: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Dispatch a raw catalog entry to the provider-specific normalizer."""
     if kind == "omlx":
-        status_entry = (status or {}).get(str(entry.get("id")))
-        return normalize_omlx_model(entry, status_entry)
+        model_id = str(entry.get("id"))
+        status_entry = (status or {}).get(model_id)
+        admin_entry = (admin or {}).get(model_id)
+        return normalize_omlx_model(entry, status_entry, admin_entry)
     return normalize_openrouter_model(entry)
+
+
+def fetch_omlx_admin_models(base_url: str, api_key: Optional[str]) -> dict[str, dict[str, Any]]:
+    """Fetch ``/admin/api/models`` and index it by model id.
+
+    The admin surface publishes the Copilot-shaped reasoning vocabulary, but it
+    only accepts the oMLX main key: a sub key gets a 401. Every failure mode
+    (401/404, connection failure, malformed payload) is silent and returns an
+    empty mapping so callers fall back to ``/v1/models/status``. The key is
+    never logged; it only travels in the request header.
+    """
+    root = (base_url or "").strip().rstrip("/")
+    if root.endswith("/v1"):
+        root = root[: -len("/v1")]
+    if not root:
+        return {}
+
+    settings: dict[str, Any] = {"apiKey": api_key}
+    headers = provider_request_headers({"settings": settings})
+    try:
+        payload = http_get_json(f"{root}{OMLX_ADMIN_MODELS_PATH}", headers=headers)
+    except (OSError, ValueError):
+        return {}
+
+    entries = payload.get("models") if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        return {}
+
+    admin: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("id"):
+            admin[str(entry["id"])] = entry
+    return admin
 
 
 def fetch_catalog(
@@ -759,10 +889,16 @@ def fetch_catalog(
                     status[str(status_entry["id"])] = status_entry
 
     catalog: dict[str, dict[str, Any]] = {}
+    admin: dict[str, dict[str, Any]] = {}
+    if spec.get("admin_models_path") and provider:
+        settings = provider.get("settings") or {}
+        admin = fetch_omlx_admin_models(
+            provider_base_url(provider), settings.get("apiKey")
+        )
     for entry in entries:
         if not isinstance(entry, dict) or not entry.get("id"):
             continue
-        catalog[str(entry["id"])] = normalize_provider_model(kind, entry, status)
+        catalog[str(entry["id"])] = normalize_provider_model(kind, entry, status, admin)
     return catalog
 
 
@@ -923,6 +1059,16 @@ def build_plan(
             "vision_media_types": metadata.get("vision_media_types") or [],
             "vision_source": metadata.get("vision_source"),
         }
+        # oMLX's coarse toggle list is diagnostic only; omit it for providers
+        # that never publish one rather than widening their output shape.
+        if metadata.get("reasoning_levels") is not None:
+            entry["provider_metadata"]["reasoning_levels"] = metadata[
+                "reasoning_levels"
+            ]
+        if metadata.get("thinking_default") is not None:
+            entry["provider_metadata"]["thinking_default"] = metadata[
+                "thinking_default"
+            ]
 
         changes: list[str] = []
         if proposed["max_prompt_tokens"] is not None and (
@@ -1152,8 +1298,10 @@ def read_byok_config(
                 "provider_kind": kind,
                 "provider_supported": kind is not None,
                 "catalog_url": provider_catalog_url(kind, provider=provider),
-                "derives_reasoning_efforts": bool(
-                    spec.get("reasoning_efforts") if spec else False
+                "derives_reasoning_efforts": bool(spec)
+                and spec.get("reasoning_efforts") is True,
+                "reasoning_efforts_mode": (
+                    spec.get("reasoning_efforts") if spec else None
                 ),
                 "model_count": sum(
                     1 for model in models if model["provider_id"] == provider["id"]
@@ -1907,7 +2055,8 @@ def get_provider_registry() -> dict[str, Any]:
                 "endpoints_url_template": spec.get("endpoints_url_template"),
                 "match_hosts": spec.get("match_hosts", []),
                 "match_names": spec.get("match_names", []),
-                "reasoning_efforts": bool(spec.get("reasoning_efforts")),
+                "reasoning_efforts": spec.get("reasoning_efforts"),
+                "reasoning_effort_fallback": spec.get("reasoning_effort_fallback"),
                 "docs_url": spec.get("docs_url"),
             }
             for kind, spec in PROVIDER_REGISTRY.items()

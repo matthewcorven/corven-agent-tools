@@ -3,6 +3,7 @@
 
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -205,7 +206,7 @@ class DetectProviderKindTest(unittest.TestCase):
         self.assertIsNone(server.detect_provider_kind({"name": "", "base_url": ""}))
 
 
-def _provider(provider_id: str, name: str, base_url: str) -> dict:
+def _provider(provider_id: str, name: str, base_url: str, api_key=None) -> dict:
     return {
         "id": provider_id,
         "name": name,
@@ -214,6 +215,7 @@ def _provider(provider_id: str, name: str, base_url: str) -> dict:
         "wire_api": "completions",
         "auth_kind": "api_key",
         "account_id": None,
+        "settings": {"apiKey": api_key} if api_key else {},
     }
 
 
@@ -603,7 +605,7 @@ class NormalizeOmlxModelTest(unittest.TestCase):
         self.assertIsNone(result["supports_vision"])
         self.assertIsNone(result["vision_source"])
 
-    def test_never_derives_reasoning_efforts(self) -> None:
+    def test_never_derives_reasoning_efforts_without_admin_data(self) -> None:
         result = server.normalize_omlx_model(
             {"id": "Qwen3.8-27B-4bit", "max_model_len": 262144},
             {"reasoning_efforts": ["low", "high"], "max_tokens": 4096},
@@ -611,6 +613,349 @@ class NormalizeOmlxModelTest(unittest.TestCase):
         self.assertIsNone(result["supported_reasoning_efforts"])
         self.assertIsNone(result["default_reasoning_effort"])
         self.assertFalse(result["supports_reasoning"])
+
+    def test_admin_options_are_intersected_with_copilot_vocabulary(self) -> None:
+        result = server.normalize_omlx_model(
+            {"id": "flint-oQ4e"},
+            {"id": "flint-oQ4e", "model_type": "vlm"},
+            {
+                "id": "flint-oQ4e",
+                "model_type": "vlm",
+                "reasoning_effort_options": ["minimal", "low", "medium", "high"],
+                "reasoning_effort_default": "low",
+            },
+        )
+        self.assertEqual(
+            result["supported_reasoning_efforts"], ["low", "medium", "high"]
+        )
+        self.assertEqual(result["default_reasoning_effort"], "low")
+        self.assertTrue(result["supports_reasoning"])
+
+    def test_admin_options_default_is_dropped_when_not_offered(self) -> None:
+        result = server.normalize_omlx_model(
+            {"id": "m"},
+            {"model_type": "llm"},
+            {
+                "reasoning_effort_options": ["low", "high"],
+                "reasoning_effort_default": "max",
+            },
+        )
+        self.assertEqual(result["supported_reasoning_efforts"], ["low", "high"])
+        self.assertIsNone(result["default_reasoning_effort"])
+
+    def test_status_levels_alone_are_reported_but_write_no_efforts(self) -> None:
+        result = server.normalize_omlx_model(
+            {"id": "m"},
+            {
+                "model_type": "vlm",
+                "reasoning_levels": ["off", "on"],
+                "thinking_default": True,
+            },
+        )
+        self.assertIsNone(result["supported_reasoning_efforts"])
+        self.assertIsNone(result["default_reasoning_effort"])
+        self.assertFalse(result["supports_reasoning"])
+        self.assertEqual(result["reasoning_levels"], ["off", "on"])
+        self.assertTrue(result["thinking_default"])
+
+    def test_admin_options_ignored_for_untrusted_model_types(self) -> None:
+        admin_entry = {
+            "reasoning_effort_options": ["low", "medium", "high", "xhigh", "max"],
+            "reasoning_effort_default": "low",
+        }
+        for model_type in ("reranker", "audio_tts", "markitdown"):
+            with self.subTest(model_type=model_type):
+                result = server.normalize_omlx_model(
+                    {"id": "m"},
+                    {"model_type": model_type},
+                    {**admin_entry, "model_type": model_type},
+                )
+                self.assertIsNone(result["supported_reasoning_efforts"])
+                self.assertIsNone(result["default_reasoning_effort"])
+                self.assertFalse(result["supports_reasoning"])
+
+    def test_admin_options_ignored_when_type_is_absent(self) -> None:
+        result = server.normalize_omlx_model(
+            {"id": "m"},
+            None,
+            {"reasoning_effort_options": ["low", "high"]},
+        )
+        self.assertIsNone(result["supported_reasoning_efforts"])
+        self.assertFalse(result["supports_reasoning"])
+
+    def test_admin_type_is_used_when_status_omits_it(self) -> None:
+        result = server.normalize_omlx_model(
+            {"id": "m"},
+            {"max_tokens": 4096},
+            {"model_type": "text", "reasoning_effort_options": ["low", "max"]},
+        )
+        self.assertEqual(result["supported_reasoning_efforts"], ["low", "max"])
+
+
+class FetchOmlxAdminModelsTest(unittest.TestCase):
+    def test_indexes_models_and_sends_the_key_on_the_admin_root(self) -> None:
+        provider = _provider(
+            "local", "oMLX", "http://127.0.0.1:8001/v1", api_key="main-key"
+        )
+        original = server.http_get_json
+        seen: list[tuple[str, dict]] = []
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            seen.append((url, headers or {}))
+            return {
+                "models": [
+                    {
+                        "id": "flint-oQ4e",
+                        "model_type": "vlm",
+                        "reasoning_effort_options": ["low", "high"],
+                    }
+                ]
+            }
+
+        server.http_get_json = fake_get
+        try:
+            admin = server.fetch_omlx_admin_models("http://127.0.0.1:8001/v1", "main-key")
+        finally:
+            server.http_get_json = original
+
+        self.assertEqual(admin["flint-oQ4e"]["model_type"], "vlm")
+        self.assertEqual(seen[0][0], "http://127.0.0.1:8001/admin/api/models")
+        self.assertEqual(seen[0][1].get("Authorization"), "Bearer main-key")
+
+    def test_failures_are_silent_and_yield_empty_mapping(self) -> None:
+        original = server.http_get_json
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+
+        server.http_get_json = fake_get
+        try:
+            self.assertEqual(
+                server.fetch_omlx_admin_models("http://127.0.0.1:8001", "sub-key"), {}
+            )
+        finally:
+            server.http_get_json = original
+
+    def test_missing_base_url_does_not_issue_a_request(self) -> None:
+        original = server.http_get_json
+        calls: list[str] = []
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            calls.append(url)
+            return {"models": []}
+
+        server.http_get_json = fake_get
+        try:
+            self.assertEqual(server.fetch_omlx_admin_models("", "key"), {})
+        finally:
+            server.http_get_json = original
+        self.assertEqual(calls, [])
+
+
+class OmlxAdminCatalogTest(unittest.TestCase):
+    def test_admin_options_reach_the_catalog_for_a_vlm(self) -> None:
+        provider = _provider(
+            "local", "oMLX", "http://127.0.0.1:8001/v1", api_key="main-key"
+        )
+        original = server.http_get_json
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            if url.endswith("/admin/api/models"):
+                return {
+                    "models": [
+                        {
+                            "id": "flint-oQ4e",
+                            "model_type": "vlm",
+                            "reasoning_effort_options": [
+                                "low",
+                                "medium",
+                                "high",
+                                "xhigh",
+                                "max",
+                            ],
+                            "reasoning_effort_default": "low",
+                            "reasoning_levels": ["off", "on"],
+                        }
+                    ]
+                }
+            if url.endswith("/models/status"):
+                return {"models": [{"id": "flint-oQ4e", "model_type": "vlm"}]}
+            return {"data": [{"id": "flint-oQ4e", "max_model_len": 131072}]}
+
+        server.http_get_json = fake_get
+        try:
+            catalog = server.fetch_catalog("omlx", provider=provider)
+        finally:
+            server.http_get_json = original
+
+        entry = catalog["flint-oQ4e"]
+        self.assertEqual(
+            entry["supported_reasoning_efforts"],
+            ["low", "medium", "high", "xhigh", "max"],
+        )
+        self.assertEqual(entry["default_reasoning_effort"], "low")
+        self.assertTrue(entry["supports_reasoning"])
+        self.assertEqual(entry["reasoning_levels"], ["off", "on"])
+
+    def test_admin_401_falls_back_to_status_levels(self) -> None:
+        provider = _provider(
+            "local", "oMLX", "http://127.0.0.1:8001/v1", api_key="sub-key"
+        )
+        original = server.http_get_json
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            if url.endswith("/admin/api/models"):
+                raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+            if url.endswith("/models/status"):
+                return {
+                    "models": [
+                        {
+                            "id": "flint-oQ4e",
+                            "model_type": "vlm",
+                            "reasoning_levels": ["off", "on"],
+                        }
+                    ]
+                }
+            return {"data": [{"id": "flint-oQ4e", "max_model_len": 131072}]}
+
+        server.http_get_json = fake_get
+        try:
+            catalog = server.fetch_catalog("omlx", provider=provider)
+        finally:
+            server.http_get_json = original
+
+        entry = catalog["flint-oQ4e"]
+        self.assertIsNone(entry["supported_reasoning_efforts"])
+        self.assertFalse(entry["supports_reasoning"])
+        self.assertEqual(entry["reasoning_levels"], ["off", "on"])
+
+    def test_admin_404_leaves_no_reasoning_metadata(self) -> None:
+        provider = _provider("local", "oMLX", "http://127.0.0.1:8001/v1")
+        original = server.http_get_json
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            if url.endswith("/admin/api/models"):
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+            return {"data": [{"id": "m", "max_model_len": 65536}]}
+
+        server.http_get_json = fake_get
+        try:
+            catalog = server.fetch_catalog("omlx", provider=provider)
+        finally:
+            server.http_get_json = original
+
+        entry = catalog["m"]
+        self.assertIsNone(entry["supported_reasoning_efforts"])
+        self.assertFalse(entry["supports_reasoning"])
+        self.assertIsNone(entry["reasoning_levels"])
+        self.assertIsNone(entry["thinking_default"])
+
+    def test_reranker_is_excluded_by_the_trust_gate(self) -> None:
+        provider = _provider(
+            "local", "oMLX", "http://127.0.0.1:8001/v1", api_key="main-key"
+        )
+        original = server.http_get_json
+
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            if url.endswith("/admin/api/models"):
+                return {
+                    "models": [
+                        {
+                            "id": "jina-reranker-v3.5-mlx",
+                            "model_type": "reranker",
+                            "engine_type": "reranker",
+                            "reasoning_effort_options": [
+                                "low",
+                                "medium",
+                                "high",
+                                "xhigh",
+                                "max",
+                            ],
+                            "reasoning_effort_default": "low",
+                        }
+                    ]
+                }
+            if url.endswith("/models/status"):
+                return {
+                    "models": [
+                        {
+                            "id": "jina-reranker-v3.5-mlx",
+                            "model_type": "reranker",
+                            "reasoning_levels": ["off", "on"],
+                        }
+                    ]
+                }
+            return {"data": [{"id": "jina-reranker-v3.5-mlx", "max_model_len": 8192}]}
+
+        server.http_get_json = fake_get
+        try:
+            catalog = server.fetch_catalog("omlx", provider=provider)
+        finally:
+            server.http_get_json = original
+
+        entry = catalog["jina-reranker-v3.5-mlx"]
+        self.assertIsNone(entry["supported_reasoning_efforts"])
+        self.assertIsNone(entry["default_reasoning_effort"])
+        self.assertFalse(entry["supports_reasoning"])
+        self.assertIsNone(entry["reasoning_levels"])
+
+    def test_plan_reports_reasoning_levels_in_provider_metadata(self) -> None:
+        provider = _provider("local", "oMLX", "http://127.0.0.1:8001/v1")
+        metadata = server.normalize_omlx_model(
+            {"id": "m"},
+            {"model_type": "vlm", "reasoning_levels": ["off", "on"]},
+        )
+        plan = server.build_plan(
+            providers=[provider],
+            models=[
+                {
+                    "model_id": "m",
+                    "provider_id": provider["id"],
+                    "row_id": "row",
+                    "state_key": f"{provider['id']}/row",
+                    "max_prompt_tokens": 1000,
+                    "max_output_tokens": 1000,
+                    "supported_reasoning_efforts": None,
+                    "supports_vision": None,
+                }
+            ],
+            catalogs={provider["id"]: {"m": metadata}},
+        )
+        entry = plan["entries"][0]
+        self.assertIsNone(entry["proposed"]["supported_reasoning_efforts"])
+        self.assertEqual(
+            entry["provider_metadata"]["reasoning_levels"], ["off", "on"]
+        )
+        self.assertNotIn("supported_reasoning_efforts", entry["changes"])
+
+    def test_existing_reasoning_selection_is_never_overwritten(self) -> None:
+        provider = _provider("local", "oMLX", "http://127.0.0.1:8001/v1")
+        metadata = server.normalize_omlx_model(
+            {"id": "m"},
+            {"model_type": "llm"},
+            {
+                "model_type": "llm",
+                "reasoning_effort_options": ["low", "medium", "high"],
+                "reasoning_effort_default": "low",
+            },
+        )
+        model = _model(
+            provider["id"],
+            "m",
+            max_prompt_tokens=1000,
+            max_output_tokens=1000,
+            supported_reasoning_efforts=["low", "medium", "high"],
+        )
+        plan = server.build_plan(
+            providers=[provider],
+            models=[model],
+            catalogs={provider["id"]: {"m": metadata}},
+            reasoning_state={model["state_key"]: "high"},
+            set_reasoning_defaults=True,
+        )
+        entry = plan["entries"][0]
+        self.assertEqual(entry["app_state_changes"], [])
+        self.assertEqual(entry["status"], "unchanged")
 
 
 class ProviderUrlTest(unittest.TestCase):
@@ -670,7 +1015,11 @@ class FetchOmlxCatalogTest(unittest.TestCase):
 
         self.assertEqual(
             requested,
-            ["http://127.0.0.1:8001/v1/models", "http://127.0.0.1:8001/v1/models/status"],
+            [
+                "http://127.0.0.1:8001/v1/models",
+                "http://127.0.0.1:8001/v1/models/status",
+                "http://127.0.0.1:8001/admin/api/models",
+            ],
         )
         self.assertEqual(catalog["flint-oQ4e"]["max_context_window_tokens"], 131072)
         self.assertEqual(catalog["flint-oQ4e"]["max_output_tokens"], 32768)
