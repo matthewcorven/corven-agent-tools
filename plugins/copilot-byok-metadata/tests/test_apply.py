@@ -1170,5 +1170,220 @@ class ApplyNoReasoningEvidenceTest(unittest.TestCase):
         self.assertFalse(entry["proposed"]["reasoning_efforts_definitive"])
 
 
+class ApplyUnsupportedModelTypeTest(unittest.TestCase):
+    """Non-chat oMLX models are never written, flag or no flag... unless asked.
+
+    The excluded models are seeded with metadata that a normal plan would
+    happily rewrite (their window differs), so "nothing happened" is a real
+    assertion rather than a trivially clean fixture.
+    """
+
+    UNSUPPORTED = (
+        ("jina-reranker-v3.5-mlx", "reranker"),
+        ("Ming-3.0-tts-tiny-4bit", "audio_tts"),
+        ("MarkItDown", "markitdown"),
+    )
+
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmpdir.name, "data.db")
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(SCHEMA)
+        conn.execute(
+            "INSERT INTO model_providers (id, name, type, settings_json) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                LOCAL_PROVIDER_ID,
+                "oMLX",
+                "ollama",
+                json.dumps({"baseUrl": "http://127.0.0.1:8001/v1"}),
+            ),
+        )
+        for model_id, _ in self.UNSUPPORTED:
+            conn.execute(
+                "INSERT INTO provider_models (id, provider_id, model_id, display_name) "
+                "VALUES (?, ?, ?, ?)",
+                (f"row-{model_id}", LOCAL_PROVIDER_ID, model_id, model_id),
+            )
+        cache_models = [
+            {
+                "id": f"{LOCAL_PROVIDER_ID}/{model_id}",
+                "name": model_id,
+                "providerId": LOCAL_PROVIDER_ID,
+                "capabilities": {},
+            }
+            for model_id, _ in self.UNSUPPORTED
+        ]
+        cache_models.append(
+            {
+                "id": f"{LOCAL_PROVIDER_ID}/flint-oQ4e",
+                "name": "flint-oQ4e",
+                "providerId": LOCAL_PROVIDER_ID,
+                "capabilities": {},
+            }
+        )
+        cache = {"accountId": "acct", "models": cache_models}
+        for key in server.CATALOG_CACHE_KEYS:
+            conn.execute(
+                "INSERT INTO app_state (key, value) VALUES (?, ?)",
+                (key, json.dumps(cache)),
+            )
+        conn.commit()
+        conn.close()
+
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
+
+    def _catalog(self) -> dict:
+        return {
+            model_id: server.normalize_omlx_model(
+                {"id": model_id, "max_model_len": 8192},
+                {"id": model_id, "model_type": model_type, "max_tokens": 2048},
+                {
+                    "id": model_id,
+                    "model_type": model_type,
+                    "reasoning_effort_options": ["low", "medium", "high", "max"],
+                    "reasoning_effort_default": "low",
+                },
+            )
+            for model_id, model_type in self.UNSUPPORTED
+        }
+
+    def _snapshot(self) -> tuple[dict, dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = {
+                row["model_id"]: dict(row)
+                for row in conn.execute("SELECT * FROM provider_models")
+            }
+            caches = {
+                key: json.loads(
+                    conn.execute(
+                        "SELECT value FROM app_state WHERE key = ?", (key,)
+                    ).fetchone()["value"]
+                )
+                for key in server.CATALOG_CACHE_KEYS
+            }
+        finally:
+            conn.close()
+        return rows, caches
+
+    def test_apply_without_the_flag_writes_nothing(self) -> None:
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=self._catalog(),
+            dry_run=False,
+            backup=False,
+        )
+        self.assertEqual(result["applied"]["models_updated"], 0)
+        self.assertEqual(result["applied"]["catalog_cache_entries_patched"], 0)
+        self.assertIsNone(result["backup_path"])
+        self.assertIn("Nothing to apply", " ".join(result["notes"]))
+        self.assertTrue(
+            all(
+                entry["status"] == "unsupported_model_type"
+                for entry in result["plan"]["entries"]
+            )
+        )
+
+        rows, caches = self._snapshot()
+        for model_id, _ in self.UNSUPPORTED:
+            self.assertIsNone(rows[model_id]["max_prompt_tokens"], model_id)
+            self.assertIsNone(rows[model_id]["max_output_tokens"], model_id)
+            self.assertIsNone(
+                rows[model_id]["supported_reasoning_efforts"], model_id
+            )
+        for key, cache in caches.items():
+            for entry in cache["models"]:
+                self.assertEqual(entry["capabilities"], {}, key)
+
+    def test_no_backup_is_taken_for_a_plan_that_only_excludes_models(self) -> None:
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=self._catalog(),
+            dry_run=False,
+            backup=True,
+        )
+        self.assertIsNone(result["backup_path"])
+        self.assertEqual(
+            [
+                name
+                for name in os.listdir(self.tmpdir.name)
+                if ".byok-metadata-backup-" in name
+            ],
+            [],
+        )
+
+    def test_flag_genuinely_writes_them(self) -> None:
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=self._catalog(),
+            dry_run=False,
+            backup=False,
+            include_unsupported_model_types=True,
+        )
+        self.assertEqual(result["applied"]["models_updated"], 3)
+        self.assertEqual(result["applied"]["catalog_cache_entries_patched"], 6)
+
+        rows, caches = self._snapshot()
+        for model_id, _ in self.UNSUPPORTED:
+            self.assertEqual(rows[model_id]["max_prompt_tokens"], 6144, model_id)
+            self.assertEqual(rows[model_id]["max_output_tokens"], 2048, model_id)
+            # #3's trust gate still holds with the flag on: the admin endpoint
+            # advertised a full level set, but a non-chat type never gets it.
+            self.assertIsNone(
+                rows[model_id]["supported_reasoning_efforts"], model_id
+            )
+        for key, cache in caches.items():
+            by_id = {entry["id"]: entry for entry in cache["models"]}
+            for model_id, _ in self.UNSUPPORTED:
+                entry = by_id[f"{LOCAL_PROVIDER_ID}/{model_id}"]
+                limits = entry["capabilities"]["limits"]
+                self.assertEqual(limits["max_context_window_tokens"], 8192, key)
+                self.assertEqual(limits["max_prompt_tokens"], 6144, key)
+                self.assertEqual(limits["max_output_tokens"], 2048, key)
+                self.assertNotIn("supportedReasoningEfforts", entry, key)
+
+    def test_excluded_model_does_not_block_real_work(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO provider_models (id, provider_id, model_id, display_name) "
+            "VALUES (?, ?, ?, ?)",
+            ("row-flint", LOCAL_PROVIDER_ID, "flint-oQ4e", "flint-oQ4e"),
+        )
+        conn.commit()
+        conn.close()
+
+        catalog = self._catalog()
+        catalog["flint-oQ4e"] = server.normalize_omlx_model(
+            {"id": "flint-oQ4e", "max_model_len": 131072},
+            {"id": "flint-oQ4e", "model_type": "llm", "max_tokens": 32768},
+        )
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=catalog,
+            dry_run=False,
+            backup=False,
+        )
+        self.assertEqual(result["applied"]["models_updated"], 1)
+        rows, caches = self._snapshot()
+        self.assertEqual(rows["flint-oQ4e"]["max_prompt_tokens"], 98304)
+        for model_id, _ in self.UNSUPPORTED:
+            self.assertIsNone(rows[model_id]["max_prompt_tokens"], model_id)
+        # Only the chat model's cache entry was touched.
+        for key, cache in caches.items():
+            by_id = {entry["id"]: entry for entry in cache["models"]}
+            self.assertIn(
+                "limits", by_id[f"{LOCAL_PROVIDER_ID}/flint-oQ4e"]["capabilities"], key
+            )
+            for model_id, _ in self.UNSUPPORTED:
+                self.assertEqual(
+                    by_id[f"{LOCAL_PROVIDER_ID}/{model_id}"]["capabilities"],
+                    {},
+                    key,
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

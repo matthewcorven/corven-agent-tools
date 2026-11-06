@@ -79,13 +79,24 @@ OMLX_VISION_MODEL_TYPES = ("vlm",)
 #: server root, not under the OpenAI-compatible ``/v1`` API root.
 OMLX_ADMIN_MODELS_PATH = "/admin/api/models"
 
+#: oMLX model/engine types that cannot serve chat completions.
+#:
+#: A reranker, a TTS engine, and a document converter appear in ``/v1/models``
+#: exactly like a chat model, but they fail at request time. Writing a context
+#: window for them is worse than writing nothing: the model picker then offers
+#: a model that cannot answer. These types are reported as
+#: ``unsupported_model_type`` and skipped by every write path unless the caller
+#: explicitly opts in for debugging.
+OMLX_UNSUPPORTED_MODEL_TYPES = ("reranker", "audio_tts", "markitdown")
+
 #: oMLX model/engine types whose reasoning metadata is trustworthy.
 #:
 #: ``/admin/api/models`` returns the same server-wide ``reasoning_effort_options``
 #: for every model, including rerankers and TTS engines, so the list is a server
 #: default rather than per-model truth. Reasoning is therefore only applied to
-#: types that run chat completions. This is the single gate issue #4 will extend
-#: into a full non-chat exclusion list.
+#: types that run chat completions. This is the *same* trust gate as
+#: ``OMLX_UNSUPPORTED_MODEL_TYPES``: a type is trusted only when it is not one of
+#: the non-chat types, so there is one list rather than two that can drift.
 OMLX_REASONING_MODEL_TYPES = ("vlm", "llm", "text")
 
 #: Ceiling applied to provider-reported output budgets. The Copilot app's own
@@ -585,6 +596,11 @@ def normalize_openrouter_model(entry: dict[str, Any]) -> dict[str, Any]:
         "supports_vision": supports_vision,
         "vision_media_types": media_types,
         "vision_source": vision_source,
+        # OpenRouter publishes no model-class signal, so every entry is a chat
+        # model. The keys mirror the oMLX normalizer so plan code reads one
+        # shape; the non-chat exclusion is oMLX-only.
+        "supported_for_chat": True,
+        "unsupported_model_type": None,
     }
 
 
@@ -672,13 +688,38 @@ def provider_request_headers(provider: Optional[dict[str, Any]]) -> dict[str, st
     return {"Authorization": "Bearer " + api_key}
 
 
+def is_unsupported_omlx_model_type(*declared_types: Any) -> bool:
+    """Whether the model is one oMLX cannot serve chat with.
+
+    This is the single exclusion predicate. Rerankers, TTS engines, and
+    document converters are advertised by ``/v1/models`` exactly like chat
+    models, so every metadata decision — plan status, reasoning trust, vision
+    — consults this one function instead of keeping its own list.
+    """
+    return omlx_unsupported_model_type(*declared_types) is not None
+
+
+def omlx_unsupported_model_type(*declared_types: Any) -> Optional[str]:
+    """Return the declared type that makes the model non-chat, if any."""
+    for value in declared_types:
+        if value is None:
+            continue
+        normalized = str(value).strip().lower()
+        if normalized in OMLX_UNSUPPORTED_MODEL_TYPES:
+            return normalized
+    return None
+
+
 def is_omlx_reasoning_model_type(*declared_types: Any) -> bool:
     """Whether any declared oMLX model/engine type may carry reasoning.
 
     Kept as a standalone predicate so the trust gate lives in exactly one
     place. An absent type is *not* trusted: the admin endpoint reports a
     server-wide option list, so an unidentified model must not inherit it.
+    A non-chat type (see :func:`is_unsupported_omlx_model_type`) never is.
     """
+    if is_unsupported_omlx_model_type(*declared_types):
+        return False
     for value in declared_types:
         if value and str(value).strip().lower() in OMLX_REASONING_MODEL_TYPES:
             return True
@@ -741,13 +782,30 @@ def normalize_omlx_model(
         or entry.get("engine_type")
         or admin_entry.get("engine_type")
     )
+    # Every surface that might declare a type, in one precedence order. The
+    # exclusion predicate and the reasoning gate both read from this list, so
+    # "reranker", "audio_tts", and "markitdown" are recognized whichever
+    # endpoint happened to publish them.
+    type_sources = (
+        status_entry.get("model_type"),
+        status_entry.get("engine_type"),
+        entry.get("model_type"),
+        entry.get("engine_type"),
+        admin_entry.get("model_type"),
+        admin_entry.get("engine_type"),
+    )
+    non_chat_type = omlx_unsupported_model_type(*type_sources)
+    non_chat_model_type = non_chat_type is not None
     # oMLX declares the model class rather than an input-modality list, so a
     # ``vlm`` type is the only definitive vision signal. Absent both fields,
-    # vision stays unknown.
+    # vision stays unknown. A non-chat model is short-circuited first: it is
+    # never offered image input no matter what its type fields claim.
     declared_types = [value for value in (model_type, engine_type) if value]
     supports_vision: Optional[bool] = None
     vision_source = None
-    if declared_types:
+    if non_chat_model_type:
+        supports_vision = False
+    elif declared_types:
         supports_vision = any(
             str(value).strip().lower() in OMLX_VISION_MODEL_TYPES
             for value in declared_types
@@ -763,14 +821,7 @@ def normalize_omlx_model(
     efforts_known = False
     reasoning_levels: Optional[list[str]] = None
     thinking_default = None
-    if is_omlx_reasoning_model_type(
-        status_entry.get("model_type"),
-        status_entry.get("engine_type"),
-        entry.get("model_type"),
-        entry.get("engine_type"),
-        admin_entry.get("model_type"),
-        admin_entry.get("engine_type"),
-    ):
+    if is_omlx_reasoning_model_type(*type_sources):
         efforts = _copilot_efforts(admin_entry.get("reasoning_effort_options"))
         if efforts is not None:
             efforts_known = True
@@ -815,7 +866,11 @@ def normalize_omlx_model(
             else "unresolved"
         ),
         "native_context_window_tokens": status_entry.get("model_context_length"),
-        "model_type": status_entry.get("model_type") or entry.get("model_type"),
+        "model_type": model_type or engine_type,
+        # ``supported_for_chat`` is the plan-side view of the exclusion
+        # predicate: the model is still *reported*, it is just never written.
+        "supported_for_chat": not non_chat_model_type,
+        "unsupported_model_type": non_chat_type,
         "loaded": status_entry.get("loaded"),
     }
 
@@ -1013,6 +1068,7 @@ def build_plan(
     model_ids: Optional[list[str]] = None,
     set_reasoning_defaults: bool = False,
     set_context_tier: Optional[str] = None,
+    include_unsupported_model_types: bool = False,
 ) -> dict[str, Any]:
     """Compute a dry-run plan without touching the database."""
     provider_by_id = {provider["id"]: provider for provider in providers}
@@ -1066,6 +1122,28 @@ def build_plan(
         if metadata is None:
             entry["status"] = "unresolved"
             entry["reason"] = f"Model id not present in the {kind} catalog"
+            entries.append(entry)
+            continue
+
+        # The provider declared a model class that cannot serve chat (a
+        # reranker, a TTS engine, a document converter). Report it with its
+        # reason but plan nothing: a context window on such a model is worse
+        # than no metadata, because the picker then offers a model that fails
+        # at request time. This branch runs before any metadata derivation so
+        # reasoning and vision never even get a chance to propose a write.
+        unsupported_model_type = metadata.get("unsupported_model_type")
+        if unsupported_model_type and not include_unsupported_model_types:
+            entry["status"] = "unsupported_model_type"
+            entry["reason"] = (
+                f"Model type '{unsupported_model_type}' cannot serve chat "
+                "completions, so no metadata is written for it. Pass "
+                "include_unsupported_model_types=true to plan it anyway for "
+                "debugging."
+            )
+            entry["provider_metadata"] = {
+                "model_type": metadata.get("model_type"),
+                "unsupported_model_type": unsupported_model_type,
+            }
             entries.append(entry)
             continue
 
@@ -1167,6 +1245,11 @@ def build_plan(
         "unsupported_provider": sum(
             1 for entry in entries if entry["status"] == "unsupported_provider"
         ),
+        # Fifth bucket. The four above keep their meaning, so a consumer that
+        # sums the original four still sees the same numbers as before.
+        "unsupported_model_type": sum(
+            1 for entry in entries if entry["status"] == "unsupported_model_type"
+        ),
     }
 
     return {
@@ -1254,10 +1337,21 @@ def list_byok_models(db_path: Optional[str] = None) -> dict[str, Any]:
     }
 
 
+def _catalog_metadata_for(
+    model: dict[str, Any], catalog: Optional[dict[str, Any]]
+) -> dict[str, Any]:
+    """Look one model's normalized provider metadata out of a flat catalog."""
+    if not isinstance(catalog, dict):
+        return {}
+    metadata = catalog.get(model["model_id"])
+    return metadata if isinstance(metadata, dict) else {}
+
+
 def read_byok_config(
     workspace_path: Optional[str] = None,
     db_path: Optional[str] = None,
     include_catalog_cache: bool = True,
+    catalog: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Return a complete, self-contained snapshot of the BYOK model config.
 
@@ -1265,6 +1359,12 @@ def read_byok_config(
     every model, the metadata currently stored for each, the user's selected
     reasoning effort and context tier, and what is still missing — without
     locating or reading the app database itself.
+
+    ``model_type`` and ``supported_for_chat`` come from provider metadata,
+    which the database does not store. Pass ``catalog`` (a ``{model_id:
+    metadata}`` mapping, the same shape ``plan_metadata_updates`` accepts) to
+    surface them; without it both are ``None``, meaning unknown rather than
+    excluded. This keeps the read path free of network calls.
     """
     path = resolve_db_path(db_path)
     if not os.path.exists(path):
@@ -1304,6 +1404,22 @@ def read_byok_config(
             )
             if model[field] is None
         ]
+        metadata = _catalog_metadata_for(model, catalog) if catalog else {}
+        unsupported_model_type = metadata.get("unsupported_model_type")
+        if unsupported_model_type:
+            # Only provider metadata knows a model's class; the database does
+            # not store it. This might never be written, so "missing metadata"
+            # is the expected state, not a gap to repair.
+            missing = [
+                field
+                for field in missing
+                if field != "supported_reasoning_efforts"
+            ]
+        # Without a catalog the type is unknown (``None``), never "excluded".
+        model_type = metadata.get("model_type") if catalog is not None else None
+        supported_for_chat = (
+            metadata.get("supported_for_chat") if catalog is not None else None
+        )
         enriched_models.append(
             {
                 **model,
@@ -1315,6 +1431,9 @@ def read_byok_config(
                 "has_metadata": len(missing) < 3,
                 "missing_metadata": missing,
                 "supports_reasoning": bool(efforts),
+                "model_type": model_type,
+                "supported_for_chat": supported_for_chat,
+                "unsupported_model_type": unsupported_model_type,
             }
         )
 
@@ -1471,6 +1590,9 @@ def read_byok_config(
             "models_supporting_reasoning": sum(
                 1 for m in enriched_models if m["supports_reasoning"]
             ),
+            "models_unsupported_model_type": sum(
+                1 for m in enriched_models if m["unsupported_model_type"]
+            ),
             "providers_with_supported_source": supported_kinds,
             "providers_without_supported_source": unsupported,
         },
@@ -1579,6 +1701,7 @@ def plan_metadata_updates(
     set_context_tier: Optional[str] = None,
     catalog: Optional[dict[str, Any]] = None,
     catalog_url: Optional[str] = None,
+    include_unsupported_model_types: bool = False,
 ) -> dict[str, Any]:
     """Compute a dry-run plan of metadata changes. Never writes."""
     path = resolve_db_path(db_path)
@@ -1619,6 +1742,7 @@ def plan_metadata_updates(
         model_ids=model_ids,
         set_reasoning_defaults=set_reasoning_defaults,
         set_context_tier=set_context_tier,
+        include_unsupported_model_types=include_unsupported_model_types,
     )
     plan["db_path"] = path
     plan["dry_run"] = True
@@ -1793,6 +1917,7 @@ def apply_metadata_updates(
     refresh_catalog_cache: bool = True,
     catalog: Optional[dict[str, Any]] = None,
     catalog_url: Optional[str] = None,
+    include_unsupported_model_types: bool = False,
 ) -> dict[str, Any]:
     """Apply planned metadata updates to the Copilot app database."""
     path = resolve_db_path(db_path)
@@ -1833,6 +1958,7 @@ def apply_metadata_updates(
         model_ids=model_ids,
         set_reasoning_defaults=set_reasoning_defaults,
         set_context_tier=set_context_tier,
+        include_unsupported_model_types=include_unsupported_model_types,
     )
 
     result: dict[str, Any] = {
@@ -1876,7 +2002,11 @@ def apply_metadata_updates(
             ),
         }
         for entry in plan["entries"]
-        if entry.get("proposed") and entry.get("provider_metadata")
+        if entry.get("proposed")
+        and entry.get("provider_metadata")
+        # Belt and braces: a non-chat model is never written, even if a future
+        # change gives it a ``proposed`` block. The plan status is the gate.
+        and entry["status"] != "unsupported_model_type"
     }
 
     # Probe the catalog caches so a stale cache still counts as work to do.
@@ -2165,6 +2295,15 @@ TOOLS: list[dict[str, Any]] = [
                     ),
                     "default": True,
                 },
+                "catalog": {
+                    "type": "object",
+                    "description": (
+                        "Optional provider metadata mapping (model_id to normalized "
+                        "metadata) used to report each model's model_type and "
+                        "supported_for_chat. Without it both are null, meaning "
+                        "unknown rather than excluded."
+                    ),
+                },
             },
         },
     },
@@ -2251,6 +2390,16 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Optional override for the provider catalog URL.",
                 },
+                "include_unsupported_model_types": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Plan models whose declared oMLX type cannot serve chat "
+                        "(reranker, audio_tts, markitdown). Off by default: those "
+                        "models are reported as unsupported_model_type and never "
+                        "written. Enable only to debug a misclassified model."
+                    ),
+                },
             },
         },
     },
@@ -2309,6 +2458,17 @@ TOOLS: list[dict[str, Any]] = [
                 "catalog_url": {
                     "type": "string",
                     "description": "Optional override for the provider catalog URL.",
+                },
+                "include_unsupported_model_types": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Write models whose declared oMLX type cannot serve chat "
+                        "(reranker, audio_tts, markitdown). Off by default: those "
+                        "models are reported but never written, because a context "
+                        "window on a non-chat model makes the picker offer a model "
+                        "that fails at request time."
+                    ),
                 },
             },
         },
@@ -2379,6 +2539,7 @@ def handle_rpc_message(msg: dict[str, Any]) -> Optional[dict[str, Any]]:
                     include_catalog_cache=tool_args.get(
                         "include_catalog_cache", True
                     ),
+                    catalog=tool_args.get("catalog"),
                 )
             elif tool_name == "list_byok_models":
                 res = list_byok_models(db_path=tool_args.get("db_path"))
@@ -2395,6 +2556,9 @@ def handle_rpc_message(msg: dict[str, Any]) -> Optional[dict[str, Any]]:
                     set_reasoning_defaults=tool_args.get("set_reasoning_defaults", False),
                     set_context_tier=tool_args.get("set_context_tier"),
                     catalog_url=tool_args.get("catalog_url"),
+                    include_unsupported_model_types=tool_args.get(
+                        "include_unsupported_model_types", False
+                    ),
                 )
             elif tool_name == "apply_metadata_updates":
                 res = apply_metadata_updates(
@@ -2406,6 +2570,9 @@ def handle_rpc_message(msg: dict[str, Any]) -> Optional[dict[str, Any]]:
                     backup=tool_args.get("backup", True),
                     refresh_catalog_cache=tool_args.get("refresh_catalog_cache", True),
                     catalog_url=tool_args.get("catalog_url"),
+                    include_unsupported_model_types=tool_args.get(
+                        "include_unsupported_model_types", False
+                    ),
                 )
             elif tool_name == "get_provider_registry":
                 res = get_provider_registry()

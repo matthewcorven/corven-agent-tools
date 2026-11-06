@@ -470,6 +470,48 @@ class ReadByokConfigTest(unittest.TestCase):
             res["notes"],
         )
 
+    def test_model_type_and_supported_for_chat_are_surfaced(self) -> None:
+        """Callers must see the exclusion before running a plan."""
+        catalog = {
+            model["model_id"]: model
+            for model in (
+                server.normalize_omlx_model(
+                    {"id": "local-model", "max_model_len": 8192},
+                    {"id": "local-model", "model_type": "reranker"},
+                ),
+                server.normalize_openrouter_model(
+                    {
+                        "id": "vendor/plain-model",
+                        "context_length": 200000,
+                        "architecture": {"input_modalities": ["text"]},
+                    }
+                ),
+            )
+        }
+        res = self._read(catalog=catalog)
+        by_id = {m["model_id"]: m for m in res["models"]}
+
+        reranker = by_id["local-model"]
+        self.assertEqual(reranker["model_type"], "reranker")
+        self.assertIs(reranker["supported_for_chat"], False)
+        self.assertEqual(reranker["unsupported_model_type"], "reranker")
+
+        plain = by_id["vendor/plain-model"]
+        self.assertIs(plain["supported_for_chat"], True)
+        self.assertIsNone(plain["unsupported_model_type"])
+
+        self.assertEqual(res["summary"]["models_unsupported_model_type"], 1)
+        # The excluded model is reported, not hidden.
+        self.assertEqual(res["summary"]["model_count"], 3)
+
+    def test_without_a_catalog_the_type_is_unknown_not_excluded(self) -> None:
+        res = self._read()
+        for model in res["models"]:
+            self.assertIsNone(model["model_type"])
+            self.assertIsNone(model["supported_for_chat"])
+            self.assertIsNone(model["unsupported_model_type"])
+        self.assertEqual(res["summary"]["models_unsupported_model_type"], 0)
+
     def test_missing_database_raises(self) -> None:
         with self.assertRaises(FileNotFoundError):
             server.read_byok_config(

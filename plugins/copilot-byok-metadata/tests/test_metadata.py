@@ -509,6 +509,208 @@ class BuildPlanTest(unittest.TestCase):
         )
 
 
+class UnsupportedModelTypePlanTest(unittest.TestCase):
+    """Non-chat oMLX models are reported but never planned for a write."""
+
+    #: The three configured models that cannot serve chat completions.
+    UNSUPPORTED = (
+        ("jina-reranker-v3.5-mlx", "reranker"),
+        ("Ming-3.0-tts-tiny-4bit", "audio_tts"),
+        ("MarkItDown", "markitdown"),
+    )
+
+    def setUp(self) -> None:
+        self.provider = _provider("local", "oMLX", "http://127.0.0.1:8001/v1")
+
+    def _catalog(self, include_chat: bool = True) -> dict:
+        catalog = {
+            model_id: server.normalize_omlx_model(
+                {"id": model_id, "max_model_len": 8192},
+                {
+                    "id": model_id,
+                    "model_type": model_type,
+                    "engine_type": model_type,
+                    "max_tokens": 2048,
+                },
+                {
+                    "id": model_id,
+                    "model_type": model_type,
+                    "reasoning_effort_options": ["low", "medium", "high", "max"],
+                    "reasoning_effort_default": "low",
+                },
+            )
+            for model_id, model_type in self.UNSUPPORTED
+        }
+        if include_chat:
+            catalog["flint-oQ4e"] = server.normalize_omlx_model(
+                {"id": "flint-oQ4e", "max_model_len": 262144},
+                {"id": "flint-oQ4e", "model_type": "vlm", "max_tokens": 32768},
+            )
+        return catalog
+
+    def _plan(self, include_chat: bool = True, **kwargs):
+        catalog = self._catalog(include_chat=include_chat)
+        models = [_model(self.provider["id"], model_id) for model_id in catalog]
+        return server.build_plan(
+            providers=[self.provider],
+            models=models,
+            catalogs={self.provider["id"]: catalog},
+            **kwargs,
+        )
+
+    def test_each_non_chat_type_reports_unsupported_with_its_type(self) -> None:
+        plan = self._plan()
+        by_id = {entry["model_id"]: entry for entry in plan["entries"]}
+        for model_id, model_type in self.UNSUPPORTED:
+            with self.subTest(model_id=model_id):
+                entry = by_id[model_id]
+                self.assertEqual(entry["status"], "unsupported_model_type")
+                self.assertIn(model_type, entry["reason"])
+                self.assertEqual(
+                    entry["provider_metadata"]["unsupported_model_type"], model_type
+                )
+                self.assertEqual(entry["provider_metadata"]["model_type"], model_type)
+                self.assertIsNone(entry["proposed"])
+                self.assertEqual(entry["changes"], [])
+                self.assertEqual(entry["app_state_changes"], [])
+
+    def test_no_reasoning_or_vision_write_is_planned_for_them(self) -> None:
+        """#3's gate and #2's vision path must both stay shut."""
+        catalog = self._catalog()
+        for model_id, _ in self.UNSUPPORTED:
+            metadata = catalog[model_id]
+            self.assertIsNone(metadata["supported_reasoning_efforts"])
+            self.assertFalse(metadata["supports_reasoning"])
+            self.assertIs(metadata["supports_vision"], False)
+        plan = self._plan()
+        for entry in plan["entries"]:
+            if entry["status"] != "unsupported_model_type":
+                continue
+            self.assertEqual(entry["changes"], [])
+            self.assertIsNone(entry["proposed"])
+
+    def test_flag_lets_them_plan_normally_for_debugging(self) -> None:
+        plan = self._plan(include_unsupported_model_types=True)
+        by_id = {entry["model_id"]: entry for entry in plan["entries"]}
+        for model_id, _ in self.UNSUPPORTED:
+            with self.subTest(model_id=model_id):
+                entry = by_id[model_id]
+                self.assertEqual(entry["status"], "update")
+                self.assertIn("max_prompt_tokens", entry["changes"])
+                self.assertEqual(entry["proposed"]["max_prompt_tokens"], 6144)
+                self.assertNotIn(
+                    "supported_reasoning_efforts", entry["changes"]
+                )
+        self.assertEqual(plan["summary"]["unsupported_model_type"], 0)
+        self.assertEqual(plan["summary"]["update"], 4)
+
+    def test_summary_has_five_buckets_that_sum_to_total(self) -> None:
+        plan = self._plan()
+        summary = plan["summary"]
+        self.assertEqual(summary["total"], 4)
+        self.assertEqual(summary["unsupported_model_type"], 3)
+        self.assertEqual(summary["update"], 1)
+        self.assertEqual(
+            sum(
+                summary[key]
+                for key in (
+                    "update",
+                    "unchanged",
+                    "unresolved",
+                    "unsupported_provider",
+                    "unsupported_model_type",
+                )
+            ),
+            summary["total"],
+        )
+
+    def test_existing_buckets_are_identical_on_a_fixture_without_them(self) -> None:
+        """The four original counts must not shift when nothing is excluded."""
+        plan = self._plan(include_chat=True)
+        chat_only = {
+            "total": 1,
+            "update": 1,
+            "unchanged": 0,
+            "unresolved": 0,
+            "unsupported_provider": 0,
+            "unsupported_model_type": 0,
+        }
+        catalog = {"flint-oQ4e": self._catalog()["flint-oQ4e"]}
+        chat_plan = server.build_plan(
+            providers=[self.provider],
+            models=[_model(self.provider["id"], "flint-oQ4e")],
+            catalogs={self.provider["id"]: catalog},
+        )
+        self.assertEqual(chat_plan["summary"], chat_only)
+        self.assertEqual(
+            sum(
+                chat_plan["summary"][key]
+                for key in (
+                    "update",
+                    "unchanged",
+                    "unresolved",
+                    "unsupported_provider",
+                )
+            ),
+            chat_plan["summary"]["total"],
+        )
+        # Same fixture plus the excluded models: the four original buckets keep
+        # their numbers and total grows by exactly the new bucket.
+        self.assertEqual(
+            {
+                key: plan["summary"][key]
+                for key in (
+                    "update",
+                    "unchanged",
+                    "unresolved",
+                    "unsupported_provider",
+                )
+            },
+            {
+                key: chat_only[key]
+                for key in (
+                    "update",
+                    "unchanged",
+                    "unresolved",
+                    "unsupported_provider",
+                )
+            },
+        )
+        self.assertEqual(plan["summary"]["total"], chat_only["total"] + 3)
+
+    def test_openrouter_entries_are_always_chat(self) -> None:
+        provider = _provider("or", "OpenRouter", "https://openrouter.ai/api/v1")
+        catalog = {
+            "vendor/model": server.normalize_openrouter_model(
+                {"id": "vendor/model", "context_length": 1000}
+            )
+        }
+        plan = server.build_plan(
+            providers=[provider],
+            models=[_model(provider["id"], "vendor/model")],
+            catalogs={"openrouter": catalog},
+        )
+        self.assertEqual(plan["entries"][0]["status"], "update")
+        self.assertEqual(plan["summary"]["unsupported_model_type"], 0)
+
+    def test_predicate_is_the_single_gate(self) -> None:
+        for model_type in server.OMLX_UNSUPPORTED_MODEL_TYPES:
+            with self.subTest(model_type=model_type):
+                self.assertTrue(
+                    server.is_unsupported_omlx_model_type(model_type),
+                    "is_unsupported_omlx_model_type must cover every excluded type",
+                )
+                self.assertFalse(
+                    server.is_omlx_reasoning_model_type(model_type),
+                    "reasoning trust must reuse the same exclusion predicate",
+                )
+        for model_type in ("vlm", "llm", "text"):
+            self.assertFalse(server.is_unsupported_omlx_model_type(model_type))
+            self.assertTrue(server.is_omlx_reasoning_model_type(model_type))
+        self.assertFalse(server.is_unsupported_omlx_model_type(None))
+        self.assertTrue(server.is_unsupported_omlx_model_type(None, " ReRanker "))
+
+
 class CollectCatalogsTest(unittest.TestCase):
     def test_unreachable_local_server_warns_instead_of_raising(self) -> None:
         providers = [
@@ -621,6 +823,47 @@ class NormalizeOmlxModelTest(unittest.TestCase):
         self.assertIsNone(result["supported_reasoning_efforts"])
         self.assertIsNone(result["default_reasoning_effort"])
         self.assertFalse(result["supports_reasoning"])
+
+    def test_supported_for_chat_and_reported_type(self) -> None:
+        for model_type in ("reranker", "audio_tts", "markitdown"):
+            with self.subTest(model_type=model_type):
+                result = server.normalize_omlx_model(
+                    {"id": "m"}, {"id": "m", "model_type": model_type}
+                )
+                self.assertIs(result["supported_for_chat"], False)
+                self.assertEqual(result["unsupported_model_type"], model_type)
+                self.assertEqual(result["model_type"], model_type)
+        for model_type in ("vlm", "llm", "text"):
+            with self.subTest(model_type=model_type):
+                result = server.normalize_omlx_model(
+                    {"id": "m"}, {"id": "m", "model_type": model_type}
+                )
+                self.assertIs(result["supported_for_chat"], True)
+                self.assertIsNone(result["unsupported_model_type"])
+
+    def test_engine_type_is_the_fallback_when_model_type_is_absent(self) -> None:
+        result = server.normalize_omlx_model(
+            {"id": "m"}, {"id": "m", "engine_type": "audio_tts"}
+        )
+        self.assertIs(result["supported_for_chat"], False)
+        self.assertEqual(result["unsupported_model_type"], "audio_tts")
+        self.assertEqual(result["model_type"], "audio_tts")
+
+    def test_non_chat_type_short_circuits_vision_even_when_vlm_is_also_claimed(
+        self,
+    ) -> None:
+        result = server.normalize_omlx_model(
+            {"id": "m", "model_type": "vlm"},
+            {"id": "m", "model_type": "reranker"},
+        )
+        self.assertIs(result["supports_vision"], False)
+        self.assertIsNone(result["vision_source"])
+
+    def test_unknown_type_is_neither_excluded_nor_trusted(self) -> None:
+        result = server.normalize_omlx_model({"id": "m"})
+        self.assertIs(result["supported_for_chat"], True)
+        self.assertIsNone(result["unsupported_model_type"])
+        self.assertIsNone(result["model_type"])
 
     def test_admin_options_are_intersected_with_copilot_vocabulary(self) -> None:
         result = server.normalize_omlx_model(
