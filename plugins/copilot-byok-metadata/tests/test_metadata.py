@@ -612,16 +612,6 @@ class UnsupportedModelTypePlanTest(unittest.TestCase):
         self.assertEqual(summary["update"], 1)
         # ``update_row`` is a subset of ``update``, never a sixth bucket, so it
         # must not appear in the sum below.
-        self.assertNotIn(
-            "update_row",
-            (
-                "update",
-                "unchanged",
-                "unresolved",
-                "unsupported_provider",
-                "unsupported_model_type",
-            ),
-        )
         self.assertEqual(
             sum(
                 summary[key]

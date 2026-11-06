@@ -1250,8 +1250,10 @@ def build_plan(
         "unsupported_model_type": sum(
             1 for entry in entries if entry["status"] == "unsupported_model_type"
         ),
-        # NOT a bucket: a strict subset of ``update``. Entries whose plan can
-        # carry a row write; app-state-only updates count in ``update`` alone.
+        # NOT a bucket: a strict subset of ``update``. Entries with at least
+        # one row-changing column. Rows later suppressed by the legacy-vision
+        # set are still counted here, since build_plan cannot see that set —
+        # ``models_updated`` is the authoritative count of actual writes.
         # Do not add this to the bucket sum above.
         "update_row": sum(
             1 for entry in entries if entry["status"] == "update" and entry["changes"]

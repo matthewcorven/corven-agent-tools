@@ -640,6 +640,53 @@ class ApplyMetadataUpdatesTest(unittest.TestCase):
         self.assertEqual(second["applied"]["app_state_entries_updated"], 0)
         self.assertIn("Nothing to apply", " ".join(second["notes"]))
 
+    def test_app_state_only_plan_still_repairs_a_stale_cache(self) -> None:
+        """Narrowing row_updates must not narrow the separate ``updates`` set."""
+        self._settle_rows()
+
+        # The app rebuilt its catalog with no limits, so the cache alone is
+        # stale while every provider_models row is already correct.
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO app_state (key, value) VALUES (?, ?)",
+            (
+                server.APP_STATE_CATALOG_KEY,
+                json.dumps(
+                    {
+                        "accountId": "acct",
+                        "models": [
+                            {
+                                "id": f"{PROVIDER_ID}/vendor/reasoning-model",
+                                "name": "Reasoning",
+                                "providerId": PROVIDER_ID,
+                                "capabilities": {"supports": {"reasoningEffort": False}},
+                            }
+                        ],
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            set_context_tier="long_context",
+            dry_run=False,
+            backup=False,
+            refresh_catalog_cache=True,
+        )
+
+        self.assertEqual(result["applied"]["models_updated"], 0)
+        self.assertGreaterEqual(result["applied"]["app_state_entries_updated"], 1)
+        self.assertGreaterEqual(result["applied"]["catalog_cache_entries_patched"], 1)
+        patched = self._app_state(server.APP_STATE_CATALOG_KEY)
+        self.assertEqual(
+            patched["models"][0]["capabilities"]["limits"]["max_context_window_tokens"],
+            1000000,
+        )
+
     def test_plan_summary_update_row_is_a_subset_of_update(self) -> None:
         self._settle_rows()
         result = server.apply_metadata_updates(
