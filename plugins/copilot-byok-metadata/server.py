@@ -49,7 +49,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 SERVER_NAME = "copilot-byok-metadata"
-SERVER_VERSION = "0.5.0"
+SERVER_VERSION = "0.5.1"
 
 DEFAULT_DB_PATH = os.path.join("~", ".copilot", "data.db")
 
@@ -1250,6 +1250,12 @@ def build_plan(
         "unsupported_model_type": sum(
             1 for entry in entries if entry["status"] == "unsupported_model_type"
         ),
+        # NOT a bucket: a strict subset of ``update``. Entries whose plan can
+        # carry a row write; app-state-only updates count in ``update`` alone.
+        # Do not add this to the bucket sum above.
+        "update_row": sum(
+            1 for entry in entries if entry["status"] == "update" and entry["changes"]
+        ),
     }
 
     return {
@@ -2119,10 +2125,13 @@ def apply_metadata_updates(
     # is already as correct as it can be. The first run records those rows in
     # app state; later runs skip them so a legacy database settles instead of
     # counting a no-op rewrite (and a backup) on every run.
+    #
+    # An entry can need work (status == "update") without needing a row write:
+    # set_context_tier / set_reasoning_defaults are app_state-only.
     row_updates = [
         entry
         for entry in plan["entries"]
-        if entry["status"] == "update" and entry.get("proposed")
+        if entry["status"] == "update" and entry.get("proposed") and entry["changes"]
     ]
     vision_only_updates = [
         entry

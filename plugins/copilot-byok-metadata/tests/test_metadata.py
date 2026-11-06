@@ -610,6 +610,18 @@ class UnsupportedModelTypePlanTest(unittest.TestCase):
         self.assertEqual(summary["total"], 4)
         self.assertEqual(summary["unsupported_model_type"], 3)
         self.assertEqual(summary["update"], 1)
+        # ``update_row`` is a subset of ``update``, never a sixth bucket, so it
+        # must not appear in the sum below.
+        self.assertNotIn(
+            "update_row",
+            (
+                "update",
+                "unchanged",
+                "unresolved",
+                "unsupported_provider",
+                "unsupported_model_type",
+            ),
+        )
         self.assertEqual(
             sum(
                 summary[key]
@@ -634,6 +646,8 @@ class UnsupportedModelTypePlanTest(unittest.TestCase):
             "unresolved": 0,
             "unsupported_provider": 0,
             "unsupported_model_type": 0,
+            # Not a bucket: a subset of ``update`` (see build_plan).
+            "update_row": 1,
         }
         catalog = {"flint-oQ4e": self._catalog()["flint-oQ4e"]}
         chat_plan = server.build_plan(
