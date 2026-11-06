@@ -498,6 +498,223 @@ class ApplyMetadataUpdatesTest(unittest.TestCase):
         )["inputSchema"]["properties"]["refresh_catalog_cache"]
         self.assertTrue(schema["default"])
 
+    def _settle_rows(self) -> dict:
+        """Write the catalog once so every row already matches the provider."""
+        server.apply_metadata_updates(
+            db_path=self.db_path, catalog=CATALOG, dry_run=False, backup=False
+        )
+        return {
+            model_id: row["updated_at"] for model_id, row in self._rows().items()
+        }
+
+    def test_app_state_only_run_reports_no_model_update(self) -> None:
+        """A tier-only run writes app state, never a provider_models row."""
+        before = self._settle_rows()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            set_context_tier="long_context",
+            dry_run=False,
+            backup=False,
+        )
+
+        self.assertEqual(result["applied"]["models_updated"], 0)
+        self.assertGreaterEqual(result["applied"]["app_state_entries_updated"], 1)
+        self.assertEqual(
+            self._app_state(server.APP_STATE_CONTEXT_TIER_KEY)[
+                f"{PROVIDER_ID}/vendor/reasoning-model"
+            ],
+            "long_context",
+        )
+        self.assertEqual(
+            {model_id: row["updated_at"] for model_id, row in self._rows().items()},
+            before,
+        )
+
+    def test_app_state_only_run_still_takes_a_backup(self) -> None:
+        """App state is a real write to the same database, so it stays backed up."""
+        self._settle_rows()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            set_context_tier="long_context",
+            dry_run=False,
+            backup=True,
+        )
+
+        self.assertIsNotNone(result["backup_path"])
+        self.assertTrue(os.path.exists(result["backup_path"]))
+        self.assertIn(
+            ".byok-metadata-backup-", os.path.basename(result["backup_path"])
+        )
+
+    def test_row_plus_app_state_on_one_entry_counts_one(self) -> None:
+        """One entry can need both a row write and an app-state change."""
+        self._settle_rows()
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE provider_models SET max_prompt_tokens = 1, updated_at = '2020-01-01T00:00:00.000Z' "
+            "WHERE model_id = 'vendor/reasoning-model'"
+        )
+        conn.commit()
+        conn.close()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            set_context_tier="long_context",
+            dry_run=False,
+            backup=False,
+        )
+
+        self.assertEqual(result["applied"]["models_updated"], 1)
+        self.assertGreaterEqual(result["applied"]["app_state_entries_updated"], 1)
+        row = self._rows()["vendor/reasoning-model"]
+        self.assertEqual(row["max_prompt_tokens"], 872000)
+        self.assertNotEqual(row["updated_at"], "2020-01-01T00:00:00.000Z")
+
+    def test_mixed_entries_count_only_row_writes(self) -> None:
+        """Only entries with real changes reach the write loop."""
+        before = self._settle_rows()
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE provider_models SET max_prompt_tokens = 1, updated_at = '2020-01-01T00:00:00.000Z' "
+            "WHERE model_id = 'vendor/reasoning-model'"
+        )
+        conn.commit()
+        conn.close()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            set_context_tier="long_context",
+            dry_run=False,
+            backup=False,
+        )
+
+        self.assertEqual(result["applied"]["models_updated"], 1)
+        rows = self._rows()
+        self.assertNotEqual(
+            rows["vendor/reasoning-model"]["updated_at"], "2020-01-01T00:00:00.000Z"
+        )
+        self.assertEqual(
+            rows["vendor/plain-model"]["updated_at"], before["vendor/plain-model"]
+        )
+
+    def test_dry_run_on_app_state_only_plan_writes_nothing(self) -> None:
+        self._settle_rows()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            set_context_tier="long_context",
+            dry_run=True,
+        )
+
+        self.assertEqual(result["applied"]["models_updated"], 0)
+        self.assertEqual(result["applied"]["app_state_entries_updated"], 0)
+        self.assertIsNone(self._app_state(server.APP_STATE_CONTEXT_TIER_KEY))
+
+    def test_second_identical_app_state_only_run_is_a_no_op(self) -> None:
+        self._settle_rows()
+        first = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            set_context_tier="long_context",
+            dry_run=False,
+            backup=False,
+        )
+        self.assertGreaterEqual(first["applied"]["app_state_entries_updated"], 1)
+
+        second = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            set_context_tier="long_context",
+            dry_run=False,
+            backup=False,
+        )
+
+        self.assertEqual(second["applied"]["models_updated"], 0)
+        self.assertEqual(second["applied"]["app_state_entries_updated"], 0)
+        self.assertIn("Nothing to apply", " ".join(second["notes"]))
+
+    def test_app_state_only_plan_still_repairs_a_stale_cache(self) -> None:
+        """Narrowing row_updates must not narrow the separate ``updates`` set."""
+        self._settle_rows()
+
+        # The app rebuilt its catalog with no limits, so the cache alone is
+        # stale while every provider_models row is already correct.
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO app_state (key, value) VALUES (?, ?)",
+            (
+                server.APP_STATE_CATALOG_KEY,
+                json.dumps(
+                    {
+                        "accountId": "acct",
+                        "models": [
+                            {
+                                "id": f"{PROVIDER_ID}/vendor/reasoning-model",
+                                "name": "Reasoning",
+                                "providerId": PROVIDER_ID,
+                                "capabilities": {"supports": {"reasoningEffort": False}},
+                            }
+                        ],
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            set_context_tier="long_context",
+            dry_run=False,
+            backup=False,
+            refresh_catalog_cache=True,
+        )
+
+        self.assertEqual(result["applied"]["models_updated"], 0)
+        self.assertGreaterEqual(result["applied"]["app_state_entries_updated"], 1)
+        self.assertGreaterEqual(result["applied"]["catalog_cache_entries_patched"], 1)
+        patched = self._app_state(server.APP_STATE_CATALOG_KEY)
+        self.assertEqual(
+            patched["models"][0]["capabilities"]["limits"]["max_context_window_tokens"],
+            1000000,
+        )
+
+    def test_plan_summary_update_row_is_a_subset_of_update(self) -> None:
+        self._settle_rows()
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=CATALOG,
+            set_context_tier="long_context",
+            dry_run=True,
+        )
+        summary = result["plan"]["summary"]
+
+        # App-state-only work is planned but needs no row write.
+        self.assertGreater(summary["update"], 0)
+        self.assertEqual(summary["update_row"], 0)
+        self.assertLessEqual(summary["update_row"], summary["update"])
+        self.assertEqual(
+            sum(
+                summary[key]
+                for key in (
+                    "update",
+                    "unchanged",
+                    "unresolved",
+                    "unsupported_provider",
+                    "unsupported_model_type",
+                )
+            ),
+            summary["total"],
+        )
+
 
 class ApplyVisionFlagsTest(unittest.TestCase):
     """Vision is a one-way flag: only definitive `image`/`vlm` evidence writes it."""
@@ -965,9 +1182,8 @@ class ApplyVisionFlagsTest(unittest.TestCase):
     ) -> None:
         """An unrelated app-state change must not rewrite suppressed rows.
 
-        ``models_updated`` also counts rows touched by app-state-only runs (a
-        pre-existing behaviour), so the real contract is narrower: the
-        suppressed row must not be given a fresh ``updated_at``.
+        App-state-only work never counts as a row write, so the suppressed row
+        must neither be counted nor given a fresh ``updated_at``.
         """
         self._drop_vision_column()
         server.apply_metadata_updates(
@@ -989,6 +1205,7 @@ class ApplyVisionFlagsTest(unittest.TestCase):
             set_context_tier="long_context",
         )
         self.assertTrue(result["applied"]["app_state_entries_updated"] >= 1)
+        self.assertEqual(result["applied"]["models_updated"], 0)
         self.assertEqual(self._rows()["vendor/vlm"]["updated_at"], before)
 
     def test_suppressed_row_still_applies_a_real_token_change(self) -> None:
