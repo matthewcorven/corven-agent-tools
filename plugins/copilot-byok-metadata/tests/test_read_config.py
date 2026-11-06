@@ -369,7 +369,12 @@ class ReadByokConfigTest(unittest.TestCase):
         self.assertEqual(res["summary"]["models_with_metadata"], 1)
 
     def test_non_chat_catalog_entry_keeps_all_three_missing_metadata(self) -> None:
-        """``unsupported_model_type`` is reported, never subtracted from gaps."""
+        """``unsupported_model_type`` is reported, never subtracted from gaps.
+
+        Guard 1 of 2: a non-chat entry without vision. It fails if
+        ``supported_reasoning_efforts`` is filtered out of ``missing_metadata``
+        for non-chat models.
+        """
         catalog = {
             "vendor/plain-model": {
                 "model_id": "vendor/plain-model",
@@ -396,8 +401,54 @@ class ReadByokConfigTest(unittest.TestCase):
         self.assertEqual(res["summary"]["models_without_metadata"], 2)
         self.assertEqual(res["summary"]["models_unsupported_model_type"], 1)
 
-    def test_vision_without_reasoning_still_reports_all_three_missing(self) -> None:
-        """Vision presence never shortens ``missing_metadata``."""
+    def test_vision_non_chat_catalog_entry_keeps_all_three_missing_metadata(
+        self,
+    ) -> None:
+        """A non-chat entry that also has vision keeps all three gaps.
+
+        Guard 2 of 2: this is the same non-chat guard as above but with
+        ``supports_vision: True``, so it exercises the branch where vision and
+        ``unsupported_model_type`` overlap. It fails independently if the
+        production filter that stripped ``supported_reasoning_efforts`` from
+        ``missing_metadata`` for non-chat models is reinstated.
+        """
+        catalog = {
+            "vendor/plain-model": {
+                "model_id": "vendor/plain-model",
+                "supports_vision": True,
+                "vision_media_types": ["image/png"],
+                "vision_source": "openrouter.architecture",
+                "model_type": "reranker",
+                "supported_for_chat": False,
+                "unsupported_model_type": "reranker",
+            }
+        }
+        res = self._read(catalog=catalog)
+        by_id = {m["model_id"]: m for m in res["models"]}
+
+        plain = by_id["vendor/plain-model"]
+        self.assertIs(plain["supports_vision"], True)
+        self.assertEqual(plain["unsupported_model_type"], "reranker")
+        self.assertIs(plain["supported_for_chat"], False)
+        self.assertEqual(
+            plain["missing_metadata"],
+            ["max_prompt_tokens", "max_output_tokens", "supported_reasoning_efforts"],
+        )
+        self.assertIs(plain["has_metadata"], False)
+        self.assertEqual(res["summary"]["models_with_metadata"], 1)
+        self.assertEqual(res["summary"]["models_without_metadata"], 2)
+        self.assertEqual(res["summary"]["models_unsupported_model_type"], 1)
+
+    def test_vision_presence_never_shortens_missing_metadata(self) -> None:
+        """Guard only that vision is best-effort, NOT the non-chat guard.
+
+        The entry here is a chat-capable vision model
+        (``unsupported_model_type: None``), so it never reaches the non-chat
+        branch. Use
+        ``test_non_chat_catalog_entry_keeps_all_three_missing_metadata`` or
+        ``test_vision_non_chat_catalog_entry_keeps_all_three_missing_metadata``
+        for the non-chat guarantee.
+        """
         catalog = {
             "vendor/plain-model": {
                 "model_id": "vendor/plain-model",
