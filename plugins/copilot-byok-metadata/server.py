@@ -2368,7 +2368,15 @@ TOOLS: list[dict[str, Any]] = [
             "in one call: every provider (with credentials redacted), every model "
             "with its stored context-window, output-token, and reasoning-effort "
             "metadata, the user's selected reasoning effort and context tier, the "
-            "cached catalog entries, and what metadata is still missing. Use this "
+            "cached catalog entries, and what metadata is still missing. Each model "
+            "also reports tri-state vision fields (supports_vision, "
+            "vision_media_types, vision_source) and, when provider metadata is "
+            "supplied via the catalog input, model_type, supported_for_chat, and "
+            "unsupported_model_type; without a catalog those three are null, "
+            "meaning unknown rather than excluded. missing_metadata stays limited "
+            "to the three original columns — vision is best-effort, not required — "
+            "and the catalog cache summary counts BYOK entries with limits, with "
+            "vision, and with either (byok_entries_with_vision included). Use this "
             "for awareness instead of locating or reading the app database."
         ),
         "inputSchema": {
@@ -2412,7 +2420,11 @@ TOOLS: list[dict[str, Any]] = [
             "Lists every BYOK provider and model configured in the GitHub Copilot "
             "desktop app, including current context-window, output-token, and "
             "reasoning-effort metadata plus the user's selected reasoning effort "
-            "and context tier."
+            "and context tier. Each model also reports tri-state vision fields "
+            "(supports_vision, vision_media_types, vision_source). This read path "
+            "makes no network calls, so model_type, supported_for_chat, and "
+            "unsupported_model_type are null — unknown rather than excluded — "
+            "because the database does not store them."
         ),
         "inputSchema": {
             "type": "object",
@@ -2427,12 +2439,21 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "fetch_provider_metadata",
         "description": (
-            "Fetches authoritative context-window metadata from each provider's "
-            "source of truth (OpenRouter's catalog, or a local oMLX server's "
-            "/v1/models and /v1/models/status) for every configured BYOK model, "
-            "and returns the values derived for Copilot. Reasoning-effort metadata "
-            "is only derived for providers that advertise a level set, so oMLX "
-            "models report none."
+            "Fetches authoritative metadata from each provider's source of truth — "
+            "OpenRouter's catalog, or a local oMLX server's /v1/models, enriched by "
+            "/v1/models/status and /admin/api/models — for every configured BYOK "
+            "model, and returns both the raw provider payload (metadata) and the "
+            "values derived for Copilot (derived). Read derived for what this "
+            "plugin writes: metadata's max_output_tokens is an aggregate provider "
+            "maximum that is clamped against the context window before being "
+            "written. Reasoning efforts are derived only from a concrete level "
+            "set: OpenRouter's declared reasoning parameters, or oMLX's "
+            "/admin/api/models admin surface (which requires the server's main API "
+            "key). When the admin surface is unavailable, /v1/models/status "
+            "reasoning_levels is reported for diagnostics but no efforts are "
+            "written, so a 401 leaves existing reasoning metadata untouched rather "
+            "than clearing it. Non-chat model types (reranker, audio_tts, "
+            "markitdown) never receive reasoning metadata."
         ),
         "inputSchema": {
             "type": "object",
@@ -2458,7 +2479,14 @@ TOOLS: list[dict[str, Any]] = [
         "name": "plan_metadata_updates",
         "description": (
             "Computes a dry-run plan comparing configured BYOK model metadata against "
-            "provider source-of-truth values. Never writes to the database."
+            "provider source-of-truth values. Never writes to the database. Every "
+            "entry gets one of five statuses — update, unchanged, unresolved (model "
+            "absent from the provider catalog), unsupported_provider (no registry "
+            "entry), or unsupported_model_type (a declared oMLX type that cannot "
+            "serve chat: reranker, audio_tts, markitdown) — and the summary counts "
+            "all five. Non-chat models are reported but never planned for writing "
+            "unless include_unsupported_model_types=true, which exists only to "
+            "debug a misclassified model."
         ),
         "inputSchema": {
             "type": "object",
@@ -2506,8 +2534,14 @@ TOOLS: list[dict[str, Any]] = [
         "name": "apply_metadata_updates",
         "description": (
             "Applies provider metadata to the Copilot app database. Defaults to a dry "
-            "run; pass dry_run=false to write. Writes are transactional and a database "
-            "backup is taken first unless backup=false."
+            "run; pass dry_run=false to write. A database backup is taken first "
+            "unless backup=false, and all writes — provider_models rows, app_state "
+            "entries, and the cached model catalogs — happen in a single "
+            "transaction, so a failure leaves the database untouched. Models whose "
+            "declared oMLX type cannot serve chat (reranker, audio_tts, markitdown) "
+            "are never written unless include_unsupported_model_types=true, because "
+            "a context window on such a model makes the picker offer a model that "
+            "fails at request time."
         ),
         "inputSchema": {
             "type": "object",
@@ -2577,7 +2611,11 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Returns the hardcoded provider source-of-truth registry, the canonical "
             "Copilot reasoning-effort and context-tier vocabularies, and which Copilot "
-            "targets are supported."
+            "targets are supported. Per provider it includes reasoning_efforts — true "
+            "for OpenRouter, and \"conditional\" for oMLX, whose efforts are derived "
+            "only when the admin surface is reachable — plus "
+            "reasoning_effort_fallback, the oMLX chain that ends in reporting "
+            "reasoning_levels for diagnostics with no levels written."
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },
