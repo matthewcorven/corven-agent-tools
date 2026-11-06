@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "copilot-byok-metadata",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "MCP server and skill that backfill GitHub Copilot app BYOK model metadata (context window, output budget, reasoning efforts) from provider source-of-truth APIs such as OpenRouter and local oMLX servers.",
   "author": {
     "name": "Matthew Corven"

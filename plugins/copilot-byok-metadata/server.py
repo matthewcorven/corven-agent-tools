@@ -12,8 +12,10 @@ Two provider sources are wired up:
 * ``omlx`` — a local oMLX server's OpenAI-compatible ``/v1/models`` listing,
   enriched by ``/v1/models/status``, which reports the *effective* context
   window (per-model override, discovered model native length, or the oMLX
-  app default) and the per-model generation ceiling. oMLX does not expose
-  Copilot-style reasoning levels, so no reasoning efforts are derived.
+  app default) and the per-model generation ceiling. Reasoning efforts come
+  from ``/admin/api/models`` (which publishes the exact Copilot level
+  vocabulary), falling back to the coarse ``reasoning_levels`` toggle list in
+  ``/v1/models/status``, and finally to no reasoning metadata at all.
 
 The server is deliberately stdlib-only and speaks raw JSON-RPC 2.0 over
 stdio, matching the other plugins in this repository.
@@ -47,7 +49,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 SERVER_NAME = "copilot-byok-metadata"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.5.0"
 
 DEFAULT_DB_PATH = os.path.join("~", ".copilot", "data.db")
 
@@ -58,6 +60,44 @@ COPILOT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 #: Canonical Copilot ``ContextTier`` union.
 COPILOT_CONTEXT_TIERS = ("default", "long_context")
+
+#: MIME types implied by each provider-declared input modality. Only
+#: ``supported_media_types`` is derived: neither provider publishes an image
+#: count or image size limit, so the app applies its own defaults.
+INPUT_MODALITY_MEDIA_TYPES: dict[str, tuple[str, ...]] = {
+    "image": ("image/jpeg", "image/png", "image/webp", "image/gif"),
+    "file": ("application/pdf",),
+    "audio": ("audio/wav", "audio/mpeg"),
+    "video": ("video/mp4",),
+    "text": (),
+}
+
+#: oMLX model/engine types that denote a vision-language model.
+OMLX_VISION_MODEL_TYPES = ("vlm",)
+
+#: oMLX admin path that publishes per-model reasoning metadata. It sits on the
+#: server root, not under the OpenAI-compatible ``/v1`` API root.
+OMLX_ADMIN_MODELS_PATH = "/admin/api/models"
+
+#: oMLX model/engine types that cannot serve chat completions.
+#:
+#: A reranker, a TTS engine, and a document converter appear in ``/v1/models``
+#: exactly like a chat model, but they fail at request time. Writing a context
+#: window for them is worse than writing nothing: the model picker then offers
+#: a model that cannot answer. These types are reported as
+#: ``unsupported_model_type`` and skipped by every write path unless the caller
+#: explicitly opts in for debugging.
+OMLX_UNSUPPORTED_MODEL_TYPES = ("reranker", "audio_tts", "markitdown")
+
+#: oMLX model/engine types whose reasoning metadata is trustworthy.
+#:
+#: ``/admin/api/models`` returns the same server-wide ``reasoning_effort_options``
+#: for every model, including rerankers and TTS engines, so the list is a server
+#: default rather than per-model truth. Reasoning is therefore only applied to
+#: types that run chat completions. This is the *same* trust gate as
+#: ``OMLX_UNSUPPORTED_MODEL_TYPES``: a type is trusted only when it is not one of
+#: the non-chat types, so there is one list rather than two that can drift.
+OMLX_REASONING_MODEL_TYPES = ("vlm", "llm", "text")
 
 #: Ceiling applied to provider-reported output budgets. The Copilot app's own
 #: built-in catalog never exceeds 128000 output tokens, while some providers
@@ -74,6 +114,10 @@ APP_STATE_CONTEXT_TIER_KEY = "copilot-context-tier"
 APP_STATE_CATALOG_KEY = "copilot-available-models-v2"
 APP_STATE_CLOUD_CATALOG_KEY = "copilot-cloud-available-models-v2"
 APP_STATE_SELECTED_MODEL_KEY = "copilot-selected-model"
+#: State keys whose vision flag was deliberately skipped because the database
+#: has no ``supports_vision`` column. Recording the skip lets a legacy database
+#: settle instead of planning the same unstorable change on every run.
+APP_STATE_VISION_SKIPPED_KEY = "copilot-byok-metadata-vision-skipped"
 
 #: Catalog caches the app keeps in ``app_state``. They differ in shape: the
 #: local catalog is ``{"accountId": ..., "models": [...]}`` while the cloud
@@ -115,7 +159,15 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         "base_url_params": ["base_url"],
         "match_names": ["omlx"],
         "docs_url": "https://github.com/jundot/omlx/blob/main/docs/admin-api.md",
-        "reasoning_efforts": False,
+        # The admin surface publishes Copilot-shaped levels, but only for the
+        # server's main key; status levels alone have no Copilot vocabulary.
+        "reasoning_efforts": "conditional",
+        "reasoning_effort_fallback": (
+            "/admin/api/models reasoning_effort_options -> "
+            "/v1/models/status reasoning_levels (reported only, no levels "
+            "written) -> none"
+        ),
+        "admin_models_path": OMLX_ADMIN_MODELS_PATH,
     },
 }
 
@@ -144,7 +196,16 @@ def connect(db_path: str, readonly: bool = True) -> sqlite3.Connection:
     return conn
 
 
-def load_providers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def load_providers(
+    conn: sqlite3.Connection, redact: bool = True
+) -> list[dict[str, Any]]:
+    """Load configured BYOK providers.
+
+    ``redact`` defaults to ``True`` because every tool result must show
+    ``<redacted>`` credentials. Internal call sites that need to *use* the
+    provider (the oMLX admin fetch) pass ``redact=False`` and must never place
+    the returned ``settings`` in a tool result, plan, warning, or exception.
+    """
     rows = conn.execute(
         "SELECT id, name, type, settings_json, account_id FROM model_providers ORDER BY name"
     ).fetchall()
@@ -168,17 +229,34 @@ def load_providers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "wire_api": settings.get("wireApi"),
                 "auth_kind": settings.get("authKind"),
                 "account_id": row["account_id"],
-                "settings": redact_settings(settings),
+                "settings": redact_settings(settings) if redact else dict(settings),
             }
         )
     return providers
 
 
+def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Return the column names of ``table``, or an empty set when unreadable."""
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.Error:
+        return set()
+    return {str(row[1]) for row in rows}
+
+
 def load_models(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    # ``supports_vision`` post-dates the rest of the table. On a database that
+    # predates it the column is projected as NULL, which callers read as
+    # "unknown" — never as "text-only" — and the write path skips it. The
+    # boolean lets ``build_plan`` flag a change the schema cannot store so the
+    # write path can skip re-proposing it instead of rewriting forever.
+    has_vision_column = "supports_vision" in table_columns(conn, "provider_models")
+    vision_projection = "supports_vision" if has_vision_column else "NULL AS supports_vision"
     rows = conn.execute(
-        """
+        f"""
         SELECT id, provider_id, model_id, wire_model, display_name,
-               max_prompt_tokens, max_output_tokens, supported_reasoning_efforts
+               max_prompt_tokens, max_output_tokens, supported_reasoning_efforts,
+               {vision_projection}
         FROM provider_models
         ORDER BY provider_id, model_id
         """
@@ -198,6 +276,8 @@ def load_models(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "supported_reasoning_efforts": parse_efforts(
                     row["supported_reasoning_efforts"]
                 ),
+                "supports_vision": row["supports_vision"],
+                "supports_vision_available": has_vision_column,
             }
         )
     return models
@@ -436,6 +516,23 @@ def detect_provider_kind(provider: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def vision_media_types(input_modalities: Optional[list[Any]]) -> list[str]:
+    """Map provider-declared input modalities onto Copilot media types.
+
+    ``text`` contributes nothing, and unknown modalities are ignored rather
+    than guessed at.
+    """
+    if not isinstance(input_modalities, list):
+        return []
+    media_types: list[str] = []
+    for modality in input_modalities:
+        key = str(modality).strip().lower()
+        for media_type in INPUT_MODALITY_MEDIA_TYPES.get(key, ()):
+            if media_type not in media_types:
+                media_types.append(media_type)
+    return media_types
+
+
 def normalize_openrouter_model(entry: dict[str, Any]) -> dict[str, Any]:
     """Normalize one OpenRouter catalog entry into Copilot metadata terms."""
     context_length = entry.get("context_length")
@@ -465,6 +562,26 @@ def normalize_openrouter_model(entry: dict[str, Any]) -> dict[str, Any]:
         elif efforts is not None and default_effort not in efforts:
             default_effort = None
 
+    architecture = entry.get("architecture") or {}
+    input_modalities = (
+        architecture.get("input_modalities")
+        if isinstance(architecture, dict)
+        else None
+    )
+    media_types = vision_media_types(input_modalities)
+    # Only an explicitly declared ``image`` modality is definitive evidence.
+    # Anything else leaves vision unknown, which the write path treats as
+    # "do not touch" rather than "text-only".
+    vision_unknown = not isinstance(input_modalities, list)
+    supports_vision = None
+    vision_source = None
+    if not vision_unknown:
+        supports_vision = "image" in {
+            str(modality).strip().lower() for modality in input_modalities
+        }
+        if supports_vision:
+            vision_source = "openrouter.architecture"
+
     return {
         "model_id": entry.get("id"),
         "name": entry.get("name"),
@@ -473,6 +590,17 @@ def normalize_openrouter_model(entry: dict[str, Any]) -> dict[str, Any]:
         "supported_reasoning_efforts": efforts,
         "default_reasoning_effort": default_effort,
         "supports_reasoning": efforts is not None,
+        # OpenRouter declares its effort vocabulary authoritatively: an empty
+        # or absent list means the model has no efforts, not "unknown".
+        "reasoning_efforts_definitive": True,
+        "supports_vision": supports_vision,
+        "vision_media_types": media_types,
+        "vision_source": vision_source,
+        # OpenRouter publishes no model-class signal, so every entry is a chat
+        # model. The keys mirror the oMLX normalizer so plan code reads one
+        # shape; the non-chat exclusion is oMLX-only.
+        "supported_for_chat": True,
+        "unsupported_model_type": None,
     }
 
 
@@ -508,6 +636,18 @@ def derive_copilot_limits(metadata: dict[str, Any]) -> dict[str, Any]:
         "max_prompt_tokens": max_prompt,
         "max_output_tokens": max_output,
         "supported_reasoning_efforts": metadata.get("supported_reasoning_efforts"),
+        # True only when the provider gave definitive effort evidence. ``None``
+        # means "unknown", which tells the plan to propose no reasoning change
+        # rather than clearing metadata that is already stored.
+        "reasoning_efforts_definitive": metadata.get(
+            "reasoning_efforts_definitive", True
+        ),
+        # Vision is tri-state: True (definitive provider evidence), False
+        # (provider declared the model text-only), or None (unknown). Only True
+        # is ever written; see ``build_plan``.
+        "supports_vision": metadata.get("supports_vision"),
+        "vision_media_types": list(metadata.get("vision_media_types") or []),
+        "vision_source": metadata.get("vision_source"),
     }
 
 
@@ -548,8 +688,60 @@ def provider_request_headers(provider: Optional[dict[str, Any]]) -> dict[str, st
     return {"Authorization": "Bearer " + api_key}
 
 
+def is_unsupported_omlx_model_type(*declared_types: Any) -> bool:
+    """Whether the model is one oMLX cannot serve chat with.
+
+    This is the single exclusion predicate. Rerankers, TTS engines, and
+    document converters are advertised by ``/v1/models`` exactly like chat
+    models, so every metadata decision — plan status, reasoning trust, vision
+    — consults this one function instead of keeping its own list.
+    """
+    return omlx_unsupported_model_type(*declared_types) is not None
+
+
+def omlx_unsupported_model_type(*declared_types: Any) -> Optional[str]:
+    """Return the declared type that makes the model non-chat, if any."""
+    for value in declared_types:
+        if value is None:
+            continue
+        normalized = str(value).strip().lower()
+        if normalized in OMLX_UNSUPPORTED_MODEL_TYPES:
+            return normalized
+    return None
+
+
+def is_omlx_reasoning_model_type(*declared_types: Any) -> bool:
+    """Whether any declared oMLX model/engine type may carry reasoning.
+
+    Kept as a standalone predicate so the trust gate lives in exactly one
+    place. An absent type is *not* trusted: the admin endpoint reports a
+    server-wide option list, so an unidentified model must not inherit it.
+    A non-chat type (see :func:`is_unsupported_omlx_model_type`) never is.
+    """
+    if is_unsupported_omlx_model_type(*declared_types):
+        return False
+    for value in declared_types:
+        if value and str(value).strip().lower() in OMLX_REASONING_MODEL_TYPES:
+            return True
+    return False
+
+
+def _copilot_efforts(raw_efforts: Any) -> Optional[list[str]]:
+    """Intersect a provider effort list with the Copilot vocabulary."""
+    if not isinstance(raw_efforts, list):
+        return None
+    efforts = [
+        str(item) for item in raw_efforts if str(item) in COPILOT_REASONING_EFFORTS
+    ]
+    seen: set[str] = set()
+    efforts = [item for item in efforts if not (item in seen or seen.add(item))]
+    return efforts or None
+
+
 def normalize_omlx_model(
-    entry: dict[str, Any], status_entry: Optional[dict[str, Any]] = None
+    entry: dict[str, Any],
+    status_entry: Optional[dict[str, Any]] = None,
+    admin_entry: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Normalize one oMLX model listing entry into Copilot metadata terms.
 
@@ -560,11 +752,16 @@ def normalize_omlx_model(
     ``model_context_length`` is kept as the discovered native length for
     diagnostics.
 
-    oMLX also accepts and forwards reasoning-effort strings, but it does not
-    advertise a per-model level set the way a hosted provider does, so no
-    reasoning efforts are derived; the existing user selection is left alone.
+    Reasoning is best-effort. ``/admin/api/models`` publishes Copilot-shaped
+    ``reasoning_effort_options`` and is preferred. When the admin surface is
+    unavailable (sub keys get a 401) the coarse ``reasoning_levels`` toggle
+    list from ``/v1/models/status`` is reported for diagnostics only: it has
+    no Copilot level vocabulary, so no efforts are written. Both surfaces are
+    gated on the model type so server-wide defaults never leak onto rerankers
+    or TTS engines.
     """
     status_entry = status_entry or {}
+    admin_entry = admin_entry or {}
     context_window = status_entry.get("max_context_window")
     if context_window is None:
         context_window = status_entry.get("model_context_length")
@@ -575,14 +772,90 @@ def normalize_omlx_model(
 
     max_output = status_entry.get("max_tokens")
 
+    model_type = (
+        status_entry.get("model_type")
+        or entry.get("model_type")
+        or admin_entry.get("model_type")
+    )
+    engine_type = (
+        status_entry.get("engine_type")
+        or entry.get("engine_type")
+        or admin_entry.get("engine_type")
+    )
+    # Every surface that might declare a type, in one precedence order. The
+    # exclusion predicate and the reasoning gate both read from this list, so
+    # "reranker", "audio_tts", and "markitdown" are recognized whichever
+    # endpoint happened to publish them.
+    type_sources = (
+        status_entry.get("model_type"),
+        status_entry.get("engine_type"),
+        entry.get("model_type"),
+        entry.get("engine_type"),
+        admin_entry.get("model_type"),
+        admin_entry.get("engine_type"),
+    )
+    non_chat_type = omlx_unsupported_model_type(*type_sources)
+    non_chat_model_type = non_chat_type is not None
+    # oMLX declares the model class rather than an input-modality list, so a
+    # ``vlm`` type is the only definitive vision signal. Absent both fields,
+    # vision stays unknown. A non-chat model is short-circuited first: it is
+    # never offered image input no matter what its type fields claim.
+    declared_types = [value for value in (model_type, engine_type) if value]
+    supports_vision: Optional[bool] = None
+    vision_source = None
+    if non_chat_model_type:
+        supports_vision = False
+    elif declared_types:
+        supports_vision = any(
+            str(value).strip().lower() in OMLX_VISION_MODEL_TYPES
+            for value in declared_types
+        )
+        if supports_vision:
+            vision_source = "omlx.model_type"
+
+    efforts: Optional[list[str]] = None
+    default_effort: Optional[str] = None
+    # True only when the provider gave definitive reasoning evidence. Without
+    # it (no admin access, unknown/untrusted model type) the plan must propose
+    # no reasoning change at all rather than clearing what is already stored.
+    efforts_known = False
+    reasoning_levels: Optional[list[str]] = None
+    thinking_default = None
+    if is_omlx_reasoning_model_type(*type_sources):
+        efforts = _copilot_efforts(admin_entry.get("reasoning_effort_options"))
+        if efforts is not None:
+            efforts_known = True
+            candidate = admin_entry.get("reasoning_effort_default")
+            if candidate is not None:
+                candidate = str(candidate)
+                default_effort = candidate if candidate in efforts else None
+
+        raw_levels = status_entry.get("reasoning_levels")
+        if raw_levels is None:
+            raw_levels = admin_entry.get("reasoning_levels")
+        if isinstance(raw_levels, list) and raw_levels:
+            reasoning_levels = [str(item) for item in raw_levels]
+
+        thinking_default = status_entry.get("thinking_default")
+        if thinking_default is None:
+            thinking_default = admin_entry.get("thinking_default")
+
     return {
         "model_id": entry.get("id") or status_entry.get("id"),
         "name": entry.get("id") or status_entry.get("id"),
         "max_context_window_tokens": context_window,
         "max_output_tokens": max_output,
-        "supported_reasoning_efforts": None,
-        "default_reasoning_effort": None,
-        "supports_reasoning": False,
+        "supported_reasoning_efforts": efforts,
+        "default_reasoning_effort": default_effort,
+        "supports_reasoning": efforts is not None,
+        "reasoning_efforts_definitive": efforts_known,
+        "reasoning_levels": reasoning_levels,
+        "thinking_default": thinking_default,
+        "supports_vision": supports_vision,
+        "vision_media_types": (
+            list(INPUT_MODALITY_MEDIA_TYPES["image"]) if supports_vision else []
+        ),
+        "vision_source": vision_source,
         "context_source": (
             "status.max_context_window"
             if status_entry.get("max_context_window") is not None
@@ -593,7 +866,11 @@ def normalize_omlx_model(
             else "unresolved"
         ),
         "native_context_window_tokens": status_entry.get("model_context_length"),
-        "model_type": status_entry.get("model_type") or entry.get("model_type"),
+        "model_type": model_type or engine_type,
+        # ``supported_for_chat`` is the plan-side view of the exclusion
+        # predicate: the model is still *reported*, it is just never written.
+        "supported_for_chat": not non_chat_model_type,
+        "unsupported_model_type": non_chat_type,
         "loaded": status_entry.get("loaded"),
     }
 
@@ -602,12 +879,50 @@ def normalize_provider_model(
     kind: str,
     entry: dict[str, Any],
     status: Optional[dict[str, Any]] = None,
+    admin: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Dispatch a raw catalog entry to the provider-specific normalizer."""
     if kind == "omlx":
-        status_entry = (status or {}).get(str(entry.get("id")))
-        return normalize_omlx_model(entry, status_entry)
+        model_id = str(entry.get("id"))
+        status_entry = (status or {}).get(model_id)
+        admin_entry = (admin or {}).get(model_id)
+        return normalize_omlx_model(entry, status_entry, admin_entry)
     return normalize_openrouter_model(entry)
+
+
+def fetch_omlx_admin_models(base_url: str, api_key: Optional[str]) -> dict[str, dict[str, Any]]:
+    """Fetch ``/admin/api/models`` and index it by model id.
+
+    The admin surface publishes the Copilot-shaped reasoning vocabulary, but it
+    only accepts the oMLX main key: a sub key gets a 401. Every failure mode
+    (401/404, connection failure, malformed payload) is silent and returns an
+    empty mapping so callers fall back to ``/v1/models/status``. The key is
+    passed in by the caller from unredacted provider settings; it is never
+    logged, never returned, and never included in an error message — it only
+    travels in the request header.
+    """
+    root = (base_url or "").strip().rstrip("/")
+    if root.endswith("/v1"):
+        root = root[: -len("/v1")]
+    if not root:
+        return {}
+
+    settings: dict[str, Any] = {"apiKey": api_key}
+    headers = provider_request_headers({"settings": settings})
+    try:
+        payload = http_get_json(f"{root}{OMLX_ADMIN_MODELS_PATH}", headers=headers)
+    except (OSError, ValueError):
+        return {}
+
+    entries = payload.get("models") if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        return {}
+
+    admin: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("id"):
+            admin[str(entry["id"])] = entry
+    return admin
 
 
 def fetch_catalog(
@@ -655,10 +970,16 @@ def fetch_catalog(
                     status[str(status_entry["id"])] = status_entry
 
     catalog: dict[str, dict[str, Any]] = {}
+    admin: dict[str, dict[str, Any]] = {}
+    if spec.get("admin_models_path") and provider:
+        settings = provider.get("settings") or {}
+        admin = fetch_omlx_admin_models(
+            provider_base_url(provider), settings.get("apiKey")
+        )
     for entry in entries:
         if not isinstance(entry, dict) or not entry.get("id"):
             continue
-        catalog[str(entry["id"])] = normalize_provider_model(kind, entry, status)
+        catalog[str(entry["id"])] = normalize_provider_model(kind, entry, status, admin)
     return catalog
 
 
@@ -747,6 +1068,7 @@ def build_plan(
     model_ids: Optional[list[str]] = None,
     set_reasoning_defaults: bool = False,
     set_context_tier: Optional[str] = None,
+    include_unsupported_model_types: bool = False,
 ) -> dict[str, Any]:
     """Compute a dry-run plan without touching the database."""
     provider_by_id = {provider["id"]: provider for provider in providers}
@@ -778,6 +1100,7 @@ def build_plan(
                 "max_prompt_tokens": model["max_prompt_tokens"],
                 "max_output_tokens": model["max_output_tokens"],
                 "supported_reasoning_efforts": model["supported_reasoning_efforts"],
+                "supports_vision": model.get("supports_vision"),
             },
             "proposed": None,
             "changes": [],
@@ -802,6 +1125,28 @@ def build_plan(
             entries.append(entry)
             continue
 
+        # The provider declared a model class that cannot serve chat (a
+        # reranker, a TTS engine, a document converter). Report it with its
+        # reason but plan nothing: a context window on such a model is worse
+        # than no metadata, because the picker then offers a model that fails
+        # at request time. This branch runs before any metadata derivation so
+        # reasoning and vision never even get a chance to propose a write.
+        unsupported_model_type = metadata.get("unsupported_model_type")
+        if unsupported_model_type and not include_unsupported_model_types:
+            entry["status"] = "unsupported_model_type"
+            entry["reason"] = (
+                f"Model type '{unsupported_model_type}' cannot serve chat "
+                "completions, so no metadata is written for it. Pass "
+                "include_unsupported_model_types=true to plan it anyway for "
+                "debugging."
+            )
+            entry["provider_metadata"] = {
+                "model_type": metadata.get("model_type"),
+                "unsupported_model_type": unsupported_model_type,
+            }
+            entries.append(entry)
+            continue
+
         proposed = derive_copilot_limits(metadata)
         entry["proposed"] = proposed
         entry["provider_metadata"] = {
@@ -809,12 +1154,28 @@ def build_plan(
             "provider_max_output_tokens": metadata.get("max_output_tokens"),
             "supported_reasoning_efforts": metadata.get("supported_reasoning_efforts"),
             "default_reasoning_effort": metadata.get("default_reasoning_effort"),
+            "reasoning_efforts_definitive": metadata.get(
+                "reasoning_efforts_definitive", True
+            ),
             "context_source": metadata.get("context_source"),
             "native_context_window_tokens": metadata.get(
                 "native_context_window_tokens"
             ),
             "model_type": metadata.get("model_type"),
+            "supports_vision": metadata.get("supports_vision"),
+            "vision_media_types": metadata.get("vision_media_types") or [],
+            "vision_source": metadata.get("vision_source"),
         }
+        # oMLX's coarse toggle list is diagnostic only; omit it for providers
+        # that never publish one rather than widening their output shape.
+        if metadata.get("reasoning_levels") is not None:
+            entry["provider_metadata"]["reasoning_levels"] = metadata[
+                "reasoning_levels"
+            ]
+        if metadata.get("thinking_default") is not None:
+            entry["provider_metadata"]["thinking_default"] = metadata[
+                "thinking_default"
+            ]
 
         changes: list[str] = []
         if proposed["max_prompt_tokens"] is not None and (
@@ -825,12 +1186,28 @@ def build_plan(
             proposed["max_output_tokens"] != model["max_output_tokens"]
         ):
             changes.append("max_output_tokens")
-        if not _efforts_equal(
+        efforts_indeterminate = not proposed.get("reasoning_efforts_definitive", True)
+        if not efforts_indeterminate and not _efforts_equal(
             model["supported_reasoning_efforts"], proposed["supported_reasoning_efforts"]
         ):
             changes.append("supported_reasoning_efforts")
+        # Only an affirmative, definitive vision signal is ever proposed. A
+        # text-only or unknown provider result must not clear an existing flag:
+        # the column defaults to 0, so writing it back is a no-op at best, and
+        # a wrong 1 makes the app offer image input to a model that rejects it.
+        vision_available = model.get("supports_vision_available", True)
+        if (
+            proposed["supports_vision"] is True
+            and model.get("supports_vision") != 1
+        ):
+            changes.append("supports_vision")
 
         entry["changes"] = changes
+        # Set when the only reason the row looks stale is a vision flag the
+        # schema cannot store; the write path uses it to avoid a no-op rewrite.
+        entry["vision_unavailable"] = (
+            not vision_available and "supports_vision" in changes
+        )
 
         if set_reasoning_defaults:
             default_effort = metadata.get("default_reasoning_effort")
@@ -868,6 +1245,11 @@ def build_plan(
         "unsupported_provider": sum(
             1 for entry in entries if entry["status"] == "unsupported_provider"
         ),
+        # Fifth bucket. The four above keep their meaning, so a consumer that
+        # sums the original four still sees the same numbers as before.
+        "unsupported_model_type": sum(
+            1 for entry in entries if entry["status"] == "unsupported_model_type"
+        ),
     }
 
     return {
@@ -894,8 +1276,155 @@ def build_plan(
 # ---------------------------------------------------------------------------
 
 
+#: The original three metadata columns. ``missing_metadata`` and both
+#: ``has_metadata`` meanings are defined by this list; vision is not one of
+#: them because it is best-effort.
+_METADATA_FIELDS = (
+    "max_prompt_tokens",
+    "max_output_tokens",
+    "supported_reasoning_efforts",
+)
+
+
+def _catalog_entry_has_vision(entry: dict[str, Any]) -> bool:
+    """Whether one cached catalog entry advertises vision support.
+
+    The patch writes ``capabilities.supports.vision = true``; older or
+    unpatched entries leave the key absent. Only an explicit ``True`` counts,
+    matching the write path's "never write false" rule.
+    """
+    capabilities = entry.get("capabilities") or {}
+    supports = capabilities.get("supports") or {}
+    return isinstance(supports, dict) and supports.get("vision") is True
+
+
+def _catalog_entry_has_limits(entry: dict[str, Any]) -> bool:
+    capabilities = entry.get("capabilities") or {}
+    limits = capabilities.get("limits")
+    return isinstance(limits, dict) and bool(limits)
+
+
+def _catalog_entry_vision_media_types(entry: dict[str, Any]) -> list[str]:
+    capabilities = entry.get("capabilities") or {}
+    limits = capabilities.get("limits") or {}
+    vision = limits.get("vision") if isinstance(limits, dict) else None
+    if not isinstance(vision, dict):
+        return []
+    return [str(item) for item in vision.get("supported_media_types") or []]
+
+
+def _catalog_entry_has_metadata(entry: dict[str, Any]) -> bool:
+    """Whether the cached entry carries any provider-derived metadata."""
+    return _catalog_entry_has_limits(entry) or _catalog_entry_has_vision(entry)
+
+
+def _list_model_entry(
+    model: dict[str, Any],
+    provider: dict[str, Any],
+    reasoning_effort: Optional[str],
+    context_tier: Optional[str],
+    metadata: Optional[dict[str, Any]],
+    *,
+    require_all_metadata: bool = True,
+) -> dict[str, Any]:
+    """Build one read-surface model entry, shared by both read tools.
+
+    ``list_byok_models`` historically counts a model as having metadata when
+    any of the three columns is populated; ``read_byok_config`` requires all
+    three. ``require_all_metadata`` preserves both meanings.
+    """
+    efforts = model["supported_reasoning_efforts"]
+    # ``missing_metadata`` deliberately stays the three original columns.
+    # Vision is best-effort: a model without it is unknown, not incomplete.
+    missing = [field for field in _METADATA_FIELDS if model[field] is None]
+    metadata = metadata or {}
+    # ``unsupported_model_type`` is reported only. A non-chat model is still
+    # missing the same three columns, so neither ``missing_metadata`` nor
+    # ``has_metadata`` may depend on it.
+    unsupported_model_type = metadata.get("unsupported_model_type")
+    # Provider metadata wins when the caller supplied it: a stored ``0`` is the
+    # column default rather than a claim that the model is text-only. Without
+    # metadata the stored value is all there is, and NULL means unknown.
+    vision = metadata.get("supports_vision")
+    if vision is None:
+        vision = model.get("supports_vision")
+    return {
+        **model,
+        "provider_name": provider.get("name"),
+        "provider_kind": detect_provider_kind(provider) if provider else None,
+        "reasoning_effort": reasoning_effort,
+        "context_tier": context_tier,
+        "has_metadata": (
+            len(missing) < 3
+            if require_all_metadata
+            else any(model[field] is not None for field in _METADATA_FIELDS)
+        ),
+        "missing_metadata": missing,
+        "supports_reasoning": bool(efforts),
+        # Vision is tri-state: True, False, or None/absent for unknown.
+        "supports_vision": None if vision is None else bool(vision),
+        "vision_media_types": list(metadata.get("vision_media_types") or []),
+        "vision_source": metadata.get("vision_source"),
+        "model_type": metadata.get("model_type"),
+        "supported_for_chat": metadata.get("supported_for_chat"),
+        "unsupported_model_type": unsupported_model_type,
+    }
+
+
+def _catalog_cache_summary(
+    cache: Any, entries: list[Any]
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Summarize one cached catalog and collect its BYOK entries."""
+    byok_entries = [
+        entry for entry in entries if isinstance(entry, dict) and entry.get("providerId")
+    ]
+    summary: dict[str, Any] = {
+        "present": True,
+        "shape": "list" if isinstance(cache, list) else "object",
+        "entry_count": len(entries),
+        "byok_entry_count": len(byok_entries),
+        "byok_entries_with_limits": sum(
+            1 for entry in byok_entries if _catalog_entry_has_limits(entry)
+        ),
+        "byok_entries_with_vision": sum(
+            1 for entry in byok_entries if _catalog_entry_has_vision(entry)
+        ),
+        "byok_entries_with_reasoning_efforts": sum(
+            1 for entry in byok_entries if entry.get("supportedReasoningEfforts")
+        ),
+        "byok_entries_with_metadata": sum(
+            1 for entry in byok_entries if _catalog_entry_has_metadata(entry)
+        ),
+    }
+    catalog_entries: list[dict[str, Any]] = []
+    for entry in byok_entries:
+        capabilities = entry.get("capabilities") or {}
+        limits = capabilities.get("limits") or {}
+        catalog_entries.append(
+            {
+                "id": entry.get("id"),
+                "name": entry.get("name"),
+                "providerId": entry.get("providerId"),
+                "max_context_window_tokens": limits.get("max_context_window_tokens"),
+                "max_prompt_tokens": limits.get("max_prompt_tokens"),
+                "max_output_tokens": limits.get("max_output_tokens"),
+                "has_limits": _catalog_entry_has_limits(entry),
+                "supports_vision": _catalog_entry_has_vision(entry),
+                "vision_media_types": _catalog_entry_vision_media_types(entry),
+                "supportedReasoningEfforts": entry.get("supportedReasoningEfforts"),
+                "defaultReasoningEffort": entry.get("defaultReasoningEffort"),
+            }
+        )
+    return summary, catalog_entries
+
+
 def list_byok_models(db_path: Optional[str] = None) -> dict[str, Any]:
-    """List configured BYOK providers and models with their current metadata."""
+    """List configured BYOK providers and models with their current metadata.
+
+    ``model_type`` and ``supported_for_chat`` come from provider metadata,
+    which the database does not store. This read path makes no network calls,
+    so without a catalog both are ``None`` — unknown, never excluded.
+    """
     path = resolve_db_path(db_path)
     if not os.path.exists(path):
         raise FileNotFoundError(f"Copilot app database not found at {path}")
@@ -910,26 +1439,17 @@ def list_byok_models(db_path: Optional[str] = None) -> dict[str, Any]:
         conn.close()
 
     provider_by_id = {provider["id"]: provider for provider in providers}
-    enriched = []
-    for model in models:
-        provider = provider_by_id.get(model["provider_id"], {})
-        enriched.append(
-            {
-                **model,
-                "provider_name": provider.get("name"),
-                "provider_kind": detect_provider_kind(provider) if provider else None,
-                "reasoning_effort": reasoning_state.get(model["state_key"]),
-                "context_tier": context_tier_state.get(model["state_key"]),
-                "has_metadata": any(
-                    model[field] is not None
-                    for field in (
-                        "max_prompt_tokens",
-                        "max_output_tokens",
-                        "supported_reasoning_efforts",
-                    )
-                ),
-            }
+    enriched = [
+        _list_model_entry(
+            model,
+            provider_by_id.get(model["provider_id"], {}),
+            reasoning_state.get(model["state_key"]),
+            context_tier_state.get(model["state_key"]),
+            None,
+            require_all_metadata=False,
         )
+        for model in models
+    ]
 
     return {
         "db_path": path,
@@ -955,10 +1475,21 @@ def list_byok_models(db_path: Optional[str] = None) -> dict[str, Any]:
     }
 
 
+def _catalog_metadata_for(
+    model: dict[str, Any], catalog: Optional[dict[str, Any]]
+) -> dict[str, Any]:
+    """Look one model's normalized provider metadata out of a flat catalog."""
+    if not isinstance(catalog, dict):
+        return {}
+    metadata = catalog.get(model["model_id"])
+    return metadata if isinstance(metadata, dict) else {}
+
+
 def read_byok_config(
     workspace_path: Optional[str] = None,
     db_path: Optional[str] = None,
     include_catalog_cache: bool = True,
+    catalog: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Return a complete, self-contained snapshot of the BYOK model config.
 
@@ -966,6 +1497,12 @@ def read_byok_config(
     every model, the metadata currently stored for each, the user's selected
     reasoning effort and context tier, and what is still missing — without
     locating or reading the app database itself.
+
+    ``model_type`` and ``supported_for_chat`` come from provider metadata,
+    which the database does not store. Pass ``catalog`` (a ``{model_id:
+    metadata}`` mapping, the same shape ``plan_metadata_updates`` accepts) to
+    surface them; without it both are ``None``, meaning unknown rather than
+    excluded. This keeps the read path free of network calls.
     """
     path = resolve_db_path(db_path)
     if not os.path.exists(path):
@@ -994,29 +1531,18 @@ def read_byok_config(
     enriched_models = []
     for model in models:
         provider = provider_by_id.get(model["provider_id"], {})
-        kind = detect_provider_kind(provider) if provider else None
-        efforts = model["supported_reasoning_efforts"]
-        missing = [
-            field
-            for field in (
-                "max_prompt_tokens",
-                "max_output_tokens",
-                "supported_reasoning_efforts",
-            )
-            if model[field] is None
-        ]
+        # Without a catalog the type is unknown (``None``), never "excluded".
+        metadata = _catalog_metadata_for(model, catalog) if catalog else {}
+        entry = _list_model_entry(
+            model,
+            provider,
+            reasoning_state.get(model["state_key"]),
+            context_tier_state.get(model["state_key"]),
+            metadata,
+        )
+        kind = entry["provider_kind"]
         enriched_models.append(
-            {
-                **model,
-                "provider_name": provider.get("name"),
-                "provider_kind": kind,
-                "provider_supported": kind is not None,
-                "reasoning_effort": reasoning_state.get(model["state_key"]),
-                "context_tier": context_tier_state.get(model["state_key"]),
-                "has_metadata": len(missing) < 3,
-                "missing_metadata": missing,
-                "supports_reasoning": bool(efforts),
-            }
+            {**entry, "provider_supported": kind is not None}
         )
 
     enriched_providers = []
@@ -1029,8 +1555,10 @@ def read_byok_config(
                 "provider_kind": kind,
                 "provider_supported": kind is not None,
                 "catalog_url": provider_catalog_url(kind, provider=provider),
-                "derives_reasoning_efforts": bool(
-                    spec.get("reasoning_efforts") if spec else False
+                "derives_reasoning_efforts": bool(spec)
+                and spec.get("reasoning_efforts") is True,
+                "reasoning_efforts_mode": (
+                    spec.get("reasoning_efforts") if spec else None
                 ),
                 "model_count": sum(
                     1 for model in models if model["provider_id"] == provider["id"]
@@ -1046,51 +1574,10 @@ def read_byok_config(
         if entries is None:
             catalog_cache_summary[cache_key] = {"present": False}
             continue
-        byok_entries = [
-            entry
-            for entry in entries
-            if isinstance(entry, dict) and entry.get("providerId")
-        ]
-        with_limits = sum(
-            1
-            for entry in byok_entries
-            if isinstance((entry.get("capabilities") or {}).get("limits"), dict)
-            and (entry.get("capabilities") or {}).get("limits")
-        )
-        with_efforts = sum(
-            1 for entry in byok_entries if entry.get("supportedReasoningEfforts")
-        )
-        catalog_cache_summary[cache_key] = {
-            "present": True,
-            "shape": "list" if isinstance(cache, list) else "object",
-            "entry_count": len(entries),
-            "byok_entry_count": len(byok_entries),
-            "byok_entries_with_limits": with_limits,
-            "byok_entries_with_reasoning_efforts": with_efforts,
-        }
+        summary, catalog_entries = _catalog_cache_summary(cache, entries)
+        catalog_cache_summary[cache_key] = summary
         if cache_key == APP_STATE_CATALOG_KEY:
-            for entry in byok_entries:
-                capabilities = entry.get("capabilities") or {}
-                limits = capabilities.get("limits") or {}
-                byok_catalog_entries.append(
-                    {
-                        "id": entry.get("id"),
-                        "name": entry.get("name"),
-                        "providerId": entry.get("providerId"),
-                        "max_context_window_tokens": limits.get(
-                            "max_context_window_tokens"
-                        ),
-                        "max_prompt_tokens": limits.get("max_prompt_tokens"),
-                        "max_output_tokens": limits.get("max_output_tokens"),
-                        "has_limits": bool(limits),
-                        "supportedReasoningEfforts": entry.get(
-                            "supportedReasoningEfforts"
-                        ),
-                        "defaultReasoningEffort": entry.get(
-                            "defaultReasoningEffort"
-                        ),
-                    }
-                )
+            byok_catalog_entries.extend(catalog_entries)
 
     supported_kinds = sorted(
         {p["provider_kind"] for p in enriched_providers if p["provider_kind"]}
@@ -1155,6 +1642,14 @@ def read_byok_config(
             "byok_entries_with_limits": sum(
                 1 for entry in byok_catalog_entries if entry["has_limits"]
             ),
+            "byok_entries_with_vision": sum(
+                1 for entry in byok_catalog_entries if entry["supports_vision"]
+            ),
+            "byok_entries_with_metadata": sum(
+                1
+                for entry in byok_catalog_entries
+                if entry["has_limits"] or entry["supports_vision"]
+            ),
             "byok_entries": byok_catalog_entries,
             "caches": catalog_cache_summary,
         },
@@ -1169,6 +1664,22 @@ def read_byok_config(
             ),
             "models_supporting_reasoning": sum(
                 1 for m in enriched_models if m["supports_reasoning"]
+            ),
+            "models_with_vision": sum(
+                1 for m in enriched_models if m["supports_vision"] is True
+            ),
+            "models_unsupported_model_type": sum(
+                1 for m in enriched_models if m["unsupported_model_type"]
+            ),
+            "providers_with_supported_reasoning": sum(
+                1
+                for p in enriched_providers
+                if p["reasoning_efforts_mode"] is True
+            ),
+            "providers_with_conditional_reasoning": sum(
+                1
+                for p in enriched_providers
+                if p["reasoning_efforts_mode"] == "conditional"
             ),
             "providers_with_supported_source": supported_kinds,
             "providers_without_supported_source": unsupported,
@@ -1196,7 +1707,9 @@ def fetch_provider_metadata(
             raise FileNotFoundError(f"Copilot app database not found at {path}")
         conn = connect(path, readonly=True)
         try:
-            providers = load_providers(conn)
+            # Raw settings only so the oMLX admin fetch can authenticate; this
+            # provider list never reaches a tool result or the plan.
+            providers = load_providers(conn, redact=False)
             models = load_models(conn)
         finally:
             conn.close()
@@ -1276,6 +1789,7 @@ def plan_metadata_updates(
     set_context_tier: Optional[str] = None,
     catalog: Optional[dict[str, Any]] = None,
     catalog_url: Optional[str] = None,
+    include_unsupported_model_types: bool = False,
 ) -> dict[str, Any]:
     """Compute a dry-run plan of metadata changes. Never writes."""
     path = resolve_db_path(db_path)
@@ -1284,7 +1798,7 @@ def plan_metadata_updates(
 
     conn = connect(path, readonly=True)
     try:
-        providers = load_providers(conn)
+        providers = load_providers(conn, redact=False)
         models = load_models(conn)
         reasoning_state = load_app_state(conn, APP_STATE_REASONING_KEY) or {}
         context_tier_state = load_app_state(conn, APP_STATE_CONTEXT_TIER_KEY) or {}
@@ -1316,6 +1830,7 @@ def plan_metadata_updates(
         model_ids=model_ids,
         set_reasoning_defaults=set_reasoning_defaults,
         set_context_tier=set_context_tier,
+        include_unsupported_model_types=include_unsupported_model_types,
     )
     plan["db_path"] = path
     plan["dry_run"] = True
@@ -1349,19 +1864,41 @@ def _catalog_entries(cache: Any) -> Optional[list[Any]]:
     return None
 
 
+class _CatalogPatch(tuple):
+    """``(cache, patched)`` result that also exposes the match count.
+
+    Unpacking as two values keeps existing callers unchanged, while
+    ``.matched`` distinguishes "found the entry" from "changed the entry".
+    """
+
+    def __new__(cls, cache: Any, patched: int, matched: int) -> "_CatalogPatch":
+        result = super().__new__(cls, (cache, patched))
+        result.patched = patched
+        result.matched = matched
+        return result
+
+
 def _patch_catalog_cache(
     cache: Any, updates: dict[str, dict[str, Any]]
-) -> tuple[Any, int]:
-    """Patch BYOK entries in a cached model catalog. Returns (cache, patched).
+) -> _CatalogPatch:
+    """Patch BYOK entries in a cached model catalog.
+
+    The result unpacks as ``(cache, patched)`` for existing callers, with
+    ``matched`` available as a named attribute. ``patched`` counts entries
+    whose cache representation actually changed; ``matched`` counts entries the
+    update set found, whether or not they needed a change. The caller reports
+    ``patched`` as work done and warns on ``matched == 0`` so an already
+    in-sync cache is not mistaken for an unmatched one.
 
     Accepts both catalog shapes (see :func:`_catalog_entries`) and mutates the
     entries in place, so the caller can persist ``cache`` unchanged.
     """
     models = _catalog_entries(cache)
     if models is None:
-        return cache, 0
+        return _CatalogPatch(cache, 0, 0)
 
     patched = 0
+    matched = 0
     for entry in models:
         if not isinstance(entry, dict):
             continue
@@ -1381,6 +1918,7 @@ def _patch_catalog_cache(
         update = updates.get(state_key)
         if update is None:
             continue
+        matched += 1
 
         capabilities = entry.setdefault("capabilities", {})
         if not isinstance(capabilities, dict):
@@ -1391,30 +1929,70 @@ def _patch_catalog_cache(
         if not isinstance(limits, dict):
             limits = {}
             capabilities["limits"] = limits
+        changed = False
         if update.get("max_prompt_tokens") is not None:
-            limits["max_prompt_tokens"] = update["max_prompt_tokens"]
+            if limits.get("max_prompt_tokens") != update["max_prompt_tokens"]:
+                limits["max_prompt_tokens"] = update["max_prompt_tokens"]
+                changed = True
         if update.get("max_output_tokens") is not None:
-            limits["max_output_tokens"] = update["max_output_tokens"]
+            if limits.get("max_output_tokens") != update["max_output_tokens"]:
+                limits["max_output_tokens"] = update["max_output_tokens"]
+                changed = True
         if update.get("max_context_window_tokens") is not None:
-            limits["max_context_window_tokens"] = update["max_context_window_tokens"]
+            if (
+                limits.get("max_context_window_tokens")
+                != update["max_context_window_tokens"]
+            ):
+                limits["max_context_window_tokens"] = update[
+                    "max_context_window_tokens"
+                ]
+                changed = True
 
         supports = capabilities.get("supports")
         if not isinstance(supports, dict):
             supports = {}
             capabilities["supports"] = supports
-        efforts = update.get("supported_reasoning_efforts")
-        supports["reasoningEffort"] = bool(efforts)
-        if efforts:
-            entry["supportedReasoningEfforts"] = list(efforts)
-            default_effort = update.get("default_reasoning_effort")
-            if default_effort:
-                entry["defaultReasoningEffort"] = default_effort
-        else:
-            entry.pop("supportedReasoningEfforts", None)
-            entry.pop("defaultReasoningEffort", None)
-        patched += 1
+        if update.get("patch_reasoning", True):
+            efforts = update.get("supported_reasoning_efforts")
+            if supports.get("reasoningEffort") != bool(efforts):
+                supports["reasoningEffort"] = bool(efforts)
+                changed = True
+            if efforts:
+                if entry.get("supportedReasoningEfforts") != list(efforts):
+                    entry["supportedReasoningEfforts"] = list(efforts)
+                    changed = True
+                default_effort = update.get("default_reasoning_effort")
+                if default_effort:
+                    if entry.get("defaultReasoningEffort") != default_effort:
+                        entry["defaultReasoningEffort"] = default_effort
+                        changed = True
+            else:
+                for stale_key in ("supportedReasoningEfforts", "defaultReasoningEffort"):
+                    if stale_key in entry:
+                        entry.pop(stale_key, None)
+                        changed = True
 
-    return cache, patched
+        # Vision is written only from definitive provider evidence. A model the
+        # provider does not declare as vision-capable keeps whatever the cache
+        # already says, because absence of evidence is not evidence of absence.
+        if update.get("supports_vision") is True:
+            if supports.get("vision") is not True:
+                supports["vision"] = True
+                changed = True
+            media_types = update.get("vision_media_types") or []
+            if media_types:
+                vision = limits.get("vision")
+                if not isinstance(vision, dict):
+                    vision = {}
+                    limits["vision"] = vision
+                if list(vision.get("supported_media_types") or []) != list(media_types):
+                    vision["supported_media_types"] = list(media_types)
+                    changed = True
+
+        if changed:
+            patched += 1
+
+    return _CatalogPatch(cache, patched, matched)
 
 
 def apply_metadata_updates(
@@ -1427,6 +2005,7 @@ def apply_metadata_updates(
     refresh_catalog_cache: bool = True,
     catalog: Optional[dict[str, Any]] = None,
     catalog_url: Optional[str] = None,
+    include_unsupported_model_types: bool = False,
 ) -> dict[str, Any]:
     """Apply planned metadata updates to the Copilot app database."""
     path = resolve_db_path(db_path)
@@ -1435,10 +2014,11 @@ def apply_metadata_updates(
 
     conn = connect(path, readonly=True)
     try:
-        providers = load_providers(conn)
+        providers = load_providers(conn, redact=False)
         models = load_models(conn)
         reasoning_state = load_app_state(conn, APP_STATE_REASONING_KEY) or {}
         context_tier_state = load_app_state(conn, APP_STATE_CONTEXT_TIER_KEY) or {}
+        skipped_vision = set(load_app_state(conn, APP_STATE_VISION_SKIPPED_KEY) or [])
     finally:
         conn.close()
 
@@ -1466,6 +2046,7 @@ def apply_metadata_updates(
         model_ids=model_ids,
         set_reasoning_defaults=set_reasoning_defaults,
         set_context_tier=set_context_tier,
+        include_unsupported_model_types=include_unsupported_model_types,
     )
 
     result: dict[str, Any] = {
@@ -1478,6 +2059,7 @@ def apply_metadata_updates(
             "app_state_entries_updated": 0,
             "catalog_cache_entries_patched": 0,
             "catalog_caches_patched": {},
+            "vision_flags_written": 0,
         },
         "backup_path": None,
         "notes": [],
@@ -1500,9 +2082,19 @@ def apply_metadata_updates(
             "default_reasoning_effort": (entry.get("provider_metadata") or {}).get(
                 "default_reasoning_effort"
             ),
+            # With no definitive reasoning evidence the row is untouched, so
+            # the cache must be left alone too: passing an explicit ``False``
+            # here would wipe an existing effort list on a single 401 run.
+            "patch_reasoning": (entry.get("proposed") or {}).get(
+                "reasoning_efforts_definitive", True
+            ),
         }
         for entry in plan["entries"]
-        if entry.get("proposed") and entry.get("provider_metadata")
+        if entry.get("proposed")
+        and entry.get("provider_metadata")
+        # Belt and braces: a non-chat model is never written, even if a future
+        # change gives it a ``proposed`` block. The plan status is the gate.
+        and entry["status"] != "unsupported_model_type"
     }
 
     # Probe the catalog caches so a stale cache still counts as work to do.
@@ -1515,22 +2107,39 @@ def apply_metadata_updates(
                 cache = load_app_state(probe, cache_key)
                 if cache is None:
                     continue
-                _, patched = _patch_catalog_cache(
+                patched = _patch_catalog_cache(
                     json.loads(json.dumps(cache)), updates
-                )
+                ).patched
                 if patched:
                     cache_patch_counts[cache_key] = patched
         finally:
             probe.close()
 
-    has_row_updates = any(
-        entry["status"] == "update" and entry.get("proposed")
+    # A row whose only planned change is a vision flag the schema cannot store
+    # is already as correct as it can be. The first run records those rows in
+    # app state; later runs skip them so a legacy database settles instead of
+    # counting a no-op rewrite (and a backup) on every run.
+    row_updates = [
+        entry
         for entry in plan["entries"]
-    )
+        if entry["status"] == "update" and entry.get("proposed")
+    ]
+    vision_only_updates = [
+        entry
+        for entry in row_updates
+        if entry.get("vision_unavailable")
+        and set(entry.get("changes") or []) <= {"supports_vision"}
+    ]
+    already_skipped = [
+        entry for entry in vision_only_updates if entry["state_key"] in skipped_vision
+    ]
+    effective_row_updates = [
+        entry for entry in row_updates if entry not in already_skipped
+    ]
     has_app_state_changes = any(
         entry["app_state_changes"] for entry in plan["entries"]
     )
-    if not has_row_updates and not has_app_state_changes and not cache_patch_counts:
+    if not effective_row_updates and not has_app_state_changes and not cache_patch_counts:
         result["notes"].append("Nothing to apply — configuration already matches provider metadata")
         return result
 
@@ -1539,30 +2148,56 @@ def apply_metadata_updates(
         if backup:
             result["backup_path"] = _backup_database(conn, path)
 
+        # A database created before ``supports_vision`` existed still gets every
+        # other column written; only the vision assignment is dropped.
+        has_vision_column = "supports_vision" in table_columns(conn, "provider_models")
+
         with conn:
-            for entry in plan["entries"]:
-                if entry["status"] != "update" or not entry.get("proposed"):
-                    continue
+            for entry in effective_row_updates:
                 proposed = entry["proposed"]
-                conn.execute(
-                    """
-                    UPDATE provider_models
-                    SET max_prompt_tokens = COALESCE(?, max_prompt_tokens),
-                        max_output_tokens = COALESCE(?, max_output_tokens),
-                        supported_reasoning_efforts = ?,
-                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                    WHERE id = ?
-                    """,
-                    (
-                        proposed["max_prompt_tokens"],
-                        proposed["max_output_tokens"],
+                vision_flag = (
+                    1 if proposed.get("supports_vision") is True else None
+                )
+                vision_assignment = (
+                    ",\n                        supports_vision = COALESCE(?, supports_vision)"
+                    if has_vision_column and vision_flag is not None
+                    else ""
+                )
+                params: tuple[Any, ...] = (
+                    proposed["max_prompt_tokens"],
+                    proposed["max_output_tokens"],
+                )
+                # With no definitive reasoning evidence the column keeps its
+                # value; only an authoritative provider list (or an explicit
+                # empty one, for providers that declare efforts themselves)
+                # may rewrite it.
+                reasoning_assignment = ""
+                if proposed.get("reasoning_efforts_definitive", True):
+                    reasoning_assignment = (
+                        ",\n                        supported_reasoning_efforts = ?"
+                    )
+                    params += (
                         None
                         if proposed["supported_reasoning_efforts"] is None
                         else json.dumps(proposed["supported_reasoning_efforts"]),
-                        entry["row_id"],
-                    ),
+                    )
+                if vision_assignment:
+                    params += (vision_flag,)
+                params += (entry["row_id"],)
+                conn.execute(
+                    f"""
+                    UPDATE provider_models
+                    SET max_prompt_tokens = COALESCE(?, max_prompt_tokens),
+                        max_output_tokens = COALESCE(?, max_output_tokens)
+                        {reasoning_assignment}{vision_assignment},
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE id = ?
+                    """,
+                    params,
                 )
                 result["applied"]["models_updated"] += 1
+                if vision_assignment and "supports_vision" in entry["changes"]:
+                    result["applied"]["vision_flags_written"] += 1
 
             reasoning_updates = [
                 change
@@ -1608,6 +2243,23 @@ def apply_metadata_updates(
                 )
                 result["applied"]["app_state_entries_updated"] += len(tier_updates)
 
+            if vision_only_updates:
+                merged_skipped = set(skipped_vision)
+                merged_skipped.update(
+                    entry["state_key"] for entry in vision_only_updates
+                )
+                conn.execute(
+                    """
+                    INSERT INTO app_state (key, value, updated_at)
+                    VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at
+                    """,
+                    (APP_STATE_VISION_SKIPPED_KEY, json.dumps(sorted(merged_skipped))),
+                )
+                result["applied"]["app_state_entries_updated"] += 1
+
             if refresh_catalog_cache:
                 patched_total = 0
                 for cache_key in CATALOG_CACHE_KEYS:
@@ -1629,7 +2281,18 @@ def apply_metadata_updates(
                         patched_total += patched
                         result["applied"]["catalog_caches_patched"][cache_key] = patched
                 result["applied"]["catalog_cache_entries_patched"] = patched_total
-                if not patched_total and updates:
+                # Track matches separately from changes: an in-sync cache
+                # matches every entry but patches none, so the change count
+                # cannot tell "found the entries" from "found nothing".
+                matched_total = 0
+                for cache_key in CATALOG_CACHE_KEYS:
+                    cache = load_app_state(conn, cache_key)
+                    if cache is None:
+                        continue
+                    matched_total += _patch_catalog_cache(
+                        json.loads(json.dumps(cache)), updates
+                    ).matched
+                if not matched_total and updates:
                     result["notes"].append(
                         f"WARNING: refresh_catalog_cache was requested and {len(updates)} "
                         f"model(s) had provider metadata, but 0 entries in "
@@ -1660,7 +2323,8 @@ def get_provider_registry() -> dict[str, Any]:
                 "endpoints_url_template": spec.get("endpoints_url_template"),
                 "match_hosts": spec.get("match_hosts", []),
                 "match_names": spec.get("match_names", []),
-                "reasoning_efforts": bool(spec.get("reasoning_efforts")),
+                "reasoning_efforts": spec.get("reasoning_efforts"),
+                "reasoning_effort_fallback": spec.get("reasoning_effort_fallback"),
                 "docs_url": spec.get("docs_url"),
             }
             for kind, spec in PROVIDER_REGISTRY.items()
@@ -1718,6 +2382,15 @@ TOOLS: list[dict[str, Any]] = [
                         "Defaults to true."
                     ),
                     "default": True,
+                },
+                "catalog": {
+                    "type": "object",
+                    "description": (
+                        "Optional provider metadata mapping (model_id to normalized "
+                        "metadata) used to report each model's model_type and "
+                        "supported_for_chat. Without it both are null, meaning "
+                        "unknown rather than excluded."
+                    ),
                 },
             },
         },
@@ -1805,6 +2478,16 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Optional override for the provider catalog URL.",
                 },
+                "include_unsupported_model_types": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Plan models whose declared oMLX type cannot serve chat "
+                        "(reranker, audio_tts, markitdown). Off by default: those "
+                        "models are reported as unsupported_model_type and never "
+                        "written. Enable only to debug a misclassified model."
+                    ),
+                },
             },
         },
     },
@@ -1863,6 +2546,17 @@ TOOLS: list[dict[str, Any]] = [
                 "catalog_url": {
                     "type": "string",
                     "description": "Optional override for the provider catalog URL.",
+                },
+                "include_unsupported_model_types": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Write models whose declared oMLX type cannot serve chat "
+                        "(reranker, audio_tts, markitdown). Off by default: those "
+                        "models are reported but never written, because a context "
+                        "window on a non-chat model makes the picker offer a model "
+                        "that fails at request time."
+                    ),
                 },
             },
         },
@@ -1933,6 +2627,7 @@ def handle_rpc_message(msg: dict[str, Any]) -> Optional[dict[str, Any]]:
                     include_catalog_cache=tool_args.get(
                         "include_catalog_cache", True
                     ),
+                    catalog=tool_args.get("catalog"),
                 )
             elif tool_name == "list_byok_models":
                 res = list_byok_models(db_path=tool_args.get("db_path"))
@@ -1949,6 +2644,9 @@ def handle_rpc_message(msg: dict[str, Any]) -> Optional[dict[str, Any]]:
                     set_reasoning_defaults=tool_args.get("set_reasoning_defaults", False),
                     set_context_tier=tool_args.get("set_context_tier"),
                     catalog_url=tool_args.get("catalog_url"),
+                    include_unsupported_model_types=tool_args.get(
+                        "include_unsupported_model_types", False
+                    ),
                 )
             elif tool_name == "apply_metadata_updates":
                 res = apply_metadata_updates(
@@ -1960,6 +2658,9 @@ def handle_rpc_message(msg: dict[str, Any]) -> Optional[dict[str, Any]]:
                     backup=tool_args.get("backup", True),
                     refresh_catalog_cache=tool_args.get("refresh_catalog_cache", True),
                     catalog_url=tool_args.get("catalog_url"),
+                    include_unsupported_model_types=tool_args.get(
+                        "include_unsupported_model_types", False
+                    ),
                 )
             elif tool_name == "get_provider_registry":
                 res = get_provider_registry()

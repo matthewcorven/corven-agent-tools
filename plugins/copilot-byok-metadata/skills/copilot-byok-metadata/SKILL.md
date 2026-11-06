@@ -30,12 +30,45 @@ own source of truth.
 - **Supported providers:** OpenRouter (public catalog) and a local **oMLX**
   server (queried at the provider's configured base URL). Other providers are
   reported as `unsupported_provider` and left untouched.
-- **Reasoning levels:** derived only from providers that advertise a level set.
-  oMLX accepts reasoning-effort values but does not publish a per-model level
-  set, so oMLX models are planned with no reasoning efforts and any existing
-  user selection is left alone. Say so instead of inventing levels.
+- **Reasoning levels:** derived only from a concrete, provider-declared level
+  set. OpenRouter declares its effort vocabulary per model. oMLX declares it
+  on `/admin/api/models` as a server-wide `reasoning_effort_options` list; the
+  server trusts that list only for chat model types (`vlm`, `llm`, `text`),
+  intersects it with the Copilot vocabulary, and writes the result. The
+  fallback chain is admin endpoint → `/v1/models/status` `reasoning_levels`
+  (reported for diagnostics only, because it has no Copilot vocabulary) →
+  no reasoning metadata at all. When only the toggle list exists, write
+  nothing; an existing user selection is never overwritten.
 - **Not supported yet:** GitHub Copilot CLI. If the user asks for CLI support,
   say it is planned and stop — do not improvise a CLI write path.
+
+## Capabilities
+
+- **Vision is best-effort and one-directional.** A model is flagged as
+  vision-capable only on definitive provider evidence: OpenRouter's
+  `architecture.input_modalities` contains `image`, or an oMLX
+  `model_type`/`engine_type` is `vlm`. The server writes `supports_vision = 1`
+  and the matching media types, and **never writes `0`** — the column already
+  defaults to `0`, and a text-only or unknown provider result leaves both the
+  row and the cached catalog entry untouched. Absence of evidence is never
+  treated as evidence of absence. Read `supports_vision` as tri-state: `true`
+  (definitive), `false` (provider declared the model text-only), or `null`
+  (unknown).
+- **Non-chat oMLX models are excluded by default.** A `model_type` (or
+  `engine_type`) of `reranker`, `audio_tts`, or `markitdown` cannot serve chat
+  completions. Such models are still reported, with plan status
+  `unsupported_model_type` and a reason naming the type, but are never planned
+  or written: a context window on them makes the model picker offer a model
+  that fails at request time. `include_unsupported_model_types=true` on
+  `plan_metadata_updates` or `apply_metadata_updates` opts in for debugging a
+  misclassified model. OpenRouter publishes no model-class signal, so its
+  entries are always chat models.
+- **Reasoning is written only when a concrete level set exists.** An unknown
+  or untrusted type, a missing admin key (401), or a status-only toggle list
+  leaves both `supported_reasoning_efforts` and the cached
+  `supportedReasoningEfforts` alone. The plan marks such entries
+  `reasoning_efforts_definitive: false` and proposes no reasoning change, so a
+  single failed admin request cannot erase levels already stored.
 
 ## Upgrading
 
@@ -68,7 +101,15 @@ provider's `baseUrl` points at. The server queries:
   window, a vLLM-style extension).
 - `GET <baseUrl>/v1/models/status` — the same window as `max_context_window`,
   plus `model_context_length` (discovered native length) and `max_tokens` (the
-  per-model generation ceiling). Status wins when both are present.
+  per-model generation ceiling). Status wins when both are present. It also
+  carries the coarse `reasoning_levels` toggle list and `thinking_default`.
+- `GET <baseUrl>/admin/api/models` — the Copilot-shaped reasoning vocabulary:
+  `reasoning_effort_options`, `reasoning_effort_default`, and the model type.
+  It accepts only the oMLX main key; a sub key gets a 401. The configured
+  provider `apiKey` is sent as a Bearer header from the raw settings, never
+  from the redacted copy, and never appears in a tool result. Any failure
+  (401/404, connection error, malformed payload) is silent and falls back to
+  the status endpoint.
 
 oMLX resolves the effective window in this order: a per-model override, then
 the model's discovered native context (optionally clamped by an operator
@@ -97,14 +138,16 @@ process) before concluding the upgrade did not take effect.
    and which fields are still missing. Report the provider count, model count,
    and how many models are missing metadata.
 
-   Also read `catalog_cache.byok_entries_with_limits` and
-   `catalog_cache.caches`. `provider_models` has no context-window column, so a
-   model can have full metadata in the database and still show the app's
-   fallback window because the cache was never patched. If
-   `byok_entries_with_limits` is `0` while `summary.models_with_metadata` is
-   greater than `0`, the cache is stale — that is the state to repair, and
-   `notes` will say so. If every model has metadata *and* every BYOK cache
-   entry has limits, say so and stop; there is nothing to do.
+   Also read `catalog_cache.byok_entries_with_limits`,
+   `catalog_cache.byok_entries_with_vision`, and `catalog_cache.caches`.
+   `provider_models` has no context-window column, so a model can have full
+   metadata in the database and still show the app's fallback window because
+   the cache was never patched. If `byok_entries_with_limits` is `0` while
+   `summary.models_with_metadata` is greater than `0`, the cache is stale —
+   that is the state to repair, and `notes` will say so. If every model has
+   metadata *and* every BYOK cache entry has limits, say so and stop; there is
+   nothing to do. The vision count is informational: an entry with
+   `supports_vision: false` is not a gap, because vision is best-effort.
 
    BYOK configuration is app-global, not per-workspace. The `workspace_path`
    input only identifies the calling project and workspace for context; never
@@ -112,26 +155,46 @@ process) before concluding the upgrade did not take effect.
 
 2. **Plan.** Call `plan_metadata_updates`. This queries every provider that has
    a source of truth — OpenRouter's catalog, and each configured oMLX server at
-   its own `base URL + /v1/models` (enriched by `/v1/models/status`) — and
-   returns a per-model diff with `status` of `update`, `unchanged`, `unresolved`,
-   or `unsupported_provider`. Read `warnings` too: an oMLX server that is not
+   its own `base URL + /v1/models` (enriched by `/v1/models/status` and
+   `/admin/api/models`) — and returns a per-model diff with `status` of
+   `update`, `unchanged`, `unresolved`, `unsupported_provider`, or
+   `unsupported_model_type`. Read `warnings` too: an oMLX server that is not
    running is reported there and its models come back `unresolved` rather than
    failing the whole plan. Tell the user to start oMLX and re-run if that
    happens.
 
 3. **Present.** Show the user a compact table of models with `status == "update"`:
-   model id, proposed context window, proposed output budget, and reasoning
-   levels. Read the numbers from `proposed` — never from `provider_metadata`.
-   `provider_metadata.provider_max_output_tokens` is the provider's raw aggregate
-   maximum (often 900k+), not the budget that gets written; showing it will
-   mislead the user. For oMLX, `provider_metadata.context_source` says whether
-   the window came from the server's per-model override, the discovered model
-   native length, or the oMLX app default — mention it when the user asks where
-   the number came from. oMLX models have no reasoning levels: show that column
-   as "n/a (oMLX)" rather than listing invented values. Mention `unresolved`
-   models by name — those ids are absent from the provider catalog and need the
-   user's attention. Do not list `unsupported_provider` models individually;
-   summarize them as "N models on providers without a source of truth".
+   model id, proposed context window, proposed output budget, reasoning levels,
+   and vision. Read the numbers from `proposed` — never from
+   `provider_metadata`. `provider_metadata.provider_max_output_tokens` is the
+   provider's raw aggregate maximum (often 900k+), not the budget that gets
+   written; showing it will mislead the user. For oMLX,
+   `provider_metadata.context_source` says whether the window came from the
+   server's per-model override, the discovered model native length, or the oMLX
+   app default — mention it when the user asks where the number came from.
+   Render the capability columns explicitly instead of leaving them blank:
+
+   - **Reasoning levels:** a planned set when `reasoning_efforts_definitive` is
+     `true`. When it is `false`, no reasoning change is planned — show "n/a (no
+     level evidence)" and, if `provider_metadata.reasoning_levels` is present,
+     name it as diagnostics only. Never invent levels from the toggle list.
+   - **Vision:** "yes" only when the proposed value is `true`, with the media
+     types if useful. A `false` proposal is text-only evidence; a missing/`null`
+     proposal means unknown. Vision never blocks a plan and is never written as
+     `0`, so an unknown model simply keeps whatever the app already has.
+   - **Excluded models:** entries with `status == "unsupported_model_type"` do
+     not appear in the limits table. List them in one short sentence — model id
+     plus the type that excludes it (`reranker`, `audio_tts`, `markitdown`) —
+     and say nothing is written for them. Mention
+     `include_unsupported_model_types=true` only if the user asks to plan one
+     anyway for debugging.
+
+   Mention `unresolved` models by name — those ids are absent from the provider
+   catalog and need the user's attention. Do not list `unsupported_provider`
+   models individually; summarize them as "N models on providers without a
+   source of truth". The five plan statuses are `update`, `unchanged`,
+   `unresolved`, `unsupported_provider`, and `unsupported_model_type`; the
+   summary counts sum to `total`.
 
 4. **Decide.** Choose interactive or automatic per the rule below.
 
