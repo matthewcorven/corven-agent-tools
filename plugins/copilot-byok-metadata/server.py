@@ -59,6 +59,20 @@ COPILOT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 #: Canonical Copilot ``ContextTier`` union.
 COPILOT_CONTEXT_TIERS = ("default", "long_context")
 
+#: MIME types implied by each provider-declared input modality. Only
+#: ``supported_media_types`` is derived: neither provider publishes an image
+#: count or image size limit, so the app applies its own defaults.
+INPUT_MODALITY_MEDIA_TYPES: dict[str, tuple[str, ...]] = {
+    "image": ("image/jpeg", "image/png", "image/webp", "image/gif"),
+    "file": ("application/pdf",),
+    "audio": ("audio/wav", "audio/mpeg"),
+    "video": ("video/mp4",),
+    "text": (),
+}
+
+#: oMLX model/engine types that denote a vision-language model.
+OMLX_VISION_MODEL_TYPES = ("vlm",)
+
 #: Ceiling applied to provider-reported output budgets. The Copilot app's own
 #: built-in catalog never exceeds 128000 output tokens, while some providers
 #: (notably OpenRouter) report aggregate maxima such as 943718 for a 1M window.
@@ -174,11 +188,29 @@ def load_providers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return providers
 
 
+def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Return the column names of ``table``, or an empty set when unreadable."""
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.Error:
+        return set()
+    return {str(row[1]) for row in rows}
+
+
 def load_models(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    # ``supports_vision`` post-dates the rest of the table. On a database that
+    # predates it the column is projected as NULL, which callers read as
+    # "unknown" — never as "text-only" — and the write path skips it.
+    vision_projection = (
+        "supports_vision"
+        if "supports_vision" in table_columns(conn, "provider_models")
+        else "NULL AS supports_vision"
+    )
     rows = conn.execute(
-        """
+        f"""
         SELECT id, provider_id, model_id, wire_model, display_name,
-               max_prompt_tokens, max_output_tokens, supported_reasoning_efforts
+               max_prompt_tokens, max_output_tokens, supported_reasoning_efforts,
+               {vision_projection}
         FROM provider_models
         ORDER BY provider_id, model_id
         """
@@ -198,6 +230,7 @@ def load_models(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "supported_reasoning_efforts": parse_efforts(
                     row["supported_reasoning_efforts"]
                 ),
+                "supports_vision": row["supports_vision"],
             }
         )
     return models
@@ -436,6 +469,23 @@ def detect_provider_kind(provider: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def vision_media_types(input_modalities: Optional[list[Any]]) -> list[str]:
+    """Map provider-declared input modalities onto Copilot media types.
+
+    ``text`` contributes nothing, and unknown modalities are ignored rather
+    than guessed at.
+    """
+    if not isinstance(input_modalities, list):
+        return []
+    media_types: list[str] = []
+    for modality in input_modalities:
+        key = str(modality).strip().lower()
+        for media_type in INPUT_MODALITY_MEDIA_TYPES.get(key, ()):
+            if media_type not in media_types:
+                media_types.append(media_type)
+    return media_types
+
+
 def normalize_openrouter_model(entry: dict[str, Any]) -> dict[str, Any]:
     """Normalize one OpenRouter catalog entry into Copilot metadata terms."""
     context_length = entry.get("context_length")
@@ -465,6 +515,26 @@ def normalize_openrouter_model(entry: dict[str, Any]) -> dict[str, Any]:
         elif efforts is not None and default_effort not in efforts:
             default_effort = None
 
+    architecture = entry.get("architecture") or {}
+    input_modalities = (
+        architecture.get("input_modalities")
+        if isinstance(architecture, dict)
+        else None
+    )
+    media_types = vision_media_types(input_modalities)
+    # Only an explicitly declared ``image`` modality is definitive evidence.
+    # Anything else leaves vision unknown, which the write path treats as
+    # "do not touch" rather than "text-only".
+    vision_unknown = not isinstance(input_modalities, list)
+    supports_vision = None
+    vision_source = None
+    if not vision_unknown:
+        supports_vision = "image" in {
+            str(modality).strip().lower() for modality in input_modalities
+        }
+        if supports_vision:
+            vision_source = "openrouter.architecture"
+
     return {
         "model_id": entry.get("id"),
         "name": entry.get("name"),
@@ -473,6 +543,9 @@ def normalize_openrouter_model(entry: dict[str, Any]) -> dict[str, Any]:
         "supported_reasoning_efforts": efforts,
         "default_reasoning_effort": default_effort,
         "supports_reasoning": efforts is not None,
+        "supports_vision": supports_vision,
+        "vision_media_types": media_types,
+        "vision_source": vision_source,
     }
 
 
@@ -508,6 +581,12 @@ def derive_copilot_limits(metadata: dict[str, Any]) -> dict[str, Any]:
         "max_prompt_tokens": max_prompt,
         "max_output_tokens": max_output,
         "supported_reasoning_efforts": metadata.get("supported_reasoning_efforts"),
+        # Vision is tri-state: True (definitive provider evidence), False
+        # (provider declared the model text-only), or None (unknown). Only True
+        # is ever written; see ``build_plan``.
+        "supports_vision": metadata.get("supports_vision"),
+        "vision_media_types": list(metadata.get("vision_media_types") or []),
+        "vision_source": metadata.get("vision_source"),
     }
 
 
@@ -575,6 +654,22 @@ def normalize_omlx_model(
 
     max_output = status_entry.get("max_tokens")
 
+    model_type = status_entry.get("model_type") or entry.get("model_type")
+    engine_type = status_entry.get("engine_type") or entry.get("engine_type")
+    # oMLX declares the model class rather than an input-modality list, so a
+    # ``vlm`` type is the only definitive vision signal. Absent both fields,
+    # vision stays unknown.
+    declared_types = [value for value in (model_type, engine_type) if value]
+    supports_vision: Optional[bool] = None
+    vision_source = None
+    if declared_types:
+        supports_vision = any(
+            str(value).strip().lower() in OMLX_VISION_MODEL_TYPES
+            for value in declared_types
+        )
+        if supports_vision:
+            vision_source = "omlx.model_type"
+
     return {
         "model_id": entry.get("id") or status_entry.get("id"),
         "name": entry.get("id") or status_entry.get("id"),
@@ -583,6 +678,11 @@ def normalize_omlx_model(
         "supported_reasoning_efforts": None,
         "default_reasoning_effort": None,
         "supports_reasoning": False,
+        "supports_vision": supports_vision,
+        "vision_media_types": (
+            list(INPUT_MODALITY_MEDIA_TYPES["image"]) if supports_vision else []
+        ),
+        "vision_source": vision_source,
         "context_source": (
             "status.max_context_window"
             if status_entry.get("max_context_window") is not None
@@ -778,6 +878,7 @@ def build_plan(
                 "max_prompt_tokens": model["max_prompt_tokens"],
                 "max_output_tokens": model["max_output_tokens"],
                 "supported_reasoning_efforts": model["supported_reasoning_efforts"],
+                "supports_vision": model.get("supports_vision"),
             },
             "proposed": None,
             "changes": [],
@@ -814,6 +915,9 @@ def build_plan(
                 "native_context_window_tokens"
             ),
             "model_type": metadata.get("model_type"),
+            "supports_vision": metadata.get("supports_vision"),
+            "vision_media_types": metadata.get("vision_media_types") or [],
+            "vision_source": metadata.get("vision_source"),
         }
 
         changes: list[str] = []
@@ -829,6 +933,15 @@ def build_plan(
             model["supported_reasoning_efforts"], proposed["supported_reasoning_efforts"]
         ):
             changes.append("supported_reasoning_efforts")
+        # Only an affirmative, definitive vision signal is ever proposed. A
+        # text-only or unknown provider result must not clear an existing flag:
+        # the column defaults to 0, so writing it back is a no-op at best, and
+        # a wrong 1 makes the app offer image input to a model that rejects it.
+        if (
+            proposed["supports_vision"] is True
+            and model.get("supports_vision") != 1
+        ):
+            changes.append("supports_vision")
 
         entry["changes"] = changes
 
@@ -1391,28 +1504,67 @@ def _patch_catalog_cache(
         if not isinstance(limits, dict):
             limits = {}
             capabilities["limits"] = limits
+        changed = False
         if update.get("max_prompt_tokens") is not None:
-            limits["max_prompt_tokens"] = update["max_prompt_tokens"]
+            if limits.get("max_prompt_tokens") != update["max_prompt_tokens"]:
+                limits["max_prompt_tokens"] = update["max_prompt_tokens"]
+                changed = True
         if update.get("max_output_tokens") is not None:
-            limits["max_output_tokens"] = update["max_output_tokens"]
+            if limits.get("max_output_tokens") != update["max_output_tokens"]:
+                limits["max_output_tokens"] = update["max_output_tokens"]
+                changed = True
         if update.get("max_context_window_tokens") is not None:
-            limits["max_context_window_tokens"] = update["max_context_window_tokens"]
+            if (
+                limits.get("max_context_window_tokens")
+                != update["max_context_window_tokens"]
+            ):
+                limits["max_context_window_tokens"] = update[
+                    "max_context_window_tokens"
+                ]
+                changed = True
 
         supports = capabilities.get("supports")
         if not isinstance(supports, dict):
             supports = {}
             capabilities["supports"] = supports
         efforts = update.get("supported_reasoning_efforts")
-        supports["reasoningEffort"] = bool(efforts)
+        if supports.get("reasoningEffort") != bool(efforts):
+            supports["reasoningEffort"] = bool(efforts)
+            changed = True
         if efforts:
-            entry["supportedReasoningEfforts"] = list(efforts)
+            if entry.get("supportedReasoningEfforts") != list(efforts):
+                entry["supportedReasoningEfforts"] = list(efforts)
+                changed = True
             default_effort = update.get("default_reasoning_effort")
             if default_effort:
-                entry["defaultReasoningEffort"] = default_effort
+                if entry.get("defaultReasoningEffort") != default_effort:
+                    entry["defaultReasoningEffort"] = default_effort
+                    changed = True
         else:
-            entry.pop("supportedReasoningEfforts", None)
-            entry.pop("defaultReasoningEffort", None)
-        patched += 1
+            for stale_key in ("supportedReasoningEfforts", "defaultReasoningEffort"):
+                if stale_key in entry:
+                    entry.pop(stale_key, None)
+                    changed = True
+
+        # Vision is written only from definitive provider evidence. A model the
+        # provider does not declare as vision-capable keeps whatever the cache
+        # already says, because absence of evidence is not evidence of absence.
+        if update.get("supports_vision") is True:
+            if supports.get("vision") is not True:
+                supports["vision"] = True
+                changed = True
+            media_types = update.get("vision_media_types") or []
+            if media_types:
+                vision = limits.get("vision")
+                if not isinstance(vision, dict):
+                    vision = {}
+                    limits["vision"] = vision
+                if list(vision.get("supported_media_types") or []) != list(media_types):
+                    vision["supported_media_types"] = list(media_types)
+                    changed = True
+
+        if changed:
+            patched += 1
 
     return cache, patched
 
@@ -1478,6 +1630,7 @@ def apply_metadata_updates(
             "app_state_entries_updated": 0,
             "catalog_cache_entries_patched": 0,
             "catalog_caches_patched": {},
+            "vision_flags_written": 0,
         },
         "backup_path": None,
         "notes": [],
@@ -1539,30 +1692,47 @@ def apply_metadata_updates(
         if backup:
             result["backup_path"] = _backup_database(conn, path)
 
+        # A database created before ``supports_vision`` existed still gets every
+        # other column written; only the vision assignment is dropped.
+        has_vision_column = "supports_vision" in table_columns(conn, "provider_models")
+
         with conn:
             for entry in plan["entries"]:
                 if entry["status"] != "update" or not entry.get("proposed"):
                     continue
                 proposed = entry["proposed"]
+                vision_flag = (
+                    1 if proposed.get("supports_vision") is True else None
+                )
+                vision_assignment = (
+                    ",\n                        supports_vision = COALESCE(?, supports_vision)"
+                    if has_vision_column and vision_flag is not None
+                    else ""
+                )
+                params: tuple[Any, ...] = (
+                    proposed["max_prompt_tokens"],
+                    proposed["max_output_tokens"],
+                    None
+                    if proposed["supported_reasoning_efforts"] is None
+                    else json.dumps(proposed["supported_reasoning_efforts"]),
+                )
+                if vision_assignment:
+                    params += (vision_flag,)
+                params += (entry["row_id"],)
                 conn.execute(
-                    """
+                    f"""
                     UPDATE provider_models
                     SET max_prompt_tokens = COALESCE(?, max_prompt_tokens),
                         max_output_tokens = COALESCE(?, max_output_tokens),
-                        supported_reasoning_efforts = ?,
+                        supported_reasoning_efforts = ?{vision_assignment},
                         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                     WHERE id = ?
                     """,
-                    (
-                        proposed["max_prompt_tokens"],
-                        proposed["max_output_tokens"],
-                        None
-                        if proposed["supported_reasoning_efforts"] is None
-                        else json.dumps(proposed["supported_reasoning_efforts"]),
-                        entry["row_id"],
-                    ),
+                    params,
                 )
                 result["applied"]["models_updated"] += 1
+                if vision_assignment:
+                    result["applied"]["vision_flags_written"] += 1
 
             reasoning_updates = [
                 change

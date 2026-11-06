@@ -82,6 +82,61 @@ class NormalizeOpenRouterModelTest(unittest.TestCase):
         self.assertEqual(result["max_context_window_tokens"], 200000)
 
 
+class OpenRouterVisionTest(unittest.TestCase):
+    def test_image_modality_flags_vision_with_image_media_types(self) -> None:
+        entry = {
+            "id": "vendor/vlm",
+            "context_length": 1000,
+            "architecture": {"input_modalities": ["text", "image"]},
+        }
+        result = server.normalize_openrouter_model(entry)
+        self.assertTrue(result["supports_vision"])
+        self.assertEqual(result["vision_source"], "openrouter.architecture")
+        for media_type in ("image/jpeg", "image/png", "image/webp", "image/gif"):
+            self.assertIn(media_type, result["vision_media_types"])
+
+    def test_text_only_modality_is_not_flagged(self) -> None:
+        entry = {
+            "id": "vendor/text",
+            "context_length": 1000,
+            "architecture": {"input_modalities": ["text"]},
+        }
+        result = server.normalize_openrouter_model(entry)
+        self.assertIs(result["supports_vision"], False)
+        self.assertEqual(result["vision_media_types"], [])
+        self.assertIsNone(result["vision_source"])
+
+    def test_missing_architecture_leaves_vision_unknown(self) -> None:
+        result = server.normalize_openrouter_model({"id": "vendor/x"})
+        self.assertIsNone(result["supports_vision"])
+        self.assertIsNone(result["vision_source"])
+        self.assertEqual(result["vision_media_types"], [])
+
+    def test_non_image_modalities_do_not_flag_vision(self) -> None:
+        entry = {
+            "id": "vendor/audio-file",
+            "architecture": {"input_modalities": ["text", "file", "audio", "video"]},
+        }
+        result = server.normalize_openrouter_model(entry)
+        self.assertIs(result["supports_vision"], False)
+        self.assertEqual(
+            result["vision_media_types"],
+            [
+                "application/pdf",
+                "audio/wav",
+                "audio/mpeg",
+                "video/mp4",
+            ],
+        )
+
+    def test_modality_mapping_deduplicates(self) -> None:
+        self.assertEqual(
+            server.vision_media_types(["image", "image", "text", "unknown"]),
+            ["image/jpeg", "image/png", "image/webp", "image/gif"],
+        )
+        self.assertEqual(server.vision_media_types(None), [])
+
+
 class DeriveCopilotLimitsTest(unittest.TestCase):
     def test_prompt_is_context_minus_output(self) -> None:
         limits = server.derive_copilot_limits(
@@ -173,6 +228,7 @@ def _model(provider_id: str, model_id: str, **overrides) -> dict:
         "max_prompt_tokens": None,
         "max_output_tokens": None,
         "supported_reasoning_efforts": None,
+        "supports_vision": None,
     }
     model.update(overrides)
     return model
@@ -309,6 +365,78 @@ class BuildPlanTest(unittest.TestCase):
             model_ids=["or/vendor/other"],
         )
         self.assertEqual([e["model_id"] for e in by_state_key["entries"]], ["vendor/other"])
+
+    def test_vision_flag_is_planned_only_from_definitive_evidence(self) -> None:
+        catalogs = {
+            "openrouter": {
+                "vendor/vlm": {
+                    "model_id": "vendor/vlm",
+                    "max_context_window_tokens": 1000,
+                    "supports_vision": True,
+                    "vision_media_types": ["image/png"],
+                    "vision_source": "openrouter.architecture",
+                }
+            }
+        }
+        plan = server.build_plan(
+            providers=self.providers,
+            models=[
+                _model(
+                    "or",
+                    "vendor/vlm",
+                    max_prompt_tokens=1000,
+                    supports_vision=0,
+                )
+            ],
+            catalogs=catalogs,
+        )
+        entry = plan["entries"][0]
+        self.assertEqual(entry["changes"], ["supports_vision"])
+        self.assertEqual(entry["current"]["supports_vision"], 0)
+        self.assertEqual(entry["status"], "update")
+
+        already = server.build_plan(
+            providers=self.providers,
+            models=[
+                _model(
+                    "or",
+                    "vendor/vlm",
+                    max_prompt_tokens=1000,
+                    supports_vision=1,
+                )
+            ],
+            catalogs=catalogs,
+        )
+        self.assertEqual(already["entries"][0]["changes"], [])
+        self.assertEqual(already["entries"][0]["status"], "unchanged")
+
+    def test_text_only_catalog_entry_never_plans_a_vision_write(self) -> None:
+        catalogs = {
+            "openrouter": {
+                "vendor/model": {
+                    "model_id": "vendor/model",
+                    "max_context_window_tokens": 1000,
+                    "supports_vision": False,
+                    "vision_media_types": [],
+                }
+            }
+        }
+        plan = server.build_plan(
+            providers=self.providers,
+            models=[
+                _model(
+                    "or",
+                    "vendor/model",
+                    max_prompt_tokens=1000,
+                    supports_vision=1,
+                )
+            ],
+            catalogs=catalogs,
+        )
+        entry = plan["entries"][0]
+        self.assertNotIn("supports_vision", entry["changes"])
+        self.assertEqual(entry["current"]["supports_vision"], 1)
+        self.assertIs(entry["proposed"]["supports_vision"], False)
 
     def test_set_reasoning_defaults_only_fills_missing_choices(self) -> None:
         plan = server.build_plan(
@@ -450,6 +578,30 @@ class NormalizeOmlxModelTest(unittest.TestCase):
         result = server.normalize_omlx_model({"id": "MarkItDown"})
         self.assertIsNone(result["max_context_window_tokens"])
         self.assertEqual(result["context_source"], "unresolved")
+
+    def test_vlm_type_flags_vision(self) -> None:
+        for field in ("model_type", "engine_type"):
+            with self.subTest(field=field):
+                result = server.normalize_omlx_model(
+                    {"id": "flint-oQ4e"}, {"id": "flint-oQ4e", field: "vlm"}
+                )
+                self.assertTrue(result["supports_vision"])
+                self.assertEqual(result["vision_source"], "omlx.model_type")
+                self.assertIn("image/png", result["vision_media_types"])
+
+    def test_non_vision_types_are_not_flagged(self) -> None:
+        for model_type in ("llm", "reranker", "audio_tts", "markitdown"):
+            with self.subTest(model_type=model_type):
+                result = server.normalize_omlx_model(
+                    {"id": "m"}, {"id": "m", "model_type": model_type}
+                )
+                self.assertIs(result["supports_vision"], False)
+                self.assertEqual(result["vision_media_types"], [])
+
+    def test_missing_type_leaves_vision_unknown(self) -> None:
+        result = server.normalize_omlx_model({"id": "m"})
+        self.assertIsNone(result["supports_vision"])
+        self.assertIsNone(result["vision_source"])
 
     def test_never_derives_reasoning_efforts(self) -> None:
         result = server.normalize_omlx_model(

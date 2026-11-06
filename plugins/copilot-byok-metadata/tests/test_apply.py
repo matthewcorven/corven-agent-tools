@@ -39,6 +39,7 @@ CREATE TABLE provider_models (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     supported_reasoning_efforts TEXT,
+    supports_vision INTEGER NOT NULL DEFAULT 0,
     UNIQUE (provider_id, model_id)
 );
 CREATE TABLE app_state (
@@ -495,6 +496,302 @@ class ApplyMetadataUpdatesTest(unittest.TestCase):
             if tool["name"] == "apply_metadata_updates"
         )["inputSchema"]["properties"]["refresh_catalog_cache"]
         self.assertTrue(schema["default"])
+
+
+class ApplyVisionFlagsTest(unittest.TestCase):
+    """Vision is a one-way flag: only definitive `image`/`vlm` evidence writes it."""
+
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmpdir.name, "data.db")
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(SCHEMA)
+        conn.execute(
+            "INSERT INTO model_providers (id, name, type, settings_json) VALUES (?, ?, ?, ?)",
+            (
+                PROVIDER_ID,
+                "OpenRouter",
+                "custom",
+                json.dumps({"baseUrl": "https://openrouter.ai/api/v1"}),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO model_providers (id, name, type, settings_json) VALUES (?, ?, ?, ?)",
+            (
+                LOCAL_PROVIDER_ID,
+                "oMLX",
+                "ollama",
+                json.dumps({"baseUrl": "http://127.0.0.1:8001/v1"}),
+            ),
+        )
+        for row_id, provider_id, model_id in (
+            ("row-vlm", PROVIDER_ID, "vendor/vlm"),
+            ("row-text", PROVIDER_ID, "vendor/text"),
+            ("row-local-vlm", LOCAL_PROVIDER_ID, "flint-oQ4e"),
+            ("row-local-text", LOCAL_PROVIDER_ID, "reranker-oQ4e"),
+        ):
+            conn.execute(
+                "INSERT INTO provider_models (id, provider_id, model_id, display_name, "
+                "max_prompt_tokens, max_output_tokens) VALUES (?, ?, ?, ?, 872000, 128000)",
+                (row_id, provider_id, model_id, model_id),
+            )
+        conn.commit()
+        conn.close()
+
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
+
+    def _rows(self) -> dict:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        rows = {
+            row["model_id"]: dict(row)
+            for row in conn.execute("SELECT * FROM provider_models")
+        }
+        conn.close()
+        return rows
+
+    def _catalog(self, overrides: dict) -> dict:
+        return {
+            "vendor/vlm": {
+                "model_id": "vendor/vlm",
+                "max_context_window_tokens": 1000000,
+                "max_output_tokens": 128000,
+                "supports_vision": True,
+                "vision_media_types": [
+                    "image/jpeg",
+                    "image/png",
+                    "image/webp",
+                    "image/gif",
+                ],
+                "vision_source": "openrouter.architecture",
+                **overrides.get("vendor/vlm", {}),
+            },
+            "vendor/text": {
+                "model_id": "vendor/text",
+                "max_context_window_tokens": 1000000,
+                "max_output_tokens": 128000,
+                "supports_vision": False,
+                "vision_media_types": [],
+                **overrides.get("vendor/text", {}),
+            },
+        }
+
+    def _insert_cache(self, cache) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
+            (server.APP_STATE_CATALOG_KEY, json.dumps(cache)),
+        )
+        conn.commit()
+        conn.close()
+
+    def _cache(self):
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?", (server.APP_STATE_CATALOG_KEY,)
+        ).fetchone()
+        conn.close()
+        return None if row is None else json.loads(row[0])
+
+    def test_vision_model_sets_column_and_media_types(self) -> None:
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=self._catalog({}),
+            dry_run=False,
+            backup=False,
+        )
+        self.assertEqual(result["applied"]["vision_flags_written"], 1)
+        rows = self._rows()
+        self.assertEqual(rows["vendor/vlm"]["supports_vision"], 1)
+        self.assertEqual(rows["vendor/text"]["supports_vision"], 0)
+
+    def test_text_only_model_leaves_column_and_cache_untouched(self) -> None:
+        self._insert_cache(
+            {
+                "models": [
+                    {
+                        "id": f"{PROVIDER_ID}/vendor/text",
+                        "name": "Text",
+                        "providerId": PROVIDER_ID,
+                        "capabilities": {"supports": {"reasoningEffort": False}},
+                    }
+                ]
+            }
+        )
+        server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=self._catalog({}),
+            dry_run=False,
+            backup=False,
+        )
+        self.assertEqual(self._rows()["vendor/text"]["supports_vision"], 0)
+        entry = self._cache()["models"][0]
+        self.assertNotIn("vision", entry["capabilities"]["supports"])
+        self.assertNotIn("vision", entry["capabilities"]["limits"])
+
+        report = server.plan_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({})
+        )
+        text_entry = next(
+            entry for entry in report["entries"] if entry["model_id"] == "vendor/text"
+        )
+        self.assertIs(text_entry["proposed"]["supports_vision"], False)
+        self.assertNotIn("supports_vision", text_entry["changes"])
+
+    def test_cache_gains_vision_supports_and_limits(self) -> None:
+        self._insert_cache(
+            {
+                "models": [
+                    {
+                        "id": f"{PROVIDER_ID}/vendor/vlm",
+                        "name": "VLM",
+                        "providerId": PROVIDER_ID,
+                        "capabilities": {"supports": {"reasoningEffort": False}},
+                    }
+                ]
+            }
+        )
+        server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=self._catalog({}),
+            dry_run=False,
+            backup=False,
+        )
+        capabilities = self._cache()["models"][0]["capabilities"]
+        self.assertIs(capabilities["supports"]["vision"], True)
+        self.assertEqual(
+            capabilities["limits"]["vision"]["supported_media_types"],
+            ["image/jpeg", "image/png", "image/webp", "image/gif"],
+        )
+        # Neither provider publishes these, so they must never be invented.
+        self.assertNotIn("max_prompt_images", capabilities["limits"]["vision"])
+        self.assertNotIn("max_prompt_image_size", capabilities["limits"]["vision"])
+
+    def test_second_identical_run_reports_nothing_to_apply(self) -> None:
+        self._insert_cache(
+            {
+                "models": [
+                    {
+                        "id": f"{PROVIDER_ID}/vendor/vlm",
+                        "name": "VLM",
+                        "providerId": PROVIDER_ID,
+                        "capabilities": {"supports": {"reasoningEffort": False}},
+                    }
+                ]
+            }
+        )
+        server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=self._catalog({}),
+            dry_run=False,
+            backup=False,
+        )
+        second = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=self._catalog({}),
+            dry_run=False,
+            backup=False,
+        )
+        self.assertEqual(second["applied"]["vision_flags_written"], 0)
+        self.assertEqual(second["applied"]["catalog_cache_entries_patched"], 0)
+        self.assertIn("Nothing to apply", " ".join(second["notes"]))
+
+    def test_converting_vision_to_text_does_not_reset_the_column(self) -> None:
+        server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=self._catalog({}),
+            dry_run=False,
+            backup=False,
+        )
+        self.assertEqual(self._rows()["vendor/vlm"]["supports_vision"], 1)
+
+        converted = self._catalog(
+            {"vendor/vlm": {"supports_vision": False, "vision_media_types": []}}
+        )
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=converted,
+            dry_run=False,
+            backup=False,
+        )
+        self.assertEqual(result["applied"]["vision_flags_written"], 0)
+        self.assertEqual(self._rows()["vendor/vlm"]["supports_vision"], 1)
+        self.assertNotIn(
+            "supports_vision", result["plan"]["entries"][0]["changes"]
+        )
+
+    def test_omlx_vlm_is_flagged_from_model_type(self) -> None:
+        catalog = {
+            "flint-oQ4e": server.normalize_omlx_model(
+                {"id": "flint-oQ4e", "max_model_len": 262144},
+                {"id": "flint-oQ4e", "model_type": "vlm", "max_tokens": 32768},
+            ),
+            "reranker-oQ4e": server.normalize_omlx_model(
+                {"id": "reranker-oQ4e"}, {"id": "reranker-oQ4e", "model_type": "reranker"}
+            ),
+        }
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=catalog,
+            dry_run=False,
+            backup=False,
+        )
+        self.assertEqual(result["applied"]["vision_flags_written"], 1)
+        rows = self._rows()
+        self.assertEqual(rows["flint-oQ4e"]["supports_vision"], 1)
+        self.assertEqual(rows["reranker-oQ4e"]["supports_vision"], 0)
+
+    def test_pre_vision_database_skips_the_column_instead_of_raising(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            CREATE TABLE legacy_provider_models (
+                id TEXT PRIMARY KEY NOT NULL,
+                provider_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                wire_model TEXT,
+                display_name TEXT NOT NULL,
+                max_prompt_tokens INTEGER,
+                max_output_tokens INTEGER,
+                wire_api_override TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                supported_reasoning_efforts TEXT,
+                UNIQUE (provider_id, model_id)
+            );
+            INSERT INTO legacy_provider_models SELECT
+                id, provider_id, model_id, wire_model, display_name,
+                max_prompt_tokens, max_output_tokens, wire_api_override,
+                created_at, updated_at, supported_reasoning_efforts
+            FROM provider_models;
+            DROP TABLE provider_models;
+            ALTER TABLE legacy_provider_models RENAME TO provider_models;
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        plan = server.plan_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({})
+        )
+        vision_entry = next(
+            entry for entry in plan["entries"] if entry["model_id"] == "vendor/vlm"
+        )
+        self.assertIsNone(vision_entry["current"]["supports_vision"])
+        self.assertIn("supports_vision", vision_entry["changes"])
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=self._catalog({}),
+            dry_run=False,
+            backup=False,
+        )
+        self.assertEqual(result["applied"]["vision_flags_written"], 0)
+        self.assertGreaterEqual(result["applied"]["models_updated"], 1)
+        self.assertNotIn(
+            "supports_vision", self._rows()["vendor/vlm"]
+        )
 
 
 if __name__ == "__main__":
