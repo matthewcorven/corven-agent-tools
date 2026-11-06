@@ -1748,7 +1748,7 @@ def apply_metadata_updates(
         has_vision_column = "supports_vision" in table_columns(conn, "provider_models")
 
         with conn:
-            for entry in row_updates:
+            for entry in effective_row_updates:
                 proposed = entry["proposed"]
                 vision_flag = (
                     1 if proposed.get("supports_vision") is True else None

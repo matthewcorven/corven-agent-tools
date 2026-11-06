@@ -899,6 +899,142 @@ class ApplyVisionFlagsTest(unittest.TestCase):
             f"cache was already in sync, got {result['notes']}",
         )
 
+    def _drop_vision_column(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            CREATE TABLE legacy_provider_models (
+                id TEXT PRIMARY KEY NOT NULL,
+                provider_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                wire_model TEXT,
+                display_name TEXT NOT NULL,
+                max_prompt_tokens INTEGER,
+                max_output_tokens INTEGER,
+                wire_api_override TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                supported_reasoning_efforts TEXT,
+                UNIQUE (provider_id, model_id)
+            );
+            INSERT INTO legacy_provider_models SELECT
+                id, provider_id, model_id, wire_model, display_name,
+                max_prompt_tokens, max_output_tokens, wire_api_override,
+                created_at, updated_at, supported_reasoning_efforts
+            FROM provider_models;
+            DROP TABLE provider_models;
+            ALTER TABLE legacy_provider_models RENAME TO provider_models;
+            """
+        )
+        conn.commit()
+        conn.close()
+
+    def test_legacy_suppression_holds_when_another_model_has_real_work(self) -> None:
+        """A suppressed row must stay out of the write loop, not just the guard.
+
+        The suppression set only decides whether the run is a no-op. If the
+        write loop still walks every planned row, any unrelated pending change
+        (here another model's stale tokens) silently re-counts and re-writes the
+        suppressed row, so the backup and the inflated ``models_updated`` come
+        back and the next run repeats it.
+        """
+        self._drop_vision_column()
+        server.apply_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({}), dry_run=False, backup=False
+        )
+        settled = server.apply_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({}), dry_run=False, backup=False
+        )
+        self.assertEqual(settled["applied"]["models_updated"], 0)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE provider_models SET max_prompt_tokens = 1 WHERE model_id = 'vendor/text'"
+        )
+        conn.commit()
+        conn.close()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({}), dry_run=False, backup=False
+        )
+        self.assertEqual(result["applied"]["models_updated"], 1)
+
+    def test_legacy_suppression_holds_when_app_state_work_opens_the_write_path(
+        self,
+    ) -> None:
+        """An unrelated app-state change must not rewrite suppressed rows.
+
+        ``models_updated`` also counts rows touched by app-state-only runs (a
+        pre-existing behaviour), so the real contract is narrower: the
+        suppressed row must not be given a fresh ``updated_at``.
+        """
+        self._drop_vision_column()
+        server.apply_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({}), dry_run=False, backup=False
+        )
+        self.assertEqual(
+            server.apply_metadata_updates(
+                db_path=self.db_path, catalog=self._catalog({}), dry_run=False, backup=False
+            )["applied"]["models_updated"],
+            0,
+        )
+        before = self._rows()["vendor/vlm"]["updated_at"]
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path,
+            catalog=self._catalog({}),
+            dry_run=False,
+            backup=False,
+            set_context_tier="long_context",
+        )
+        self.assertTrue(result["applied"]["app_state_entries_updated"] >= 1)
+        self.assertEqual(self._rows()["vendor/vlm"]["updated_at"], before)
+
+    def test_suppressed_row_still_applies_a_real_token_change(self) -> None:
+        """Suppression covers only the unstorable vision flag, never real work."""
+        self._drop_vision_column()
+        server.apply_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({}), dry_run=False, backup=False
+        )
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE provider_models SET max_prompt_tokens = 1 WHERE model_id = 'vendor/vlm'"
+        )
+        conn.commit()
+        conn.close()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({}), dry_run=False, backup=False
+        )
+        self.assertEqual(result["applied"]["models_updated"], 1)
+        self.assertEqual(self._rows()["vendor/vlm"]["max_prompt_tokens"], 872000)
+
+    def test_vision_column_added_later_un_suppresses_the_row(self) -> None:
+        """An app upgrade that adds the column must let vision be written."""
+        self._drop_vision_column()
+        server.apply_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({}), dry_run=False, backup=False
+        )
+        self.assertEqual(
+            server.apply_metadata_updates(
+                db_path=self.db_path, catalog=self._catalog({}), dry_run=False, backup=False
+            )["applied"]["models_updated"],
+            0,
+        )
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "ALTER TABLE provider_models ADD COLUMN supports_vision INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.commit()
+        conn.close()
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({}), dry_run=False, backup=False
+        )
+        self.assertEqual(result["applied"]["vision_flags_written"], 1)
+        self.assertEqual(self._rows()["vendor/vlm"]["supports_vision"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
