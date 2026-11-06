@@ -88,6 +88,10 @@ APP_STATE_CONTEXT_TIER_KEY = "copilot-context-tier"
 APP_STATE_CATALOG_KEY = "copilot-available-models-v2"
 APP_STATE_CLOUD_CATALOG_KEY = "copilot-cloud-available-models-v2"
 APP_STATE_SELECTED_MODEL_KEY = "copilot-selected-model"
+#: State keys whose vision flag was deliberately skipped because the database
+#: has no ``supports_vision`` column. Recording the skip lets a legacy database
+#: settle instead of planning the same unstorable change on every run.
+APP_STATE_VISION_SKIPPED_KEY = "copilot-byok-metadata-vision-skipped"
 
 #: Catalog caches the app keeps in ``app_state``. They differ in shape: the
 #: local catalog is ``{"accountId": ..., "models": [...]}`` while the cloud
@@ -200,12 +204,11 @@ def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def load_models(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     # ``supports_vision`` post-dates the rest of the table. On a database that
     # predates it the column is projected as NULL, which callers read as
-    # "unknown" — never as "text-only" — and the write path skips it.
-    vision_projection = (
-        "supports_vision"
-        if "supports_vision" in table_columns(conn, "provider_models")
-        else "NULL AS supports_vision"
-    )
+    # "unknown" — never as "text-only" — and the write path skips it. The
+    # boolean lets ``build_plan`` flag a change the schema cannot store so the
+    # write path can skip re-proposing it instead of rewriting forever.
+    has_vision_column = "supports_vision" in table_columns(conn, "provider_models")
+    vision_projection = "supports_vision" if has_vision_column else "NULL AS supports_vision"
     rows = conn.execute(
         f"""
         SELECT id, provider_id, model_id, wire_model, display_name,
@@ -231,6 +234,7 @@ def load_models(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                     row["supported_reasoning_efforts"]
                 ),
                 "supports_vision": row["supports_vision"],
+                "supports_vision_available": has_vision_column,
             }
         )
     return models
@@ -937,6 +941,7 @@ def build_plan(
         # text-only or unknown provider result must not clear an existing flag:
         # the column defaults to 0, so writing it back is a no-op at best, and
         # a wrong 1 makes the app offer image input to a model that rejects it.
+        vision_available = model.get("supports_vision_available", True)
         if (
             proposed["supports_vision"] is True
             and model.get("supports_vision") != 1
@@ -944,6 +949,11 @@ def build_plan(
             changes.append("supports_vision")
 
         entry["changes"] = changes
+        # Set when the only reason the row looks stale is a vision flag the
+        # schema cannot store; the write path uses it to avoid a no-op rewrite.
+        entry["vision_unavailable"] = (
+            not vision_available and "supports_vision" in changes
+        )
 
         if set_reasoning_defaults:
             default_effort = metadata.get("default_reasoning_effort")
@@ -1462,19 +1472,41 @@ def _catalog_entries(cache: Any) -> Optional[list[Any]]:
     return None
 
 
+class _CatalogPatch(tuple):
+    """``(cache, patched)`` result that also exposes the match count.
+
+    Unpacking as two values keeps existing callers unchanged, while
+    ``.matched`` distinguishes "found the entry" from "changed the entry".
+    """
+
+    def __new__(cls, cache: Any, patched: int, matched: int) -> "_CatalogPatch":
+        result = super().__new__(cls, (cache, patched))
+        result.patched = patched
+        result.matched = matched
+        return result
+
+
 def _patch_catalog_cache(
     cache: Any, updates: dict[str, dict[str, Any]]
-) -> tuple[Any, int]:
-    """Patch BYOK entries in a cached model catalog. Returns (cache, patched).
+) -> _CatalogPatch:
+    """Patch BYOK entries in a cached model catalog.
+
+    The result unpacks as ``(cache, patched)`` for existing callers, with
+    ``matched`` available as a named attribute. ``patched`` counts entries
+    whose cache representation actually changed; ``matched`` counts entries the
+    update set found, whether or not they needed a change. The caller reports
+    ``patched`` as work done and warns on ``matched == 0`` so an already
+    in-sync cache is not mistaken for an unmatched one.
 
     Accepts both catalog shapes (see :func:`_catalog_entries`) and mutates the
     entries in place, so the caller can persist ``cache`` unchanged.
     """
     models = _catalog_entries(cache)
     if models is None:
-        return cache, 0
+        return _CatalogPatch(cache, 0, 0)
 
     patched = 0
+    matched = 0
     for entry in models:
         if not isinstance(entry, dict):
             continue
@@ -1494,6 +1526,7 @@ def _patch_catalog_cache(
         update = updates.get(state_key)
         if update is None:
             continue
+        matched += 1
 
         capabilities = entry.setdefault("capabilities", {})
         if not isinstance(capabilities, dict):
@@ -1566,7 +1599,7 @@ def _patch_catalog_cache(
         if changed:
             patched += 1
 
-    return cache, patched
+    return _CatalogPatch(cache, patched, matched)
 
 
 def apply_metadata_updates(
@@ -1591,6 +1624,7 @@ def apply_metadata_updates(
         models = load_models(conn)
         reasoning_state = load_app_state(conn, APP_STATE_REASONING_KEY) or {}
         context_tier_state = load_app_state(conn, APP_STATE_CONTEXT_TIER_KEY) or {}
+        skipped_vision = set(load_app_state(conn, APP_STATE_VISION_SKIPPED_KEY) or [])
     finally:
         conn.close()
 
@@ -1668,22 +1702,39 @@ def apply_metadata_updates(
                 cache = load_app_state(probe, cache_key)
                 if cache is None:
                     continue
-                _, patched = _patch_catalog_cache(
+                patched = _patch_catalog_cache(
                     json.loads(json.dumps(cache)), updates
-                )
+                ).patched
                 if patched:
                     cache_patch_counts[cache_key] = patched
         finally:
             probe.close()
 
-    has_row_updates = any(
-        entry["status"] == "update" and entry.get("proposed")
+    # A row whose only planned change is a vision flag the schema cannot store
+    # is already as correct as it can be. The first run records those rows in
+    # app state; later runs skip them so a legacy database settles instead of
+    # counting a no-op rewrite (and a backup) on every run.
+    row_updates = [
+        entry
         for entry in plan["entries"]
-    )
+        if entry["status"] == "update" and entry.get("proposed")
+    ]
+    vision_only_updates = [
+        entry
+        for entry in row_updates
+        if entry.get("vision_unavailable")
+        and set(entry.get("changes") or []) <= {"supports_vision"}
+    ]
+    already_skipped = [
+        entry for entry in vision_only_updates if entry["state_key"] in skipped_vision
+    ]
+    effective_row_updates = [
+        entry for entry in row_updates if entry not in already_skipped
+    ]
     has_app_state_changes = any(
         entry["app_state_changes"] for entry in plan["entries"]
     )
-    if not has_row_updates and not has_app_state_changes and not cache_patch_counts:
+    if not effective_row_updates and not has_app_state_changes and not cache_patch_counts:
         result["notes"].append("Nothing to apply — configuration already matches provider metadata")
         return result
 
@@ -1697,9 +1748,7 @@ def apply_metadata_updates(
         has_vision_column = "supports_vision" in table_columns(conn, "provider_models")
 
         with conn:
-            for entry in plan["entries"]:
-                if entry["status"] != "update" or not entry.get("proposed"):
-                    continue
+            for entry in row_updates:
                 proposed = entry["proposed"]
                 vision_flag = (
                     1 if proposed.get("supports_vision") is True else None
@@ -1731,7 +1780,7 @@ def apply_metadata_updates(
                     params,
                 )
                 result["applied"]["models_updated"] += 1
-                if vision_assignment:
+                if vision_assignment and "supports_vision" in entry["changes"]:
                     result["applied"]["vision_flags_written"] += 1
 
             reasoning_updates = [
@@ -1778,6 +1827,23 @@ def apply_metadata_updates(
                 )
                 result["applied"]["app_state_entries_updated"] += len(tier_updates)
 
+            if vision_only_updates:
+                merged_skipped = set(skipped_vision)
+                merged_skipped.update(
+                    entry["state_key"] for entry in vision_only_updates
+                )
+                conn.execute(
+                    """
+                    INSERT INTO app_state (key, value, updated_at)
+                    VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at
+                    """,
+                    (APP_STATE_VISION_SKIPPED_KEY, json.dumps(sorted(merged_skipped))),
+                )
+                result["applied"]["app_state_entries_updated"] += 1
+
             if refresh_catalog_cache:
                 patched_total = 0
                 for cache_key in CATALOG_CACHE_KEYS:
@@ -1799,7 +1865,18 @@ def apply_metadata_updates(
                         patched_total += patched
                         result["applied"]["catalog_caches_patched"][cache_key] = patched
                 result["applied"]["catalog_cache_entries_patched"] = patched_total
-                if not patched_total and updates:
+                # Track matches separately from changes: an in-sync cache
+                # matches every entry but patches none, so the change count
+                # cannot tell "found the entries" from "found nothing".
+                matched_total = 0
+                for cache_key in CATALOG_CACHE_KEYS:
+                    cache = load_app_state(conn, cache_key)
+                    if cache is None:
+                        continue
+                    matched_total += _patch_catalog_cache(
+                        json.loads(json.dumps(cache)), updates
+                    ).matched
+                if not matched_total and updates:
                     result["notes"].append(
                         f"WARNING: refresh_catalog_cache was requested and {len(updates)} "
                         f"model(s) had provider metadata, but 0 entries in "

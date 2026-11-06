@@ -793,6 +793,112 @@ class ApplyVisionFlagsTest(unittest.TestCase):
             "supports_vision", self._rows()["vendor/vlm"]
         )
 
+    def test_pre_vision_database_settles_instead_of_reapplying_forever(self) -> None:
+        """A schema without the column must converge, not rewrite every run.
+
+        ``build_plan`` always proposes ``supports_vision`` because the current
+        value reads as NULL, but the column does not exist to store it. Without
+        a fallback that still compares the remaining columns, every run counts
+        a row update, so the tool never reports "Nothing to apply" and keeps
+        writing a backup each time.
+        """
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            CREATE TABLE legacy_provider_models (
+                id TEXT PRIMARY KEY NOT NULL,
+                provider_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                wire_model TEXT,
+                display_name TEXT NOT NULL,
+                max_prompt_tokens INTEGER,
+                max_output_tokens INTEGER,
+                wire_api_override TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                supported_reasoning_efforts TEXT,
+                UNIQUE (provider_id, model_id)
+            );
+            INSERT INTO legacy_provider_models SELECT
+                id, provider_id, model_id, wire_model, display_name,
+                max_prompt_tokens, max_output_tokens, wire_api_override,
+                created_at, updated_at, supported_reasoning_efforts
+            FROM provider_models;
+            DROP TABLE provider_models;
+            ALTER TABLE legacy_provider_models RENAME TO provider_models;
+            """
+        )
+        conn.commit()
+        conn.close()
+        self._insert_cache(
+            {
+                "models": [
+                    {
+                        "id": f"{PROVIDER_ID}/vendor/vlm",
+                        "providerId": PROVIDER_ID,
+                        "capabilities": {"supports": {}},
+                    }
+                ]
+            }
+        )
+
+        first = server.apply_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({}), dry_run=False
+        )
+        self.assertGreaterEqual(first["applied"]["models_updated"], 1)
+        self.assertEqual(first["applied"]["vision_flags_written"], 0)
+
+        second = server.apply_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({}), dry_run=False
+        )
+        self.assertEqual(second["applied"]["models_updated"], 0)
+        self.assertIsNone(second["backup_path"])
+        self.assertIn("Nothing to apply", " ".join(second["notes"]))
+
+    def test_in_sync_cache_with_row_update_does_not_warn(self) -> None:
+        """The WARNING is about an unmatched cache, not about unsaved cache edits.
+
+        Once the cache already carries the provider values, a row update must
+        still leave the cache patch count at zero *without* claiming the app
+        will miss the metadata.
+        """
+        self._insert_cache(
+            {
+                "models": [
+                    {
+                        "id": f"{PROVIDER_ID}/vendor/vlm",
+                        "providerId": PROVIDER_ID,
+                        "capabilities": {
+                            "supports": {"reasoningEffort": False, "vision": True},
+                            "limits": {
+                                "max_prompt_tokens": 872000,
+                                "max_output_tokens": 128000,
+                                "max_context_window_tokens": 1000000,
+                                "vision": {
+                                    "supported_media_types": [
+                                        "image/jpeg",
+                                        "image/png",
+                                        "image/webp",
+                                        "image/gif",
+                                    ]
+                                },
+                            },
+                        },
+                    }
+                ]
+            }
+        )
+
+        result = server.apply_metadata_updates(
+            db_path=self.db_path, catalog=self._catalog({}), dry_run=False, backup=False
+        )
+        self.assertGreaterEqual(result["applied"]["models_updated"], 1)
+        self.assertEqual(result["applied"]["catalog_cache_entries_patched"], 0)
+        self.assertFalse(
+            any("WARNING" in note for note in result["notes"]),
+            f"cache was already in sync, got {result['notes']}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
