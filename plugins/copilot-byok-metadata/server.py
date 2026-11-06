@@ -49,7 +49,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 SERVER_NAME = "copilot-byok-metadata"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.5.0"
 
 DEFAULT_DB_PATH = os.path.join("~", ".copilot", "data.db")
 
@@ -1276,8 +1276,158 @@ def build_plan(
 # ---------------------------------------------------------------------------
 
 
+#: The original three metadata columns. ``missing_metadata`` and both
+#: ``has_metadata`` meanings are defined by this list; vision is not one of
+#: them because it is best-effort.
+_METADATA_FIELDS = (
+    "max_prompt_tokens",
+    "max_output_tokens",
+    "supported_reasoning_efforts",
+)
+
+
+def _catalog_entry_has_vision(entry: dict[str, Any]) -> bool:
+    """Whether one cached catalog entry advertises vision support.
+
+    The patch writes ``capabilities.supports.vision = true``; older or
+    unpatched entries leave the key absent. Only an explicit ``True`` counts,
+    matching the write path's "never write false" rule.
+    """
+    capabilities = entry.get("capabilities") or {}
+    supports = capabilities.get("supports") or {}
+    return isinstance(supports, dict) and supports.get("vision") is True
+
+
+def _catalog_entry_has_limits(entry: dict[str, Any]) -> bool:
+    capabilities = entry.get("capabilities") or {}
+    limits = capabilities.get("limits")
+    return isinstance(limits, dict) and bool(limits)
+
+
+def _catalog_entry_vision_media_types(entry: dict[str, Any]) -> list[str]:
+    capabilities = entry.get("capabilities") or {}
+    limits = capabilities.get("limits") or {}
+    vision = limits.get("vision") if isinstance(limits, dict) else None
+    if not isinstance(vision, dict):
+        return []
+    return [str(item) for item in vision.get("supported_media_types") or []]
+
+
+def _catalog_entry_has_metadata(entry: dict[str, Any]) -> bool:
+    """Whether the cached entry carries any provider-derived metadata."""
+    return _catalog_entry_has_limits(entry) or _catalog_entry_has_vision(entry)
+
+
+def _list_model_entry(
+    model: dict[str, Any],
+    provider: dict[str, Any],
+    reasoning_effort: Optional[str],
+    context_tier: Optional[str],
+    metadata: Optional[dict[str, Any]],
+    *,
+    require_all_metadata: bool = True,
+) -> dict[str, Any]:
+    """Build one read-surface model entry, shared by both read tools.
+
+    ``list_byok_models`` historically counts a model as having metadata when
+    any of the three columns is populated; ``read_byok_config`` requires all
+    three. ``require_all_metadata`` preserves both meanings.
+    """
+    efforts = model["supported_reasoning_efforts"]
+    # ``missing_metadata`` deliberately stays the three original columns.
+    # Vision is best-effort: a model without it is unknown, not incomplete.
+    missing = [field for field in _METADATA_FIELDS if model[field] is None]
+    metadata = metadata or {}
+    unsupported_model_type = metadata.get("unsupported_model_type")
+    if unsupported_model_type:
+        # A non-chat model is never written, so "missing reasoning" is its
+        # expected resting state rather than a gap to repair.
+        missing = [
+            field for field in missing if field != "supported_reasoning_efforts"
+        ]
+    # Provider metadata wins when the caller supplied it: a stored ``0`` is the
+    # column default rather than a claim that the model is text-only. Without
+    # metadata the stored value is all there is, and NULL means unknown.
+    vision = metadata.get("supports_vision")
+    if vision is None:
+        vision = model.get("supports_vision")
+    return {
+        **model,
+        "provider_name": provider.get("name"),
+        "provider_kind": detect_provider_kind(provider) if provider else None,
+        "reasoning_effort": reasoning_effort,
+        "context_tier": context_tier,
+        "has_metadata": (
+            len(missing) < 3
+            if require_all_metadata
+            else any(model[field] is not None for field in _METADATA_FIELDS)
+        ),
+        "missing_metadata": missing,
+        "supports_reasoning": bool(efforts),
+        # Vision is tri-state: True, False, or None/absent for unknown.
+        "supports_vision": None if vision is None else bool(vision),
+        "vision_media_types": list(metadata.get("vision_media_types") or []),
+        "vision_source": metadata.get("vision_source"),
+        "model_type": metadata.get("model_type"),
+        "supported_for_chat": metadata.get("supported_for_chat"),
+        "unsupported_model_type": unsupported_model_type,
+    }
+
+
+def _catalog_cache_summary(
+    cache: Any, entries: list[Any]
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Summarize one cached catalog and collect its BYOK entries."""
+    byok_entries = [
+        entry for entry in entries if isinstance(entry, dict) and entry.get("providerId")
+    ]
+    summary: dict[str, Any] = {
+        "present": True,
+        "shape": "list" if isinstance(cache, list) else "object",
+        "entry_count": len(entries),
+        "byok_entry_count": len(byok_entries),
+        "byok_entries_with_limits": sum(
+            1 for entry in byok_entries if _catalog_entry_has_limits(entry)
+        ),
+        "byok_entries_with_vision": sum(
+            1 for entry in byok_entries if _catalog_entry_has_vision(entry)
+        ),
+        "byok_entries_with_reasoning_efforts": sum(
+            1 for entry in byok_entries if entry.get("supportedReasoningEfforts")
+        ),
+        "byok_entries_with_metadata": sum(
+            1 for entry in byok_entries if _catalog_entry_has_metadata(entry)
+        ),
+    }
+    catalog_entries: list[dict[str, Any]] = []
+    for entry in byok_entries:
+        capabilities = entry.get("capabilities") or {}
+        limits = capabilities.get("limits") or {}
+        catalog_entries.append(
+            {
+                "id": entry.get("id"),
+                "name": entry.get("name"),
+                "providerId": entry.get("providerId"),
+                "max_context_window_tokens": limits.get("max_context_window_tokens"),
+                "max_prompt_tokens": limits.get("max_prompt_tokens"),
+                "max_output_tokens": limits.get("max_output_tokens"),
+                "has_limits": _catalog_entry_has_limits(entry),
+                "supports_vision": _catalog_entry_has_vision(entry),
+                "vision_media_types": _catalog_entry_vision_media_types(entry),
+                "supportedReasoningEfforts": entry.get("supportedReasoningEfforts"),
+                "defaultReasoningEffort": entry.get("defaultReasoningEffort"),
+            }
+        )
+    return summary, catalog_entries
+
+
 def list_byok_models(db_path: Optional[str] = None) -> dict[str, Any]:
-    """List configured BYOK providers and models with their current metadata."""
+    """List configured BYOK providers and models with their current metadata.
+
+    ``model_type`` and ``supported_for_chat`` come from provider metadata,
+    which the database does not store. This read path makes no network calls,
+    so without a catalog both are ``None`` — unknown, never excluded.
+    """
     path = resolve_db_path(db_path)
     if not os.path.exists(path):
         raise FileNotFoundError(f"Copilot app database not found at {path}")
@@ -1292,26 +1442,17 @@ def list_byok_models(db_path: Optional[str] = None) -> dict[str, Any]:
         conn.close()
 
     provider_by_id = {provider["id"]: provider for provider in providers}
-    enriched = []
-    for model in models:
-        provider = provider_by_id.get(model["provider_id"], {})
-        enriched.append(
-            {
-                **model,
-                "provider_name": provider.get("name"),
-                "provider_kind": detect_provider_kind(provider) if provider else None,
-                "reasoning_effort": reasoning_state.get(model["state_key"]),
-                "context_tier": context_tier_state.get(model["state_key"]),
-                "has_metadata": any(
-                    model[field] is not None
-                    for field in (
-                        "max_prompt_tokens",
-                        "max_output_tokens",
-                        "supported_reasoning_efforts",
-                    )
-                ),
-            }
+    enriched = [
+        _list_model_entry(
+            model,
+            provider_by_id.get(model["provider_id"], {}),
+            reasoning_state.get(model["state_key"]),
+            context_tier_state.get(model["state_key"]),
+            None,
+            require_all_metadata=False,
         )
+        for model in models
+    ]
 
     return {
         "db_path": path,
@@ -1393,48 +1534,18 @@ def read_byok_config(
     enriched_models = []
     for model in models:
         provider = provider_by_id.get(model["provider_id"], {})
-        kind = detect_provider_kind(provider) if provider else None
-        efforts = model["supported_reasoning_efforts"]
-        missing = [
-            field
-            for field in (
-                "max_prompt_tokens",
-                "max_output_tokens",
-                "supported_reasoning_efforts",
-            )
-            if model[field] is None
-        ]
-        metadata = _catalog_metadata_for(model, catalog) if catalog else {}
-        unsupported_model_type = metadata.get("unsupported_model_type")
-        if unsupported_model_type:
-            # Only provider metadata knows a model's class; the database does
-            # not store it. This might never be written, so "missing metadata"
-            # is the expected state, not a gap to repair.
-            missing = [
-                field
-                for field in missing
-                if field != "supported_reasoning_efforts"
-            ]
         # Without a catalog the type is unknown (``None``), never "excluded".
-        model_type = metadata.get("model_type") if catalog is not None else None
-        supported_for_chat = (
-            metadata.get("supported_for_chat") if catalog is not None else None
+        metadata = _catalog_metadata_for(model, catalog) if catalog else {}
+        entry = _list_model_entry(
+            model,
+            provider,
+            reasoning_state.get(model["state_key"]),
+            context_tier_state.get(model["state_key"]),
+            metadata,
         )
+        kind = entry["provider_kind"]
         enriched_models.append(
-            {
-                **model,
-                "provider_name": provider.get("name"),
-                "provider_kind": kind,
-                "provider_supported": kind is not None,
-                "reasoning_effort": reasoning_state.get(model["state_key"]),
-                "context_tier": context_tier_state.get(model["state_key"]),
-                "has_metadata": len(missing) < 3,
-                "missing_metadata": missing,
-                "supports_reasoning": bool(efforts),
-                "model_type": model_type,
-                "supported_for_chat": supported_for_chat,
-                "unsupported_model_type": unsupported_model_type,
-            }
+            {**entry, "provider_supported": kind is not None}
         )
 
     enriched_providers = []
@@ -1466,51 +1577,10 @@ def read_byok_config(
         if entries is None:
             catalog_cache_summary[cache_key] = {"present": False}
             continue
-        byok_entries = [
-            entry
-            for entry in entries
-            if isinstance(entry, dict) and entry.get("providerId")
-        ]
-        with_limits = sum(
-            1
-            for entry in byok_entries
-            if isinstance((entry.get("capabilities") or {}).get("limits"), dict)
-            and (entry.get("capabilities") or {}).get("limits")
-        )
-        with_efforts = sum(
-            1 for entry in byok_entries if entry.get("supportedReasoningEfforts")
-        )
-        catalog_cache_summary[cache_key] = {
-            "present": True,
-            "shape": "list" if isinstance(cache, list) else "object",
-            "entry_count": len(entries),
-            "byok_entry_count": len(byok_entries),
-            "byok_entries_with_limits": with_limits,
-            "byok_entries_with_reasoning_efforts": with_efforts,
-        }
+        summary, catalog_entries = _catalog_cache_summary(cache, entries)
+        catalog_cache_summary[cache_key] = summary
         if cache_key == APP_STATE_CATALOG_KEY:
-            for entry in byok_entries:
-                capabilities = entry.get("capabilities") or {}
-                limits = capabilities.get("limits") or {}
-                byok_catalog_entries.append(
-                    {
-                        "id": entry.get("id"),
-                        "name": entry.get("name"),
-                        "providerId": entry.get("providerId"),
-                        "max_context_window_tokens": limits.get(
-                            "max_context_window_tokens"
-                        ),
-                        "max_prompt_tokens": limits.get("max_prompt_tokens"),
-                        "max_output_tokens": limits.get("max_output_tokens"),
-                        "has_limits": bool(limits),
-                        "supportedReasoningEfforts": entry.get(
-                            "supportedReasoningEfforts"
-                        ),
-                        "defaultReasoningEffort": entry.get(
-                            "defaultReasoningEffort"
-                        ),
-                    }
-                )
+            byok_catalog_entries.extend(catalog_entries)
 
     supported_kinds = sorted(
         {p["provider_kind"] for p in enriched_providers if p["provider_kind"]}
@@ -1575,6 +1645,14 @@ def read_byok_config(
             "byok_entries_with_limits": sum(
                 1 for entry in byok_catalog_entries if entry["has_limits"]
             ),
+            "byok_entries_with_vision": sum(
+                1 for entry in byok_catalog_entries if entry["supports_vision"]
+            ),
+            "byok_entries_with_metadata": sum(
+                1
+                for entry in byok_catalog_entries
+                if entry["has_limits"] or entry["supports_vision"]
+            ),
             "byok_entries": byok_catalog_entries,
             "caches": catalog_cache_summary,
         },
@@ -1590,8 +1668,21 @@ def read_byok_config(
             "models_supporting_reasoning": sum(
                 1 for m in enriched_models if m["supports_reasoning"]
             ),
+            "models_with_vision": sum(
+                1 for m in enriched_models if m["supports_vision"] is True
+            ),
             "models_unsupported_model_type": sum(
                 1 for m in enriched_models if m["unsupported_model_type"]
+            ),
+            "providers_with_supported_reasoning": sum(
+                1
+                for p in enriched_providers
+                if p["reasoning_efforts_mode"] is True
+            ),
+            "providers_with_conditional_reasoning": sum(
+                1
+                for p in enriched_providers
+                if p["reasoning_efforts_mode"] == "conditional"
             ),
             "providers_with_supported_source": supported_kinds,
             "providers_without_supported_source": unsupported,

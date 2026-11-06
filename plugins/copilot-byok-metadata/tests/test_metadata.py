@@ -1366,6 +1366,11 @@ class _TempDbTestCase(unittest.TestCase):
                 ),
             ),
         )
+        conn.execute(
+            "INSERT INTO provider_models (id, provider_id, model_id, display_name) "
+            "VALUES (?, ?, ?, ?)",
+            ("row-flint", "local", "flint-oQ4e", "flint-oQ4e"),
+        )
         conn.commit()
         conn.close()
 
@@ -1393,6 +1398,79 @@ class _TempDbTestCase(unittest.TestCase):
 
 class ProviderKeyOnTheWireTest(_TempDbTestCase):
     """The provider key must reach the admin request from a real DB row."""
+
+    def _fake_get(self, seen: list[tuple[str, dict]]):
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            seen.append((url, dict(headers or {})))
+            if url.endswith("/admin/api/models"):
+                return self._admin_payload()
+            if url.endswith("/models/status"):
+                return {"models": [{"id": "flint-oQ4e", "model_type": "vlm"}]}
+            return {"data": [{"id": "flint-oQ4e", "max_model_len": 131072}]}
+
+        return fake_get
+
+    def _assert_admin_key_was_sent(self, seen: list[tuple[str, dict]]) -> None:
+        admin_headers = [
+            headers for url, headers in seen if url.endswith("/admin/api/models")
+        ]
+        self.assertEqual(len(admin_headers), 1, seen)
+        # Compare against the seeded key, never a redacted placeholder: this
+        # must fail when the provider settings reach the request already masked.
+        self.assertEqual(
+            admin_headers[0].get("Authorization"), "Bearer " + self.API_KEY
+        )
+
+    def test_fetch_provider_metadata_sends_the_key_end_to_end(self) -> None:
+        """The public read path must authenticate the admin fetch itself.
+
+        Calling ``load_providers(conn, redact=False)`` directly proves only
+        that the loader *can* expose the key. This goes through
+        ``fetch_provider_metadata`` so reverting its internal ``redact=False``
+        makes the test fail.
+        """
+        seen: list[tuple[str, dict]] = []
+        original = server.http_get_json
+        server.http_get_json = self._fake_get(seen)
+        try:
+            result = server.fetch_provider_metadata(
+                provider="omlx", db_path=self.db_path
+            )
+        finally:
+            server.http_get_json = original
+
+        self._assert_admin_key_was_sent(seen)
+        resolved = {entry["model_id"]: entry for entry in result["resolved"]}
+        metadata = resolved["flint-oQ4e"]["metadata"]
+        self.assertEqual(
+            metadata["supported_reasoning_efforts"],
+            ["low", "medium", "high", "xhigh", "max"],
+        )
+        self.assertEqual(metadata["default_reasoning_effort"], "low")
+        # The key itself must never appear in the tool result.
+        self.assertNotIn("REALKEY", json.dumps(result))
+
+    def test_plan_metadata_updates_sends_the_key_end_to_end(self) -> None:
+        seen: list[tuple[str, dict]] = []
+        original = server.http_get_json
+        server.http_get_json = self._fake_get(seen)
+        try:
+            server.plan_metadata_updates(db_path=self.db_path)
+        finally:
+            server.http_get_json = original
+
+        self._assert_admin_key_was_sent(seen)
+
+    def test_apply_metadata_updates_sends_the_key_end_to_end(self) -> None:
+        seen: list[tuple[str, dict]] = []
+        original = server.http_get_json
+        server.http_get_json = self._fake_get(seen)
+        try:
+            server.apply_metadata_updates(db_path=self.db_path, backup=False)
+        finally:
+            server.http_get_json = original
+
+        self._assert_admin_key_was_sent(seen)
 
     def test_real_db_key_is_sent_as_a_bearer_header(self) -> None:
         conn = server.connect(self.db_path, readonly=True)

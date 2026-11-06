@@ -333,6 +333,90 @@ class ReadByokConfigTest(unittest.TestCase):
             f"expected a limits note, got {res['notes']}",
         )
 
+    def test_vision_fields_are_surfaced_without_touching_missing_metadata(self) -> None:
+        catalog = {
+            "vendor/plain-model": {
+                "model_id": "vendor/plain-model",
+                "supports_vision": True,
+                "vision_media_types": ["image/png"],
+                "vision_source": "openrouter.architecture",
+                "model_type": None,
+                "supported_for_chat": True,
+                "unsupported_model_type": None,
+            }
+        }
+        res = self._read(catalog=catalog)
+        by_id = {m["model_id"]: m for m in res["models"]}
+
+        vision = by_id["vendor/plain-model"]
+        self.assertIs(vision["supports_vision"], True)
+        self.assertEqual(vision["vision_media_types"], ["image/png"])
+        self.assertEqual(vision["vision_source"], "openrouter.architecture")
+        self.assertIs(vision["supported_for_chat"], True)
+        # Vision is best-effort: it must never appear as missing metadata.
+        self.assertEqual(
+            vision["missing_metadata"],
+            ["max_prompt_tokens", "max_output_tokens", "supported_reasoning_efforts"],
+        )
+        self.assertFalse(vision["has_metadata"])
+
+        unknown = by_id["vendor/reasoning-model"]
+        self.assertIsNone(unknown["supports_vision"])
+        self.assertEqual(unknown["vision_media_types"], [])
+        self.assertTrue(unknown["has_metadata"])
+
+        self.assertEqual(res["summary"]["models_with_vision"], 1)
+        self.assertEqual(res["summary"]["models_with_metadata"], 1)
+
+    def test_catalog_cache_reports_vision_entries(self) -> None:
+        self._seed_catalog(
+            [
+                {
+                    "id": f"{PROVIDER_ID}/vendor/reasoning-model",
+                    "name": "vendor/reasoning-model",
+                    "providerId": PROVIDER_ID,
+                    "capabilities": {
+                        "supports": {"reasoningEffort": True, "vision": True},
+                        "limits": {
+                            "max_context_window_tokens": 1000000,
+                            "vision": {
+                                "supported_media_types": ["image/png", "image/jpeg"]
+                            },
+                        },
+                    },
+                    "supportedReasoningEfforts": ["max", "high", "low"],
+                }
+            ]
+        )
+        res = self._read()
+        summary = res["catalog_cache"]["caches"][server.APP_STATE_CATALOG_KEY]
+        self.assertEqual(summary["byok_entries_with_vision"], 1)
+        self.assertEqual(summary["byok_entries_with_metadata"], 1)
+        self.assertEqual(res["catalog_cache"]["byok_entries_with_vision"], 1)
+        self.assertEqual(res["catalog_cache"]["byok_entries_with_metadata"], 1)
+
+        entry = res["catalog_cache"]["byok_entries"][0]
+        self.assertIs(entry["supports_vision"], True)
+        self.assertEqual(
+            entry["vision_media_types"], ["image/png", "image/jpeg"]
+        )
+
+    def test_list_byok_models_surfaces_vision_and_exclusion_fields(self) -> None:
+        res = server.list_byok_models(db_path=self.db_path)
+        by_id = {m["model_id"]: m for m in res["models"]}
+        for model in by_id.values():
+            self.assertIsNone(model["supports_vision"])
+            self.assertEqual(model["vision_media_types"], [])
+            self.assertIsNone(model["model_type"])
+            self.assertIsNone(model["supported_for_chat"])
+            self.assertIsNone(model["unsupported_model_type"])
+        self.assertEqual(
+            by_id["vendor/plain-model"]["missing_metadata"],
+            ["max_prompt_tokens", "max_output_tokens", "supported_reasoning_efforts"],
+        )
+        self.assertFalse(by_id["vendor/plain-model"]["has_metadata"])
+        self.assertEqual(res["summary"]["models_with_metadata"], 1)
+
     def test_catalog_cache_reports_both_caches(self) -> None:
         res = self._read()
         caches = res["catalog_cache"]["caches"]
