@@ -1338,13 +1338,10 @@ def _list_model_entry(
     # Vision is best-effort: a model without it is unknown, not incomplete.
     missing = [field for field in _METADATA_FIELDS if model[field] is None]
     metadata = metadata or {}
+    # ``unsupported_model_type`` is reported only. A non-chat model is still
+    # missing the same three columns, so neither ``missing_metadata`` nor
+    # ``has_metadata`` may depend on it.
     unsupported_model_type = metadata.get("unsupported_model_type")
-    if unsupported_model_type:
-        # A non-chat model is never written, so "missing reasoning" is its
-        # expected resting state rather than a gap to repair.
-        missing = [
-            field for field in missing if field != "supported_reasoning_efforts"
-        ]
     # Provider metadata wins when the caller supplied it: a stored ``0`` is the
     # column default rather than a claim that the model is text-only. Without
     # metadata the stored value is all there is, and NULL means unknown.

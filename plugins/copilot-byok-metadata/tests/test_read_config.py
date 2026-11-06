@@ -368,6 +368,58 @@ class ReadByokConfigTest(unittest.TestCase):
         self.assertEqual(res["summary"]["models_with_vision"], 1)
         self.assertEqual(res["summary"]["models_with_metadata"], 1)
 
+    def test_non_chat_catalog_entry_keeps_all_three_missing_metadata(self) -> None:
+        """``unsupported_model_type`` is reported, never subtracted from gaps."""
+        catalog = {
+            "vendor/plain-model": {
+                "model_id": "vendor/plain-model",
+                "supports_vision": None,
+                "vision_media_types": [],
+                "vision_source": None,
+                "model_type": "reranker",
+                "supported_for_chat": False,
+                "unsupported_model_type": "reranker",
+            }
+        }
+        res = self._read(catalog=catalog)
+        by_id = {m["model_id"]: m for m in res["models"]}
+
+        plain = by_id["vendor/plain-model"]
+        self.assertEqual(plain["unsupported_model_type"], "reranker")
+        self.assertIs(plain["supported_for_chat"], False)
+        self.assertEqual(
+            plain["missing_metadata"],
+            ["max_prompt_tokens", "max_output_tokens", "supported_reasoning_efforts"],
+        )
+        self.assertIs(plain["has_metadata"], False)
+        self.assertEqual(res["summary"]["models_with_metadata"], 1)
+        self.assertEqual(res["summary"]["models_without_metadata"], 2)
+        self.assertEqual(res["summary"]["models_unsupported_model_type"], 1)
+
+    def test_vision_without_reasoning_still_reports_all_three_missing(self) -> None:
+        """Vision presence never shortens ``missing_metadata``."""
+        catalog = {
+            "vendor/plain-model": {
+                "model_id": "vendor/plain-model",
+                "supports_vision": True,
+                "vision_media_types": ["image/png"],
+                "vision_source": "openrouter.architecture",
+                "model_type": "vlm",
+                "supported_for_chat": True,
+                "unsupported_model_type": None,
+            }
+        }
+        res = self._read(catalog=catalog)
+        plain = {m["model_id"]: m for m in res["models"]}["vendor/plain-model"]
+
+        self.assertIs(plain["supports_vision"], True)
+        self.assertEqual(
+            plain["missing_metadata"],
+            ["max_prompt_tokens", "max_output_tokens", "supported_reasoning_efforts"],
+        )
+        self.assertIs(plain["has_metadata"], False)
+        self.assertEqual(res["summary"]["models_with_metadata"], 1)
+
     def test_catalog_cache_reports_vision_entries(self) -> None:
         self._seed_catalog(
             [
