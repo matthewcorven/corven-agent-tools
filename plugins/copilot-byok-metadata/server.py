@@ -49,7 +49,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 SERVER_NAME = "copilot-byok-metadata"
-SERVER_VERSION = "0.5.1"
+SERVER_VERSION = "0.5.2"
 
 DEFAULT_DB_PATH = os.path.join("~", ".copilot", "data.db")
 
@@ -947,11 +947,16 @@ def fetch_catalog(
     if not isinstance(entries, list):
         raise ValueError(f"Unexpected catalog payload from {url}")
 
+    trimmed_url = url.rstrip("/")
+    catalog_path = spec.get("catalog_path") or ""
+
     status: dict[str, dict[str, Any]] = {}
     status_path = spec.get("status_path")
     if status_path:
-        if url.endswith(spec["catalog_path"]):
-            status_url = url[: -len(spec["catalog_path"])] + status_path
+        if catalog_path and trimmed_url.endswith(catalog_path):
+            status_url = trimmed_url[: -len(catalog_path)] + status_path
+        elif catalog_url:
+            status_url = None
         elif provider:
             status_url = f"{provider_api_root(provider_base_url(provider))}{status_path}"
         else:
@@ -971,16 +976,69 @@ def fetch_catalog(
 
     catalog: dict[str, dict[str, Any]] = {}
     admin: dict[str, dict[str, Any]] = {}
-    if spec.get("admin_models_path") and provider:
-        settings = provider.get("settings") or {}
-        admin = fetch_omlx_admin_models(
-            provider_base_url(provider), settings.get("apiKey")
-        )
+    if spec.get("admin_models_path") and (provider or catalog_url):
+        if catalog_url:
+            if catalog_path and trimmed_url.endswith(catalog_path):
+                admin_base = trimmed_url[: -len(catalog_path)]
+            else:
+                parsed = urlparse(trimmed_url)
+                admin_base = (
+                    f"{parsed.scheme}://{parsed.netloc}"
+                    if parsed.scheme and parsed.netloc
+                    else ""
+                )
+        else:
+            admin_base = provider_base_url(provider) if provider else ""
+        if admin_base:
+            settings = (provider or {}).get("settings") or {}
+            admin = fetch_omlx_admin_models(admin_base, settings.get("apiKey"))
     for entry in entries:
         if not isinstance(entry, dict) or not entry.get("id"):
             continue
         catalog[str(entry["id"])] = normalize_provider_model(kind, entry, status, admin)
     return catalog
+
+
+def _resolve_target_providers_and_kinds(
+    providers: list[dict[str, Any]],
+    models: list[dict[str, Any]],
+    model_ids: Optional[list[str]] = None,
+    provider: Optional[str] = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Return the providers and provider kinds that need catalogs fetched."""
+    if provider is not None and provider not in PROVIDER_REGISTRY:
+        raise ValueError(
+            f"Unsupported provider '{provider}'. Supported: {sorted(PROVIDER_REGISTRY)}"
+        )
+
+    target_providers = providers
+    if model_ids is not None:
+        wanted = set(model_ids)
+        matched_provider_ids = {
+            model["provider_id"]
+            for model in models
+            if model["model_id"] in wanted or model["state_key"] in wanted
+        }
+        target_providers = [
+            entry for entry in target_providers if entry["id"] in matched_provider_ids
+        ]
+
+    if provider is not None:
+        target_providers = [
+            entry
+            for entry in target_providers
+            if detect_provider_kind(entry) == provider
+        ]
+        kinds = [provider] if target_providers or model_ids is None else []
+    else:
+        kinds = sorted(
+            {
+                kind
+                for kind in (detect_provider_kind(entry) for entry in target_providers)
+                if kind is not None
+            }
+        )
+    return target_providers, kinds
 
 
 def collect_catalogs(
@@ -999,6 +1057,13 @@ def collect_catalogs(
     An unreachable local server is reported as a warning rather than raising:
     a stopped oMLX instance must not block metadata repair for other providers.
     """
+    if catalog_url and catalog is None and len(kinds) > 1:
+        raise ValueError(
+            "catalog_url overrides a single provider catalog, but multiple "
+            f"provider kinds are targeted ({', '.join(kinds)}). Pass `provider` "
+            "or `model_ids` scoped to one provider."
+        )
+
     catalogs: dict[str, dict[str, dict[str, Any]]] = {}
     warnings: list[str] = []
 
@@ -1013,26 +1078,29 @@ def collect_catalogs(
             catalogs[kind] = fetch_catalog(kind, catalog_url=catalog_url)
             continue
 
-        by_base: dict[str, dict[str, dict[str, Any]]] = {}
+        by_target: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
         for provider in providers:
             if detect_provider_kind(provider) != kind:
                 continue
             base = provider_base_url(provider)
-            if not base:
+            if not base and not catalog_url:
                 continue
-            if base not in by_base:
+            target_url = catalog_url or provider_api_root(base)
+            api_key = str(((provider.get("settings") or {}).get("apiKey")) or "")
+            cache_key = (target_url, api_key)
+            if cache_key not in by_target:
                 try:
-                    by_base[base] = fetch_catalog(
+                    by_target[cache_key] = fetch_catalog(
                         kind, provider=provider, catalog_url=catalog_url
                     )
                 except (OSError, ValueError) as exc:
-                    by_base[base] = {}
+                    by_target[cache_key] = {}
                     warnings.append(
                         f"Could not query {spec['display_name']} at "
-                        f"{provider_api_root(base)}: {exc}. Models on this provider "
+                        f"{target_url}: {exc}. Models on this provider "
                         "will be reported as unresolved."
                     )
-            catalogs[provider["id"]] = by_base[base]
+            catalogs[provider["id"]] = by_target[cache_key]
 
     return catalogs, warnings
 
@@ -1069,12 +1137,18 @@ def build_plan(
     set_reasoning_defaults: bool = False,
     set_context_tier: Optional[str] = None,
     include_unsupported_model_types: bool = False,
+    provider: Optional[str] = None,
 ) -> dict[str, Any]:
     """Compute a dry-run plan without touching the database."""
-    provider_by_id = {provider["id"]: provider for provider in providers}
+    provider_by_id = {entry["id"]: entry for entry in providers}
     wanted = set(model_ids) if model_ids else None
     reasoning_state = reasoning_state or {}
     context_tier_state = context_tier_state or {}
+
+    if provider is not None and provider not in PROVIDER_REGISTRY:
+        raise ValueError(
+            f"Unsupported provider '{provider}'. Supported: {sorted(PROVIDER_REGISTRY)}"
+        )
 
     if set_context_tier is not None and set_context_tier not in COPILOT_CONTEXT_TIERS:
         raise ValueError(
@@ -1086,13 +1160,15 @@ def build_plan(
         if wanted is not None and model["model_id"] not in wanted and model["state_key"] not in wanted:
             continue
 
-        provider = provider_by_id.get(model["provider_id"])
-        kind = detect_provider_kind(provider) if provider else None
+        provider_entry = provider_by_id.get(model["provider_id"])
+        kind = detect_provider_kind(provider_entry) if provider_entry else None
+        if provider is not None and kind != provider:
+            continue
 
         entry: dict[str, Any] = {
             "model_id": model["model_id"],
             "provider_id": model["provider_id"],
-            "provider_name": provider["name"] if provider else None,
+            "provider_name": provider_entry["name"] if provider_entry else None,
             "provider_kind": kind,
             "row_id": model["row_id"],
             "state_key": model["state_key"],
@@ -1747,7 +1823,7 @@ def fetch_provider_metadata(
     for model in models:
         provider_entry = provider_by_id.get(model["provider_id"])
         kind = detect_provider_kind(provider_entry) if provider_entry else None
-        if kind is None:
+        if kind is None or kind not in kinds:
             continue
         metadata = catalog_for_model(catalogs, model["provider_id"], kind).get(
             model["model_id"]
@@ -1798,6 +1874,7 @@ def plan_metadata_updates(
     catalog: Optional[dict[str, Any]] = None,
     catalog_url: Optional[str] = None,
     include_unsupported_model_types: bool = False,
+    provider: Optional[str] = None,
 ) -> dict[str, Any]:
     """Compute a dry-run plan of metadata changes. Never writes."""
     path = resolve_db_path(db_path)
@@ -1813,12 +1890,8 @@ def plan_metadata_updates(
     finally:
         conn.close()
 
-    kinds = sorted(
-        {
-            kind
-            for kind in (detect_provider_kind(provider) for provider in providers)
-            if kind is not None
-        }
+    target_providers, kinds = _resolve_target_providers_and_kinds(
+        providers, models, model_ids=model_ids, provider=provider
     )
 
     if catalog is not None:
@@ -1826,7 +1899,7 @@ def plan_metadata_updates(
         warnings: list[str] = []
     else:
         catalogs, warnings = collect_catalogs(
-            providers, kinds, catalog_url=catalog_url
+            target_providers, kinds, catalog_url=catalog_url
         )
 
     plan = build_plan(
@@ -1839,6 +1912,7 @@ def plan_metadata_updates(
         set_reasoning_defaults=set_reasoning_defaults,
         set_context_tier=set_context_tier,
         include_unsupported_model_types=include_unsupported_model_types,
+        provider=provider,
     )
     plan["db_path"] = path
     plan["dry_run"] = True
@@ -2014,6 +2088,7 @@ def apply_metadata_updates(
     catalog: Optional[dict[str, Any]] = None,
     catalog_url: Optional[str] = None,
     include_unsupported_model_types: bool = False,
+    provider: Optional[str] = None,
 ) -> dict[str, Any]:
     """Apply planned metadata updates to the Copilot app database."""
     path = resolve_db_path(db_path)
@@ -2030,19 +2105,15 @@ def apply_metadata_updates(
     finally:
         conn.close()
 
-    kinds = sorted(
-        {
-            kind
-            for kind in (detect_provider_kind(provider) for provider in providers)
-            if kind is not None
-        }
+    target_providers, kinds = _resolve_target_providers_and_kinds(
+        providers, models, model_ids=model_ids, provider=provider
     )
     if catalog is not None:
         catalogs = {kind: catalog for kind in kinds}
         warnings: list[str] = []
     else:
         catalogs, warnings = collect_catalogs(
-            providers, kinds, catalog_url=catalog_url
+            target_providers, kinds, catalog_url=catalog_url
         )
 
     plan = build_plan(
@@ -2055,6 +2126,7 @@ def apply_metadata_updates(
         set_reasoning_defaults=set_reasoning_defaults,
         set_context_tier=set_context_tier,
         include_unsupported_model_types=include_unsupported_model_types,
+        provider=provider,
     )
 
     result: dict[str, Any] = {
@@ -2513,9 +2585,19 @@ TOOLS: list[dict[str, Any]] = [
                     "enum": list(COPILOT_CONTEXT_TIERS),
                     "description": "Optionally plan a context tier for every resolved model.",
                 },
+                "provider": {
+                    "type": "string",
+                    "description": (
+                        "Optional provider kind filter: 'openrouter' or 'omlx'."
+                    ),
+                },
                 "catalog_url": {
                     "type": "string",
-                    "description": "Optional override for the provider catalog URL.",
+                    "description": (
+                        "Optional override for the provider catalog URL. When "
+                        "multiple providers are configured, pair with `provider` "
+                        "or `model_ids` scoped to one provider."
+                    ),
                 },
                 "include_unsupported_model_types": {
                     "type": "boolean",
@@ -2588,9 +2670,19 @@ TOOLS: list[dict[str, Any]] = [
                         "from provider_models."
                     ),
                 },
+                "provider": {
+                    "type": "string",
+                    "description": (
+                        "Optional provider kind filter: 'openrouter' or 'omlx'."
+                    ),
+                },
                 "catalog_url": {
                     "type": "string",
-                    "description": "Optional override for the provider catalog URL.",
+                    "description": (
+                        "Optional override for the provider catalog URL. When "
+                        "multiple providers are configured, pair with `provider` "
+                        "or `model_ids` scoped to one provider."
+                    ),
                 },
                 "include_unsupported_model_types": {
                     "type": "boolean",
@@ -2696,6 +2788,7 @@ def handle_rpc_message(msg: dict[str, Any]) -> Optional[dict[str, Any]]:
                     include_unsupported_model_types=tool_args.get(
                         "include_unsupported_model_types", False
                     ),
+                    provider=tool_args.get("provider"),
                 )
             elif tool_name == "apply_metadata_updates":
                 res = apply_metadata_updates(
@@ -2710,6 +2803,7 @@ def handle_rpc_message(msg: dict[str, Any]) -> Optional[dict[str, Any]]:
                     include_unsupported_model_types=tool_args.get(
                         "include_unsupported_model_types", False
                     ),
+                    provider=tool_args.get("provider"),
                 )
             elif tool_name == "get_provider_registry":
                 res = get_provider_registry()

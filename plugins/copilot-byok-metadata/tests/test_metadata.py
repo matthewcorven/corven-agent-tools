@@ -1549,5 +1549,268 @@ class ProviderKeyOnTheWireTest(_TempDbTestCase):
         self.assertNotIn("<redacted>", json.dumps(seen))
 
 
+class CatalogUrlOverrideAndScopingTest(unittest.TestCase):
+    """catalog_url overrides must derive oMLX admin/status URLs and scope providers."""
+
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmpdir.name, "data.db")
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            CREATE TABLE model_providers (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'openai',
+                settings_json TEXT,
+                account_id TEXT
+            );
+            CREATE TABLE provider_models (
+                id TEXT PRIMARY KEY NOT NULL,
+                provider_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                wire_model TEXT,
+                display_name TEXT NOT NULL,
+                max_prompt_tokens INTEGER,
+                max_output_tokens INTEGER,
+                supported_reasoning_efforts TEXT,
+                supports_vision INTEGER NOT NULL DEFAULT 0,
+                supported_media_types TEXT,
+                updated_at INTEGER
+            );
+            CREATE TABLE app_state (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO model_providers (id, name, type, settings_json) VALUES (?, ?, ?, ?)",
+            (
+                "or-prov",
+                "OpenRouter",
+                "custom",
+                json.dumps({"baseUrl": "https://openrouter.ai/api/v1"}),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO model_providers (id, name, type, settings_json) VALUES (?, ?, ?, ?)",
+            (
+                "omlx-prov",
+                "oMLX",
+                "openai",
+                json.dumps(
+                    {
+                        "baseUrl": "http://127.0.0.1:8001/v1",
+                        "apiKey": "MAINKEY",
+                    }
+                ),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO provider_models (id, provider_id, model_id, display_name) "
+            "VALUES (?, ?, ?, ?)",
+            ("row-or", "or-prov", "vendor/or-model", "OR Model"),
+        )
+        conn.execute(
+            "INSERT INTO provider_models (id, provider_id, model_id, display_name) "
+            "VALUES (?, ?, ?, ?)",
+            ("row-omlx", "omlx-prov", "flint-oQ4e", "Flint"),
+        )
+        conn.commit()
+        conn.close()
+
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
+
+    def _omlx_get(self, seen: list[tuple[str, dict]]):
+        def fake_get(url, timeout=server.HTTP_TIMEOUT_SECONDS, headers=None):
+            seen.append((url, dict(headers or {})))
+            if url.endswith("/admin/api/models"):
+                return {
+                    "models": [
+                        {
+                            "id": "flint-oQ4e",
+                            "model_type": "vlm",
+                            "reasoning_effort_options": ["low", "medium", "high"],
+                            "reasoning_effort_default": "medium",
+                        }
+                    ]
+                }
+            if url.endswith("/models/status"):
+                return {
+                    "models": [
+                        {
+                            "id": "flint-oQ4e",
+                            "model_type": "vlm",
+                            "max_context_window": 262144,
+                            "max_tokens": 32768,
+                        }
+                    ]
+                }
+            return {"data": [{"id": "flint-oQ4e", "max_model_len": 262144}]}
+
+        return fake_get
+
+    def test_omlx_catalog_url_override_derives_status_and_admin_urls(self) -> None:
+        provider = _provider(
+            "omlx-prov", "oMLX", "http://127.0.0.1:8001/v1", api_key="MAINKEY"
+        )
+        seen: list[tuple[str, dict]] = []
+        original = server.http_get_json
+        server.http_get_json = self._omlx_get(seen)
+        try:
+            catalog = server.fetch_catalog(
+                "omlx",
+                catalog_url="http://127.0.0.1:18001/v1/models",
+                provider=provider,
+            )
+        finally:
+            server.http_get_json = original
+
+        urls = [url for url, _ in seen]
+        self.assertEqual(
+            urls,
+            [
+                "http://127.0.0.1:18001/v1/models",
+                "http://127.0.0.1:18001/v1/models/status",
+                "http://127.0.0.1:18001/admin/api/models",
+            ],
+        )
+        admin_headers = seen[2][1]
+        self.assertEqual(admin_headers.get("Authorization"), "Bearer MAINKEY")
+        self.assertEqual(
+            catalog["flint-oQ4e"]["supported_reasoning_efforts"],
+            ["low", "medium", "high"],
+        )
+        self.assertEqual(catalog["flint-oQ4e"]["default_reasoning_effort"], "medium")
+
+    def test_omlx_non_standard_catalog_url_does_not_fall_back_to_stale_base(self) -> None:
+        provider = _provider(
+            "omlx-prov", "oMLX", "http://127.0.0.1:8001/v1", api_key="MAINKEY"
+        )
+        seen: list[tuple[str, dict]] = []
+        original = server.http_get_json
+        server.http_get_json = self._omlx_get(seen)
+        try:
+            server.fetch_catalog(
+                "omlx",
+                catalog_url="http://127.0.0.1:18001/custom-catalog",
+                provider=provider,
+            )
+        finally:
+            server.http_get_json = original
+
+        urls = [url for url, _ in seen]
+        self.assertEqual(
+            urls,
+            [
+                "http://127.0.0.1:18001/custom-catalog",
+                "http://127.0.0.1:18001/admin/api/models",
+            ],
+        )
+        self.assertTrue(all(":8001" not in url for url in urls))
+
+    def test_collect_catalogs_rejects_catalog_url_for_multiple_provider_kinds(self) -> None:
+        providers = [
+            _provider("or-prov", "OpenRouter", "https://openrouter.ai/api/v1"),
+            _provider("omlx-prov", "oMLX", "http://127.0.0.1:8001/v1"),
+        ]
+        with self.assertRaises(ValueError):
+            server.collect_catalogs(
+                providers,
+                ["omlx", "openrouter"],
+                catalog_url="http://127.0.0.1:18001/v1/models",
+            )
+
+    def test_collect_catalogs_warning_reports_overridden_catalog_url(self) -> None:
+        providers = [_provider("omlx-prov", "oMLX", "http://127.0.0.1:8001/v1")]
+        original = server.fetch_catalog
+
+        def fail_fetch(kind, catalog_url=None, provider=None):
+            raise OSError("connection refused")
+
+        server.fetch_catalog = fail_fetch
+        try:
+            _, warnings = server.collect_catalogs(
+                providers,
+                ["omlx"],
+                catalog_url="http://127.0.0.1:18001/v1/models",
+            )
+        finally:
+            server.fetch_catalog = original
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("http://127.0.0.1:18001/v1/models", warnings[0])
+        self.assertNotIn(":8001", warnings[0])
+
+    def test_plan_and_apply_scope_catalog_fetch_by_model_ids(self) -> None:
+        seen: list[tuple[str, dict]] = []
+        original = server.http_get_json
+        server.http_get_json = self._omlx_get(seen)
+        try:
+            plan = server.plan_metadata_updates(
+                db_path=self.db_path,
+                model_ids=["flint-oQ4e"],
+                catalog_url="http://127.0.0.1:18001/v1/models",
+            )
+            applied = server.apply_metadata_updates(
+                db_path=self.db_path,
+                model_ids=["flint-oQ4e"],
+                catalog_url="http://127.0.0.1:18001/v1/models",
+                dry_run=False,
+                backup=False,
+                refresh_catalog_cache=False,
+            )
+        finally:
+            server.http_get_json = original
+
+        self.assertEqual(plan["summary"]["total"], 1)
+        self.assertEqual(plan["summary"]["update"], 1)
+        self.assertEqual(
+            plan["entries"][0]["proposed"]["supported_reasoning_efforts"],
+            ["low", "medium", "high"],
+        )
+        self.assertEqual(applied["applied"]["models_updated"], 1)
+        self.assertTrue(all("openrouter.ai" not in url for url, _ in seen))
+        self.assertTrue(all(":8001" not in url for url, _ in seen))
+
+    def test_plan_and_apply_scope_by_provider_filter(self) -> None:
+        seen: list[tuple[str, dict]] = []
+        original = server.http_get_json
+        server.http_get_json = self._omlx_get(seen)
+        try:
+            plan = server.plan_metadata_updates(
+                db_path=self.db_path,
+                provider="omlx",
+                catalog_url="http://127.0.0.1:18001/v1/models",
+            )
+        finally:
+            server.http_get_json = original
+
+        self.assertEqual(plan["summary"]["total"], 1)
+        self.assertEqual(plan["entries"][0]["model_id"], "flint-oQ4e")
+        self.assertEqual(plan["entries"][0]["status"], "update")
+        self.assertTrue(all("openrouter.ai" not in url for url, _ in seen))
+
+    def test_fetch_provider_metadata_skips_other_providers_when_filtered(self) -> None:
+        seen: list[tuple[str, dict]] = []
+        original = server.http_get_json
+        server.http_get_json = self._omlx_get(seen)
+        try:
+            result = server.fetch_provider_metadata(
+                provider="omlx",
+                db_path=self.db_path,
+                catalog_url="http://127.0.0.1:18001/v1/models",
+            )
+        finally:
+            server.http_get_json = original
+
+        self.assertEqual(result["providers_queried"], ["omlx"])
+        self.assertEqual([item["model_id"] for item in result["resolved"]], ["flint-oQ4e"])
+        self.assertEqual(result["missing"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

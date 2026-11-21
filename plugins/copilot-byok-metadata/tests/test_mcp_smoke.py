@@ -120,11 +120,11 @@ class CopilotByokMetadataMCPSmokeTest(unittest.TestCase):
         tools = {tool["name"]: tool for tool in res["result"]["tools"]}
         for name in ("plan_metadata_updates", "apply_metadata_updates"):
             with self.subTest(tool=name):
-                prop = tools[name]["inputSchema"]["properties"][
-                    "include_unsupported_model_types"
-                ]
+                props = tools[name]["inputSchema"]["properties"]
+                prop = props["include_unsupported_model_types"]
                 self.assertEqual(prop["type"], "boolean")
                 self.assertFalse(prop["default"])
+                self.assertEqual(props["provider"]["type"], "string")
 
     def test_server_discover(self) -> None:
         res = self.send_request(
