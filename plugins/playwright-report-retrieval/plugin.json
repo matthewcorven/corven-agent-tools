@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "playwright-report-retrieval",
-  "version": "0.2.3",
-  "description": "Fetch a Playwright HTML report from a CI run or commit, extract it to a local temp namespace, and open it deep-linked to a specific test. Ships the canonical Playwright reporting and AI-driven E2E standards.",
+  "version": "0.3.0",
+  "description": "Fetch a Playwright HTML report from a CI run or commit, extract it to a local temp namespace, and open it deep-linked to a specific test. Ships the canonical Playwright reporting, AI-driven E2E authoring, and visual/E2E artifact standards, plus artifact-run and budget tooling.",
   "author": {
     "name": "Matthew Corven"
   },

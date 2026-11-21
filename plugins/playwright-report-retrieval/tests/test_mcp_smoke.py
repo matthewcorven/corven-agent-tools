@@ -163,12 +163,45 @@ class PlaywrightReportRetrievalMCPSmokeTest(unittest.TestCase):
         )
         self.assertEqual(init["id"], 1)
         self.assertEqual(init["result"]["serverInfo"]["name"], "playwright-report-retrieval")
+        self.assertEqual(init["result"]["serverInfo"]["version"], "0.3.0")
         self.assertIn("tools", init["result"]["capabilities"])
 
         tools = self.send_request({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         names = [t["name"] for t in tools["result"]["tools"]]
         self.assertIn("fetch_report", names)
         self.assertIn("list_failed_tests", names)
+        self.assertIn("create_artifact_run", names)
+        self.assertIn("find_artifact_runs", names)
+        self.assertIn("check_artifact_budget", names)
+
+    def test_artifact_tools_require_an_explicit_repo_path(self) -> None:
+        """The server's cwd is not a safe default for a repo-scoped tool."""
+        for tool in ("create_artifact_run", "find_artifact_runs", "check_artifact_budget"):
+            res = self.send_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 20,
+                    "method": "tools/call",
+                    "params": {"name": tool, "arguments": {}},
+                }
+            )
+            self.assertTrue(res["result"]["isError"], f"{tool} accepted a missing repo_path")
+            self.assertIn("repo_path is required", res["result"]["structuredContent"]["error"])
+
+    def test_artifact_tools_reject_a_nonexistent_repo_path(self) -> None:
+        res = self.send_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 21,
+                "method": "tools/call",
+                "params": {
+                    "name": "find_artifact_runs",
+                    "arguments": {"repo_path": "/nonexistent/repo/path/xyz"},
+                },
+            }
+        )
+        self.assertTrue(res["result"]["isError"])
+        self.assertIn("does not exist", res["result"]["structuredContent"]["error"])
 
     def test_list_failed_tests_reads_a_report_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -411,6 +444,173 @@ class PlaywrightReportRetrievalMCPSmokeTest(unittest.TestCase):
     def test_unknown_method_returns_rpc_error(self) -> None:
         res = self.send_request({"jsonrpc": "2.0", "id": 5, "method": "bogus", "params": {}})
         self.assertEqual(res["error"]["code"], -32601)
+
+
+class ArtifactToolSmokeTest(unittest.TestCase):
+    """End-to-end coverage of the three artifact tools through the MCP transport."""
+
+    def setUp(self) -> None:
+        self.proc = subprocess.Popen(
+            [sys.executable, str(SERVER_SCRIPT)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self._tmp = tempfile.TemporaryDirectory()
+        self.base = Path(os.path.realpath(self._tmp.name))
+        self.repo = self._init_repo()
+
+    def tearDown(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            if stream:
+                stream.close()
+        self._tmp.cleanup()
+
+    def _init_repo(self) -> Path:
+        repo = self.base / "sample-repo"
+        repo.mkdir()
+        env = dict(os.environ)
+        env.pop("E2E_ARTIFACTS_ROOT", None)
+        env.pop("VDS_ARTIFACTS_ROOT", None)
+
+        def git(*args: str) -> None:
+            proc = subprocess.run(
+                ["git", *args], cwd=repo, env=env, capture_output=True, text=True, check=False
+            )
+            assert proc.returncode == 0, proc.stderr
+
+        git("init", "-b", "squad/12-e2e-artifacts")
+        git("config", "user.email", "test@example.local")
+        git("config", "user.name", "Test User")
+        (repo / "README.md").write_text("hello\n", encoding="utf-8")
+        git("add", "README.md")
+        git("commit", "-m", "init")
+        return Path(os.path.realpath(repo))
+
+    def call(self, tool: str, arguments: dict) -> dict:
+        assert self.proc.stdin and self.proc.stdout
+        self.proc.stdin.write(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": tool, "arguments": arguments},
+                }
+            )
+            + "\n"
+        )
+        self.proc.stdin.flush()
+        line = self.proc.stdout.readline()
+        self.assertTrue(line, "server closed the connection instead of answering")
+        return json.loads(line)["result"]
+
+    def test_create_run_then_find_it_by_issue_and_latest(self) -> None:
+        created = self.call(
+            "create_artifact_run",
+            {"repo_path": str(self.repo), "phase": "qa", "spec": "e2e-artifacts", "issue": "12"},
+        )
+        self.assertFalse(created["isError"], created["structuredContent"])
+        record = created["structuredContent"]
+        run_path = Path(record["path"])
+        self.assertTrue(run_path.is_dir())
+        for phase in ("planning", "mockups", "dev", "debug", "qa"):
+            self.assertTrue((run_path / phase).is_dir(), f"missing {phase}/")
+        self.assertEqual(record["issue"], "12")
+
+        found = self.call("find_artifact_runs", {"repo_path": str(self.repo), "issue": "12"})
+        self.assertFalse(found["isError"], found["structuredContent"])
+        payload = found["structuredContent"]
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["runs"][0]["run"], record["run"])
+        self.assertEqual(payload["latest"]["run"], record["run"])
+
+        latest = self.call("find_artifact_runs", {"repo_path": str(self.repo), "latest": True})
+        self.assertEqual(latest["structuredContent"]["latest"]["run"], record["run"])
+
+    def test_create_run_rejects_an_invalid_phase(self) -> None:
+        res = self.call(
+            "create_artifact_run",
+            {"repo_path": str(self.repo), "phase": "screenshots"},
+        )
+        self.assertTrue(res["isError"])
+        self.assertIn("Invalid phase", res["structuredContent"]["error"])
+
+    def test_local_budget_mode_measures_the_artifact_root(self) -> None:
+        created = self.call(
+            "create_artifact_run", {"repo_path": str(self.repo), "phase": "qa"}
+        )
+        run_path = Path(created["structuredContent"]["path"])
+        (run_path / "qa" / "capture.bin").write_bytes(b"x" * 2048)
+
+        budget_file = self.repo / "artifacts.budget.json"
+        budget_file.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "local": {"maxGb": 2000 / (1024**3), "warnAtPercent": 80},
+                    "ci": {"maxMbPerRun": 500, "warnAtPercent": 80},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        res = self.call(
+            "check_artifact_budget",
+            {"repo_path": str(self.repo), "mode": "local", "budget_file": str(budget_file)},
+        )
+        self.assertFalse(res["isError"], res["structuredContent"])
+        payload = res["structuredContent"]
+        self.assertEqual(payload["mode"], "local")
+        self.assertTrue(payload["warn"])
+        self.assertGreaterEqual(payload["totalBytes"], 2048)
+        self.assertEqual(Path(payload["artifactRoot"]), self.base / "sample-repo-artifacts")
+
+    def test_ci_budget_mode_annotates_but_never_errors(self) -> None:
+        budget_file = self.repo / "artifacts.budget.json"
+        budget_file.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "local": {"maxGb": 2, "warnAtPercent": 80},
+                    "ci": {"maxMbPerRun": 0.01, "warnAtPercent": 80},
+                }
+            ),
+            encoding="utf-8",
+        )
+        report_dir = self.base / "playwright-report"
+        report_dir.mkdir()
+        (report_dir / "index.html").write_bytes(b"1" * 12_000)
+
+        res = self.call(
+            "check_artifact_budget",
+            {
+                "repo_path": str(self.repo),
+                "mode": "ci",
+                "paths": [str(report_dir)],
+                "budget_file": str(budget_file),
+            },
+        )
+        self.assertFalse(res["isError"], res["structuredContent"])
+        payload = res["structuredContent"]
+        self.assertTrue(payload["warn"])
+        self.assertTrue(payload["overLimit"])
+        self.assertIn("::warning title=CI Artifact Budget::", payload["annotation"])
+
+    def test_ci_mode_requires_paths(self) -> None:
+        res = self.call(
+            "check_artifact_budget", {"repo_path": str(self.repo), "mode": "ci"}
+        )
+        self.assertTrue(res["isError"])
+        self.assertIn("paths is required", res["structuredContent"]["error"])
 
 
 class DeletedCwdTest(unittest.TestCase):

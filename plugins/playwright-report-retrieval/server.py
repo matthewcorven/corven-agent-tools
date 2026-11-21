@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """playwright-report-retrieval MCP server.
 
-Exposes two tools over JSON-RPC 2.0 stdio:
+Exposes five tools over JSON-RPC 2.0 stdio:
 
-- ``fetch_report``      download a CI Playwright report and return its deep link
-- ``list_failed_tests`` list the failing tests recorded in a fetched report
+- ``fetch_report``          download a CI Playwright report and return its deep link
+- ``list_failed_tests``     list the failing tests recorded in a fetched report
+- ``create_artifact_run``   allocate a collision-free visual/E2E artifact run
+- ``find_artifact_runs``    query the append-only artifact run index
+- ``check_artifact_budget`` report local/CI artifact usage against the budget
 
-Both delegate to ``scripts/fetch_report.py`` so the CLI and the MCP share one
-implementation. Read-only with respect to the repository: the only writes are
-inside the report namespace.
+The report tools delegate to ``scripts/fetch_report.py`` and the artifact tools to
+``scripts/artifacts.py``, so the CLI and the MCP share one implementation. Reads
+and writes stay inside the report namespace and the sibling artifact root; the
+repository itself is never modified.
 """
 
 from __future__ import annotations
@@ -26,6 +30,13 @@ from typing import Any, Optional
 PLUGIN_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
+from artifacts import (  # noqa: E402
+    PHASES,
+    check_ci_budget,
+    compute_usage,
+    create_run,
+    find_runs,
+)
 from fetch_report import (  # noqa: E402
     DEFAULT_ARTIFACT_NAME,
     DEFAULT_MAX_AGE_DAYS,
@@ -36,8 +47,14 @@ from fetch_report import (  # noqa: E402
 )
 
 SERVER_NAME = "playwright-report-retrieval"
-SERVER_VERSION = "0.2.3"
+SERVER_VERSION = "0.3.0"
 PROTOCOL_VERSION = "2024-11-05"
+
+_REPO_PATH_DESCRIPTION = (
+    "Absolute path inside the target repository or git worktree. Required: the "
+    "stdio server's working directory is whatever the CLI happened to spawn it "
+    "in, not your checkout, and it may not exist at all."
+)
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -135,6 +152,99 @@ TOOLS: list[dict[str, Any]] = [
                 "workflow": {"type": "string"},
                 "max_age_days": {"type": "integer", "default": DEFAULT_MAX_AGE_DAYS},
             },
+        },
+    },
+    {
+        "name": "create_artifact_run",
+        "description": (
+            "Allocate a collision-free visual/E2E artifact run directory under the "
+            "sibling artifact root (<repo>-artifacts/wt-<basename>-<sha8>/runs/"
+            "<YYYYMMDDTHHMMSSZ>-<rand6>/) with planning/mockups/dev/debug/qa "
+            "subdirectories, a worktree manifest.json, both latest pointers, and an "
+            "issue-<N> ref symlink. Appends one record to runs.jsonl and returns the "
+            "machine-readable ARTIFACT line payload."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo_path": {"type": "string", "description": _REPO_PATH_DESCRIPTION},
+                "phase": {
+                    "type": "string",
+                    "enum": list(PHASES),
+                    "default": "qa",
+                    "description": "Primary phase for this run.",
+                },
+                "issue": {
+                    "type": "string",
+                    "description": "Issue/work-item identifier. Defaults to the issue inferred from the branch.",
+                },
+                "spec": {"type": "string", "description": "Spec or workflow name."},
+                "label": {"type": "string", "description": "Freeform tag."},
+                "budget_file": {"type": "string", "description": "Path to artifacts.budget.json."},
+                "check_budget": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Include the warn-only local budget result in the response.",
+                },
+            },
+            "required": ["repo_path"],
+        },
+    },
+    {
+        "name": "find_artifact_runs",
+        "description": (
+            "Query the append-only runs.jsonl artifact index by issue, commit, branch, "
+            "spec, phase, worktree, or status. Pass latest=true for the newest matching "
+            "run. Returns records newest-last, matching the index order."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo_path": {"type": "string", "description": _REPO_PATH_DESCRIPTION},
+                "issue": {"type": "string"},
+                "commit": {"type": "string", "description": "Commit prefix."},
+                "branch": {"type": "string", "description": "Substring match."},
+                "spec": {"type": "string", "description": "Substring match."},
+                "phase": {"type": "string", "enum": list(PHASES)},
+                "worktree": {"type": "string", "description": "Substring match on the worktree id."},
+                "status": {"type": "string"},
+                "latest": {"type": "boolean", "default": False},
+                "limit": {"type": "integer", "description": "Return only the newest N matches."},
+            },
+            "required": ["repo_path"],
+        },
+    },
+    {
+        "name": "check_artifact_budget",
+        "description": (
+            "Report artifact usage against artifacts.budget.json. mode=local measures "
+            "the whole sibling artifact root and ranks worktree directories by age; "
+            "mode=ci measures the given paths against the per-run CI limit and returns "
+            "a GitHub Actions ::warning annotation. Warn-only: over-limit never fails."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo_path": {"type": "string", "description": _REPO_PATH_DESCRIPTION},
+                "mode": {
+                    "type": "string",
+                    "enum": ["local", "ci"],
+                    "default": "local",
+                    "description": "local = artifact-root usage; ci = per-run attached artifacts.",
+                },
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Artifact directories or files to measure (required for mode=ci).",
+                },
+                "budget_file": {"type": "string", "description": "Path to artifacts.budget.json."},
+                "throttle": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Skip the scan when a recent check stamp exists (mode=local).",
+                },
+            },
+            "required": ["repo_path"],
         },
     },
 ]
@@ -429,6 +539,95 @@ def list_failed_tests(
     return result
 
 
+def _require_repo_path(arguments: dict[str, Any]) -> Path:
+    """Return an explicit, existing ``repo_path`` — never a cwd-derived guess.
+
+    The stdio server's working directory is whatever the CLI happened to spawn it
+    in. A repo-writing tool must not silently target it, so the argument is
+    required and validated here rather than defaulted.
+    """
+    raw = arguments.get("repo_path")
+    if not raw or not str(raw).strip():
+        raise RetrievalError(
+            "repo_path is required: pass an absolute path inside the target repository "
+            "or git worktree. The server's cwd is not a safe default."
+        )
+    path = Path(str(raw)).expanduser()
+    if not path.exists():
+        raise RetrievalError(f"repo_path does not exist: {path}")
+    if not path.is_dir():
+        raise RetrievalError(f"repo_path is not a directory: {path}")
+    return path
+
+
+def create_artifact_run_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+    repo_path = _require_repo_path(arguments)
+    phase = arguments.get("phase") or "qa"
+    if phase not in PHASES:
+        raise RetrievalError(f"Invalid phase '{phase}'; expected one of {', '.join(PHASES)}")
+
+    record = create_run(
+        repo_path=repo_path,
+        phase=phase,
+        issue=arguments.get("issue"),
+        spec=arguments.get("spec"),
+        label=arguments.get("label"),
+        budget_file=arguments.get("budget_file"),
+        check_budget=bool(arguments.get("check_budget", True)),
+    )
+    return record
+
+
+def find_artifact_runs_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+    repo_path = _require_repo_path(arguments)
+    records = find_runs(
+        repo_path=repo_path,
+        issue=arguments.get("issue"),
+        commit=arguments.get("commit"),
+        branch=arguments.get("branch"),
+        spec=arguments.get("spec"),
+        phase=arguments.get("phase"),
+        worktree=arguments.get("worktree"),
+        status=arguments.get("status"),
+        latest=bool(arguments.get("latest", False)),
+        limit=int(arguments["limit"]) if arguments.get("limit") is not None else None,
+    )
+    return {
+        "count": len(records),
+        "runs": records,
+        "latest": records[-1] if records else None,
+    }
+
+
+def check_artifact_budget_tool(arguments: dict[str, Any]) -> dict[str, Any]:
+    repo_path = _require_repo_path(arguments)
+    mode = arguments.get("mode") or "local"
+    budget_file = arguments.get("budget_file")
+
+    if mode == "local":
+        report = compute_usage(
+            repo_path=repo_path,
+            budget_file=budget_file,
+            throttle=bool(arguments.get("throttle", False)),
+        )
+        report["mode"] = "local"
+        return report
+
+    if mode == "ci":
+        paths = arguments.get("paths") or []
+        if not isinstance(paths, list) or not paths:
+            raise RetrievalError("paths is required for mode=ci: pass the artifact directories or files.")
+        report = check_ci_budget(
+            paths=[str(p) for p in paths],
+            budget_file=budget_file,
+            repo_path=repo_path,
+        )
+        report["mode"] = "ci"
+        return report
+
+    raise RetrievalError(f"Invalid mode '{mode}'; expected 'local' or 'ci'.")
+
+
 def _tool_result(payload: Any, *, is_error: bool = False) -> dict[str, Any]:
     return {
         "content": [{"type": "text", "text": json.dumps(payload, indent=2)}],
@@ -469,6 +668,15 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 max_age_days=int(arguments.get("max_age_days", DEFAULT_MAX_AGE_DAYS)),
             )
         )
+
+    if name == "create_artifact_run":
+        return _tool_result(create_artifact_run_tool(arguments))
+
+    if name == "find_artifact_runs":
+        return _tool_result(find_artifact_runs_tool(arguments))
+
+    if name == "check_artifact_budget":
+        return _tool_result(check_artifact_budget_tool(arguments))
 
     raise RetrievalError(f"Unknown tool: {name}")
 

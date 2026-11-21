@@ -16,7 +16,7 @@ Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository dis
 | Lineage + deck scripts | `plugins/change-learn/skills/change-learn/scripts/` | `lineage.py` (token-efficient change analysis as compact JSON) and `deck.py` (Marp deck scaffold with Mermaid blocks + `npx` PDF export) |
 | Change-learn MCP host | `hosts/ChangeLearn.Host/` | Dual-transport MCP host (on-demand stdio from a configured source checkout; Blazor Server UI + `:5190/mcp` HTTP) exposing 8 tools, with a Squad agent team on the GitHub Copilot SDK + Microsoft Agent Framework — see [`plugins/change-learn/README.md`](plugins/change-learn/README.md) |
 | `squad-model-resolver` plugin | `plugins/squad-model-resolver/` | Deterministic model ID resolution MCP server (`resolve_model`, `resolve_for_agent`, `verify_spawn`) + thin aggressive skill for Squad agent spawns |
-| `playwright-report-retrieval` plugin | `plugins/playwright-report-retrieval/` | Canonical Playwright reporting + AI-driven E2E standards skill, plus a retrieval CLI and MCP server (`fetch_report`, `list_failed_tests`) that downloads a CI HTML report by run ID or commit and deep-links to a test |
+| `playwright-report-retrieval` plugin | `plugins/playwright-report-retrieval/` | Two skills — canonical Playwright reporting + AI-driven E2E authoring standards, and the `e2e-artifacts` visual/E2E artifact standard — plus a retrieval/artifact CLI and MCP server (`fetch_report`, `list_failed_tests`, `create_artifact_run`, `find_artifact_runs`, `check_artifact_budget`) that downloads a CI HTML report by run ID or commit, deep-links to a test, and manages worktree-safe artifact runs under a warn-only budget |
 | `copilot-byok-metadata` plugin | `plugins/copilot-byok-metadata/` | MCP server + thin skill that reads the GitHub Copilot app's BYOK models, fetches context-window and reasoning-effort metadata from provider sources of truth (OpenRouter and local oMLX servers), and applies it to the app config interactively or automatically |
 
 Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/) for the issue-queue skill. The decision-model sender needs `OPENROUTER_API_KEY` in the environment.
@@ -172,11 +172,13 @@ Prefix values can be either a string prefix (e.g. UUID) or an array of string pr
 
 ## Playwright report retrieval reference
 
-The `playwright-report-retrieval` plugin carries the canonical Playwright reporting and AI-driven E2E standards, plus the tooling to pull a CI HTML report back to a workstation.
+The `playwright-report-retrieval` plugin carries the canonical Playwright reporting and AI-driven E2E standards, the visual/E2E artifact standard, plus the tooling to pull a CI HTML report back to a workstation and to manage artifact runs.
 
-### Standards (skill)
+### Standards (skills)
 
-`skills/playwright-report-retrieval/SKILL.md` is the source of truth for: Playwright-only E2E automation, Red-Green-Refactor, the coverage gate (no UI change without happy/alternate/edge coverage), deterministic data-driven journeys with ephemeral state, `storageState()` forking for parallel alternate/edge paths, ephemeral local artifacts, and 90-day CI artifact retention with no commit-back.
+`skills/playwright-report-retrieval/SKILL.md` is the source of truth for: Playwright-only E2E automation, Red-Green-Refactor, the coverage gate (no UI change without happy/alternate/edge coverage), declared serial/loopback/no-capture profiles, deterministic data-driven journeys with ephemeral state, `storageState()` forking for parallel alternate/edge paths, the locator priority ladder, flake/race debugging, anti-pattern red flags, ephemeral local reporting, and 90-day CI artifact retention with no commit-back.
+
+`skills/e2e-artifacts/SKILL.md` owns the durable visual/E2E artifact standard: the sibling `<repo>-artifacts/wt-<basename>-<sha8>/runs/<YYYYMMDDTHHMMSSZ>-<rand6>/{planning,mockups,dev,debug,qa}/` root, the four discovery layers (`ARTIFACT` stdout line, `runs.jsonl` + `find`, `latest` pointers, `refs/issue-<N>/<run>` symlinks), the repo-root `artifacts.budget.json` contract, the opt-in `.githooks` pattern, the CI `start`/`fail`/`checkpoint` capture model, and vendored-copy parity checking.
 
 ### CLI
 
@@ -188,10 +190,26 @@ python3 plugins/playwright-report-retrieval/scripts/fetch_report.py --run-id 123
 
 The script resolves the run, locates the `playwright-report` artifact, prunes namespace entries older than 7 days, extracts to `./playwright-reports/<run-id>/`, appends the `#?q=` / `#?testId=` deep link, and opens the default browser. Cached reports are reused unless `--force` is passed.
 
+```shell
+python3 plugins/playwright-report-retrieval/scripts/artifacts.py --repo-path . root
+python3 plugins/playwright-report-retrieval/scripts/artifacts.py --repo-path . run --phase qa --spec "checkout-flow" --issue 12
+python3 plugins/playwright-report-retrieval/scripts/artifacts.py --repo-path . find --issue 12 --json
+python3 plugins/playwright-report-retrieval/scripts/artifacts.py --repo-path . usage --verbose
+python3 plugins/playwright-report-retrieval/scripts/artifacts.py --repo-path . prune --older-than 14d --confirm
+python3 plugins/playwright-report-retrieval/scripts/artifacts.py check-parity scripts/artifacts.py
+```
+
+`artifacts.py` is stdlib-only and macOS/Linux portable. Subcommand names and the run-root layout are a contract consumed by downstream plugins. Budget commands (`usage`, `check-ci-budget`) are strictly warn-only and always exit 0; `prune` is a dry run unless `--confirm` is passed. `stamp` and `check-parity` make a vendored copy verifiable: the stamp records `playwright-report-retrieval@corven-agent-tools v<X.Y.Z> sha=<plugin-commit>` plus a `VENDORED_SHA256` body hash, and `check-parity` exits non-zero on drift.
+
 ### MCP tools
 
 - `fetch_report`: Takes `run_id` or `commit`, plus optional `test`, `test_id`, `artifact_name`, `namespace`, `provider`, `repo`, `workflow`, `max_age_days`, `force`, `open_browser`. Returns the report directory, `index.html` path, and deep link.
 - `list_failed_tests`: Takes `report_dir` (or the same run/commit selectors) and returns every test with its status, plus a `failed` subset.
+- `create_artifact_run`: Requires `repo_path`; takes optional `phase`, `issue`, `spec`, `label`, `budget_file`, `check_budget`. Returns the allocated run record, including its path and any budget warning.
+- `find_artifact_runs`: Requires `repo_path`; takes optional `issue`, `commit`, `branch`, `spec`, `phase`, `worktree`, `status`, `latest`, `limit`. Returns `count`, `runs`, and `latest`.
+- `check_artifact_budget`: Requires `repo_path`; `mode=local` measures the artifact root and ranks worktree directories, `mode=ci` measures `paths` against the per-run limit and returns a GitHub Actions annotation.
+
+All three artifact tools require an explicit `repo_path` — the stdio server's working directory is whatever the CLI happened to spawn it in, not your checkout.
 
 ### Provider seam
 
@@ -273,9 +291,11 @@ corven-agent-tools/                         # Agent Plugins marketplace
     │   └── tests/                           # Unit tests + MCP smoke tests
     ├── playwright-report-retrieval/         # playwright-report-retrieval@corven-agent-tools
     │   ├── plugin.json, mcp.json
-    │   ├── server.py                        # MCP server: fetch_report, list_failed_tests
+    │   ├── server.py                        # MCP server: reports + artifact runs + budget
     │   ├── scripts/fetch_report.py          # Retrieval CLI + CI provider seam
+    │   ├── scripts/artifacts.py             # Canonical artifact-run CLI (+ parity check)
     │   ├── skills/playwright-report-retrieval/  # Canonical E2E + reporting standards
+    │   ├── skills/e2e-artifacts/            # Visual/E2E artifact standard
     │   └── tests/                           # Unit tests + MCP smoke tests
     ├── copilot-byok-metadata/               # copilot-byok-metadata@corven-agent-tools
     │   ├── plugin.json, mcp.json

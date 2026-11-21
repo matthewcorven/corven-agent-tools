@@ -61,14 +61,16 @@
     {
       "name": "playwright-report-retrieval",
       "source": "plugins/playwright-report-retrieval",
-      "version": "0.2.3",
-      "description": "Playwright reporting + AI-driven E2E standards skill and MCP server: fetch CI HTML reports by run ID or commit, deep-link to a test, and list failed tests",
+      "version": "0.3.0",
+      "description": "Playwright reporting + AI-driven E2E authoring and visual/E2E artifact standards: fetch CI HTML reports by run ID or commit, deep-link to a test, list failed tests, and allocate/find/prune worktree-safe artifact runs under a warn-only budget",
       "keywords": [
         "playwright",
         "e2e",
         "testing",
         "ci",
         "artifacts",
+        "visual",
+        "worktree",
         "github-actions",
         "mcp",
         "reporting"
