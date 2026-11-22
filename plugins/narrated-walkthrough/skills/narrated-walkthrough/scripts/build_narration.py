@@ -296,23 +296,61 @@ def _hann_fade(samples: list[float], sample_rate: int, channels: int, fade_ms: f
 
 
 def split_sentences(text: str) -> list[str]:
-    """Split narration text into individual sentences (avoiding mid-identifier splits like session.idle)."""
+    """Split narration text into crisp clauses (<=22 words) so TTS models never hit decode caps or drag."""
     raw = (text or "").strip()
     if not raw:
         return []
     parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"(])", raw) if p.strip()]
-    # Sub-split very long sentences (>30 words) at semicolons/em-dashes so TTS models never hit decode caps
     out: list[str] = []
     for p in parts:
-        if len(p.split()) > 30:
-            sub = [c.strip() for c in re.split(r"(?:;\s+|\s+[—–]\s+)", p) if c.strip()]
-            for i, c in enumerate(sub):
-                if i < len(sub) - 1 and not c.endswith((".", "!", "?")):
-                    c = c.rstrip(",;:") + "."
-                out.append(c)
-        else:
+        if len(p.split()) <= 22:
             out.append(p)
+            continue
+        # First split on semicolons / em-dashes, then on comma boundaries if still >22 words
+        clauses = [c.strip() for c in re.split(r"(?:;\s+|\s+[—–]\s+)", p) if c.strip()]
+        for cl in clauses:
+            if len(cl.split()) <= 22:
+                out.append(cl if cl.endswith((".", "!", "?")) else cl.rstrip(",;:") + ".")
+                continue
+            pieces = [x.strip() for x in re.split(r",\s+", cl) if x.strip()]
+            buf = ""
+            for piece in pieces:
+                cand = f"{buf}, {piece}" if buf else piece
+                if buf and len(cand.split()) > 20:
+                    out.append(buf if buf.endswith((".", "!", "?")) else buf.rstrip(",;:") + ".")
+                    buf = piece
+                else:
+                    buf = cand
+            if buf:
+                out.append(buf if buf.endswith((".", "!", "?")) else buf.rstrip(",;:") + ".")
     return out if out else [raw]
+
+
+def _encode_trimmed_anchor_b64(wav_path: pathlib.Path, max_sec: float = 7.0) -> str:
+    """Return base64 WAV of ONLY active speech (trimmed of dead silence tails, capped at max_sec).
+
+    Silent test fixtures (rms <= 0.004) are returned byte-for-byte unchanged so unit tests stay exact.
+    """
+    raw_bytes = wav_path.read_bytes()
+    try:
+        sr, ch, samps = _read_pcm16_wav(wav_path)
+    except PlanError:
+        return base64.b64encode(raw_bytes).decode("ascii")
+    sf, ef, _, _, rms = _active_speech_bounds(samps, sr, ch)
+    total_frames = len(samps) // ch
+    if rms <= 0.004 or ef <= sf:
+        return base64.b64encode(raw_bytes).decode("ascii")
+    max_frames = int(round(sr * max_sec))
+    dead_sec = ((total_frames - (ef - sf)) / sr) if sr else 0.0
+    # Leave already-tight short clips byte-for-byte intact
+    if total_frames <= max_frames and dead_sec < 0.6:
+        return base64.b64encode(raw_bytes).decode("ascii")
+    trimmed = list(samps[sf * ch : min(ef, sf + max_frames) * ch])
+    _hann_fade(trimmed, sr, ch, fade_ms=20.0)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = pathlib.Path(tmp) / "anchor.wav"
+        _write_pcm16_wav(out, sr, ch, trimmed)
+        return base64.b64encode(out.read_bytes()).decode("ascii")
 
 
 def normalize_for_speech(text: str) -> str:
@@ -1037,7 +1075,7 @@ def main() -> int:
                 for stale_chunk in raw_dir.glob(f"{wav_out.stem}__s*.wav"):
                     stale_chunk.unlink(missing_ok=True)
                 if establish_anchor:
-                    anchor_b64 = base64.b64encode(wav_out.read_bytes()).decode("ascii")
+                    anchor_b64 = _encode_trimmed_anchor_b64(wav_out)
                     anchor_text = normalize_for_speech(sc_obj["narration"])
                 return
 
@@ -1064,7 +1102,7 @@ def main() -> int:
                     temperature=tts.get("temperature"),
                 )
                 if is_first_anchor:
-                    anchor_b64 = base64.b64encode(seg_wav.read_bytes()).decode("ascii")
+                    anchor_b64 = _encode_trimmed_anchor_b64(seg_wav)
                     anchor_text = normalize_for_speech(sent_txt)
                 seg_paths.append(seg_wav)
             _concat_pcm16_segments(seg_paths, wav_out, gap_ms=220.0)
@@ -1088,10 +1126,10 @@ def main() -> int:
                     # Prefer the short sentence-0 anchor clip when cached from an earlier full build
                     s0_clip = raw_dir / f"{wav.stem}__s00.wav"
                     if s0_clip.exists():
-                        anchor_b64 = base64.b64encode(s0_clip.read_bytes()).decode("ascii")
+                        anchor_b64 = _encode_trimmed_anchor_b64(s0_clip)
                         anchor_text = normalize_for_speech(split_sentences(scene["narration"])[0])
                     else:
-                        anchor_b64 = base64.b64encode(wav.read_bytes()).decode("ascii")
+                        anchor_b64 = _encode_trimmed_anchor_b64(wav)
                         anchor_text = normalize_for_speech(scene["narration"])
                 if targeted:
                     scene["duration"] = round(duration(wav), 3)
