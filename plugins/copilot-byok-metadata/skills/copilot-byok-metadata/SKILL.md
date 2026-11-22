@@ -251,7 +251,10 @@ Both are off by default. Enable only when the user asks for them.
 ## Safety
 
 - Never write to `~/.copilot/config.json` or `~/.copilot/settings.json`. The
-  database is the only store this skill touches.
+  database is the only store this skill touches. Copilot CLI tool approvals are
+  separate, saved per location in `permissions-config.json` under the selected
+  CLI configuration directory (default `~/.copilot/permissions-config.json`);
+  neither file above is the approval store.
 - Never run `apply_metadata_updates` with `dry_run=false` against a database the
   user has not seen a plan for, unless the automatic rule above applies.
 - Never edit `provider_models` rows directly with SQL. The server owns the

@@ -278,6 +278,17 @@ class SquadModelResolverTests(unittest.TestCase):
             self.assertEqual(merged["openrouter"], "authentic-prefix-1234")
             self.assertEqual(merged["newprov"], "prefix-new")
 
+    def test_skill_uses_runtime_permissions_not_repository_config(self) -> None:
+        """The resolver skill must not gate on an unrelated repository config file."""
+        skill_path = Path(__file__).resolve().parents[1] / "skills" / "squad-model-resolver" / "SKILL.md"
+        skill = skill_path.read_text(encoding="utf-8")
+        self.assertIn("permissions-config.json", skill)
+        self.assertIn("Do not inspect a repository `.copilot/config.json`", skill)
+        self.assertIn("runtime's exposed tools", skill)
+        self.assertNotIn("pre-approved in `.copilot/config.json`", skill)
+        repo_root = Path(__file__).resolve().parents[3]
+        self.assertFalse((repo_root / ".copilot" / "config.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
