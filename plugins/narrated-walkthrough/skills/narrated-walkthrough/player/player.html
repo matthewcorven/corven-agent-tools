@@ -180,8 +180,33 @@ __MERMAID__
                     transform-origin:left center; transform:scaleX(0); transition:transform .18s linear; }
   .mini-clock { font-variant-numeric:tabular-nums; font-size:12px; color:var(--dim);
                 white-space:nowrap; min-width:74px; text-align:right; }
-  header .meta { font-size:12px; color:var(--dim); margin-left:auto; white-space:nowrap; }
+  header .meta { font-size:12px; color:var(--dim); margin-left:auto; white-space:nowrap;
+                 display:inline-flex; align-items:center; gap:6px; flex-shrink:0; }
   header .meta.is-fallback { color:var(--warn-ink); font-weight:600; }
+  .vc-label { font-size:11.5px; color:var(--dim); font-weight:600; }
+  .vc-select { font:inherit; font-size:11.5px; font-weight:600; padding:3px 7px; border-radius:7px;
+               border:1px solid var(--line); background:var(--control-bg); color:var(--ink);
+               cursor:pointer; max-width:210px; text-overflow:ellipsis; }
+  .vc-select.vc-voice { max-width:118px; }
+  .vc-select:hover:not(:disabled) { border-color:var(--accent); }
+  .vc-select:disabled { opacity:.55; cursor:default; }
+  .vc-regen-btn { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px;
+                  padding:0; border-radius:7px; border:1px solid var(--line); background:var(--control-bg);
+                  color:var(--ink); cursor:pointer; flex-shrink:0;
+                  transition:border-color .14s ease, background .14s ease, color .14s ease; }
+  .vc-regen-btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+  .vc-regen-btn:disabled { opacity:.6; cursor:default; }
+  .vc-regen-btn svg { width:14px; height:14px; display:block; }
+  @keyframes vc-spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+  .vc-regen-btn.is-spinning { border-color:var(--accent-soft-border); background:var(--accent-soft-bg);
+                              color:var(--accent-soft-ink); }
+  .vc-regen-btn.is-spinning svg { animation:vc-spin .9s linear infinite; }
+  .vc-status { font-size:11px; font-weight:650; padding:2px 7px; border-radius:999px;
+               border:1px solid var(--line); background:var(--pill-bg); color:var(--dim);
+               max-width:185px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .vc-status.is-busy { background:var(--accent-soft-bg); color:var(--accent-soft-ink); border-color:var(--accent-soft-border); }
+  .vc-status.is-done { background:var(--ok-bg); color:var(--ok-ink); border-color:var(--ok-border); }
+  .vc-status.is-err { background:var(--err-bg); color:var(--err-ink); border-color:var(--err-border); }
   main { max-width:1080px; margin:0 auto; padding:24px 22px 148px; overflow-anchor:none; }
   main.has-queue { max-width:1380px; }
   .hud, .workspace, .stage-pane { overflow-anchor:none; }
@@ -598,9 +623,23 @@ let telemetryLoading = false;
 let lastDetResult = null;
 let expandedRulesNodeId = null;
 let liveChatTarget = null;
+let audioCatalog = { available: false, endpoint: null, models: [] };
+let regenJobsByDir = new Map();
+let voiceFeedback = null; // { kind: 'done'|'err', text: string }
 const DEFAULT_FOOTER_HINT = 'Space = play/pause · ←/→ = previous/next scene · briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat';
 const BRIDGE = (typeof window.__WALKTHROUGH_BRIDGE__ === 'object' && window.__WALKTHROUGH_BRIDGE__) ? window.__WALKTHROUGH_BRIDGE__ : null;
 let recordedMetaHtml = $('voice-meta').innerHTML;
+if (!DATA.tts) {
+  const mMatch = recordedMetaHtml.match(/narration:\s*<b>([^<]+)<\/b>/i);
+  const vMatch = recordedMetaHtml.match(/voice\s*<b>([^<]+)<\/b>/i);
+  DATA.tts = {
+    model: mMatch ? mMatch[1].trim() : 'none',
+    voice: vMatch ? vMatch[1].trim() : 'none',
+  };
+}
+if (!DATA.master_audio && (!DATA.tts || !DATA.tts.model || DATA.tts.model === 'none')) {
+  useSystem = true;
+}
 if (BRIDGE && typeof history !== 'undefined' && 'scrollRestoration' in history) {
   try { history.scrollRestoration = 'manual'; } catch (e) {}
 }
@@ -1114,15 +1153,20 @@ function renderQueuePane() {
   });
 }
 
-async function applyPackData(nextData, preserveScrollY) {
+async function applyPackData(nextData, preserveScrollY, opts) {
   if (!nextData || !Array.isArray(nextData.scenes)) return;
+  const options = opts || {};
   const targetY = typeof preserveScrollY === 'number' ? preserveScrollY : window.scrollY;
+  const prevHudH = $('hud') ? $('hud').getBoundingClientRect().height : 0;
+  const prevSceneIdx = idx >= 0 ? idx : 0;
 
-  // 1. Stop any active playback cleanly without triggering auto-scroll
-  pause();
-  useSystem = false;
-  $('voicebtn').textContent = 'Use system voice';
-  wallBase = 0; sysOffset = 0; sysScene = -1; sceneIdx = -1; idx = -1; pending = null;
+  // 1. Explicitly pause any active playback before swapping audio or timeline
+  hardPausePlayback();
+  const hasRecorded = Boolean(nextData.master_audio) ||
+    Boolean(nextData.tts && nextData.tts.model && nextData.tts.model !== 'none');
+  useSystem = !hasRecorded;
+  $('voicebtn').textContent = useSystem ? 'Use recorded audio' : 'Use system voice';
+  sysScene = -1; sceneIdx = -1; idx = -1; pending = null;
   liveA2uiOverride = null;
 
   // 2. Swap DATA in place (zero page reload, zero HUD collapse, zero scroll jump)
@@ -1134,10 +1178,22 @@ async function applyPackData(nextData, preserveScrollY) {
   const ttsModel = (DATA.tts && DATA.tts.model) || 'none';
   const ttsVoice = (DATA.tts && DATA.tts.voice) || 'none';
   recordedMetaHtml = 'narration: <b>' + esc(ttsModel) + '</b> &middot; voice <b>' + esc(ttsVoice) + '</b>';
-  updateVoiceMeta();
+
+  const keepIdx = options.preserveSceneIndex
+    ? Math.max(0, Math.min(DATA.scenes.length - 1, prevSceneIdx))
+    : 0;
+  const nextStart = (DATA.scenes[keepIdx] && typeof DATA.scenes[keepIdx].start === 'number')
+    ? DATA.scenes[keepIdx].start
+    : 0;
+  wallBase = nextStart;
+  sysOffset = nextStart;
 
   if (HAS_MASTER_AUDIO) {
     player.src = DATA.master_audio;
+    try { player.load(); } catch (e) {}
+    if (nextStart > 0) {
+      pending = nextStart;
+    }
   } else {
     player.removeAttribute('src');
     try { player.load(); } catch (e) {}
@@ -1164,13 +1220,17 @@ async function applyPackData(nextData, preserveScrollY) {
     summaryEl.textContent = DATA.hud.summary;
     enhanceDomGitHubRefs(summaryEl);
   }
+  updateVoiceMeta();
+  updatePlayButtons();
   tick();
   enhanceAllRefs();
   syncStickyMedia();
 
-  // 5. Keep exact scroll position steady so queue pane & cursor never jerk
-  if (Math.abs(window.scrollY - targetY) > 1) {
-    window.scrollTo({ top: targetY, behavior: 'instant' });
+  // 5. Keep exact visual position steady (compensating any HUD summary line-count delta)
+  const deltaHud = ($('hud') ? $('hud').getBoundingClientRect().height : 0) - prevHudH;
+  const compensatedY = targetY > 40 ? Math.max(0, targetY + deltaHud) : targetY;
+  if (Math.abs(window.scrollY - compensatedY) > 1) {
+    window.scrollTo({ top: compensatedY, behavior: 'instant' });
   }
 }
 
@@ -1390,26 +1450,306 @@ function connectBridgeEvents() {
       if (msg.data) applyPackData(msg.data, window.scrollY);
     } catch (e) {}
   });
+  bridgeSource.addEventListener('audio_regen_started', (ev) => {
+    try {
+      const job = JSON.parse(ev.data);
+      if (!job || !job.deckDir) return;
+      regenJobsByDir.set(job.deckDir, job);
+      if (job.deckDir === selectedPackDir) {
+        hardPausePlayback();
+        voiceFeedback = null;
+        updateVoiceMeta();
+      }
+    } catch (e) {}
+  });
+  bridgeSource.addEventListener('audio_regen_progress', (ev) => {
+    try {
+      const job = JSON.parse(ev.data);
+      if (!job || !job.deckDir) return;
+      regenJobsByDir.set(job.deckDir, job);
+      if (job.deckDir === selectedPackDir) updateVoiceMeta();
+    } catch (e) {}
+  });
+  bridgeSource.addEventListener('audio_regen_complete', async (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (!msg || !msg.deckDir) return;
+      regenJobsByDir.delete(msg.deckDir);
+      // Update queue item's displayed total duration in place
+      if (typeof msg.totalDuration === 'number') {
+        discoveredPacks = discoveredPacks.map((p) =>
+          p.deckDir === msg.deckDir ? { ...p, totalDuration: msg.totalDuration } : p
+        );
+        renderQueuePane();
+      }
+      if (msg.deckDir === selectedPackDir && msg.data) {
+        // Explicit hard pause before applying new voice; user must press Play to resume
+        hardPausePlayback();
+        voiceFeedback = { kind: 'done', text: 'Ready · press Play' };
+        await applyPackData(msg.data, window.scrollY, { preserveSceneIndex: true });
+        loadTelemetry(true);
+      }
+    } catch (e) {}
+  });
+  bridgeSource.addEventListener('audio_regen_error', (ev) => {
+    try {
+      const job = JSON.parse(ev.data);
+      if (!job || !job.deckDir) return;
+      regenJobsByDir.delete(job.deckDir);
+      if (job.deckDir === selectedPackDir) {
+        voiceFeedback = { kind: 'err', text: 'Error: ' + String(job.error || 'regen failed').slice(0, 64) };
+        updateVoiceMeta();
+      }
+    } catch (e) {}
+  });
   bridgeSource.addEventListener('deck_reloaded', () => {
     window.location.reload();
   });
 }
 
+const RELOAD_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.4-3.67"/><path d="M13.5 2.5v2.9h-2.9"/></svg>';
+
+function currentPackRegenJob() {
+  if (!selectedPackDir) return null;
+  const j = regenJobsByDir.get(selectedPackDir);
+  return j && j.status === 'running' ? j : null;
+}
+
+async function loadAudioModels() {
+  if (!BRIDGE || !BRIDGE.audioModelsUrl) return;
+  try {
+    const resp = await fetch(BRIDGE.audioModelsUrl, { cache: 'no-store' });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data && data.ok) {
+      audioCatalog = {
+        available: Boolean(data.available),
+        endpoint: data.endpoint || null,
+        models: Array.isArray(data.models) ? data.models : [],
+      };
+      if (data.activeJob && data.activeJob.deckDir && data.activeJob.status === 'running') {
+        regenJobsByDir.set(data.activeJob.deckDir, data.activeJob);
+      }
+      updateVoiceMeta();
+    }
+  } catch (e) {}
+}
+
+function resolveVoicesForModel(modelId) {
+  const m = audioCatalog.models.find((x) => x.id === modelId);
+  const packVoice = DATA.tts && DATA.tts.voice && DATA.tts.voice !== 'none' ? DATA.tts.voice : '';
+  if (m) {
+    const list = Array.isArray(m.voices) ? [...m.voices] : [];
+    if (m.openVoice && packVoice && !list.includes(packVoice)) {
+      list.unshift(packVoice);
+    }
+    return list.length ? list : ['default'];
+  }
+  return packVoice ? [packVoice] : ['US_James', 'US_Emily', 'default'];
+}
+
+async function triggerAudioRegen(modelId, voiceName) {
+  // Always immediately pause any active playback before re-recording
+  hardPausePlayback();
+  voiceFeedback = null;
+  if (!BRIDGE || !BRIDGE.audioRegenerateUrl) return;
+  if (!modelId || modelId === '__system__') {
+    useSystem = true;
+    $('voicebtn').textContent = 'Use recorded audio';
+    updateVoiceMeta();
+    return;
+  }
+  const targetDir = selectedPackDir || undefined;
+  const optimistic = {
+    jobId: 'pending',
+    deckDir: selectedPackDir || '__active__',
+    model: modelId,
+    voice: voiceName,
+    status: 'running',
+    stage: 'synthesizing',
+    completedScenes: 0,
+    totalScenes: DATA.scenes.length,
+    currentScene: null,
+  };
+  if (selectedPackDir) regenJobsByDir.set(selectedPackDir, optimistic);
+  updateVoiceMeta();
+  try {
+    const resp = await fetch(BRIDGE.audioRegenerateUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-canvas-token': BRIDGE.token,
+      },
+      body: JSON.stringify({
+        ...(targetDir ? { deckDir: targetDir } : {}),
+        model: modelId,
+        voice: voiceName,
+        ...(audioCatalog.endpoint ? { endpoint: audioCatalog.endpoint } : {}),
+      }),
+    });
+    const body = await resp.json().catch(() => ({ ok: false, error: 'Invalid response' }));
+    if (!resp.ok || !body.ok) {
+      if (selectedPackDir) regenJobsByDir.delete(selectedPackDir);
+      voiceFeedback = { kind: 'err', text: String(body.error || ('HTTP ' + resp.status)).slice(0, 64) };
+      updateVoiceMeta();
+      return;
+    }
+    if (body.job && body.job.deckDir) {
+      selectedPackDir = selectedPackDir || body.job.deckDir;
+      regenJobsByDir.set(body.job.deckDir, body.job);
+      updateVoiceMeta();
+    }
+  } catch (err) {
+    if (selectedPackDir) regenJobsByDir.delete(selectedPackDir);
+    voiceFeedback = { kind: 'err', text: String(err.message || err).slice(0, 64) };
+    updateVoiceMeta();
+  }
+}
+
 function updateVoiceMeta() {
   const meta = $('voice-meta');
-  if (useSystem) {
-    meta.classList.add('is-fallback');
-    meta.innerHTML = 'audio: <b>system voice fallback</b>';
+  if (!meta) return;
+  if (!BRIDGE || !BRIDGE.audioModelsUrl) {
+    if (useSystem) {
+      meta.classList.add('is-fallback');
+      meta.innerHTML = 'audio: <b>system voice fallback</b>';
+    } else {
+      meta.classList.remove('is-fallback');
+      meta.innerHTML = recordedMetaHtml;
+    }
+    return;
+  }
+
+  const job = currentPackRegenJob();
+  const packModel = (DATA.tts && DATA.tts.model && DATA.tts.model !== 'none') ? DATA.tts.model : '';
+  const packVoice = (DATA.tts && DATA.tts.voice && DATA.tts.voice !== 'none') ? DATA.tts.voice : '';
+  const activeModel = job ? job.model : (useSystem || !packModel ? '__system__' : packModel);
+  const activeVoice = job ? job.voice : packVoice;
+
+  meta.classList.toggle('is-fallback', activeModel === '__system__' && !job);
+
+  const ttsModels = audioCatalog.models.filter((m) => m.kind === 'tts');
+  const stsModels = audioCatalog.models.filter((m) => m.kind === 'sts');
+  const knownIds = new Set(audioCatalog.models.map((m) => m.id));
+
+  let modelOpts = '';
+  if (ttsModels.length) {
+    modelOpts += '<optgroup label="oMLX TTS">' + ttsModels.map((m) =>
+      '<option value="' + esc(m.id) + '"' + (m.id === activeModel ? ' selected' : '') + '>' +
+      esc(m.id) + ' [TTS]</option>'
+    ).join('') + '</optgroup>';
+  }
+  if (stsModels.length) {
+    modelOpts += '<optgroup label="oMLX Speech-to-Speech">' + stsModels.map((m) =>
+      '<option value="' + esc(m.id) + '"' + (m.id === activeModel ? ' selected' : '') + '>' +
+      esc(m.id) + ' [S2S]</option>'
+    ).join('') + '</optgroup>';
+  }
+  if (activeModel && activeModel !== '__system__' && !knownIds.has(activeModel)) {
+    modelOpts += '<optgroup label="Recorded Model"><option value="' + esc(activeModel) + '" selected>' +
+      esc(activeModel) + '</option></optgroup>';
+  }
+  modelOpts += '<optgroup label="Device / Fallback"><option value="__system__"' +
+    (activeModel === '__system__' ? ' selected' : '') + '>System device voice</option></optgroup>';
+
+  const voices = activeModel !== '__system__' ? resolveVoicesForModel(activeModel) : [];
+  const selectedVoice = voices.includes(activeVoice) ? activeVoice : (voices[0] || '');
+  const voiceOpts = voices.map((v) =>
+    '<option value="' + esc(v) + '"' + (v === selectedVoice ? ' selected' : '') + '>' + esc(v) + '</option>'
+  ).join('');
+
+  let statusHtml = '';
+  if (job) {
+    const prog = job.stage === 'mastering'
+      ? 'Mastering…'
+      : (job.totalScenes > 0
+        ? ('Recording ' + Math.min(job.completedScenes, job.totalScenes) + '/' + job.totalScenes + '…')
+        : 'Recording…');
+    statusHtml = '<span class="vc-status is-busy" id="vc-status" role="status">' + esc(prog) + '</span>';
+  } else if (voiceFeedback) {
+    const cls = voiceFeedback.kind === 'err' ? 'is-err' : 'is-done';
+    statusHtml = '<span class="vc-status ' + cls + '" id="vc-status" role="status">' + esc(voiceFeedback.text) + '</span>';
   } else {
-    meta.classList.remove('is-fallback');
-    meta.innerHTML = recordedMetaHtml;
+    statusHtml = '<span class="vc-status" id="vc-status" hidden role="status"></span>';
+  }
+
+  const regenTitle = job
+    ? 'Regenerating presentation narration…'
+    : (activeModel === '__system__'
+      ? 'Record presentation narration using oMLX voice model'
+      : ('Regenerate presentation narration with ' + activeModel + ' (' + selectedVoice + ')'));
+
+  meta.innerHTML =
+    '<span class="vc-label">voice:</span>' +
+    '<select id="vc-model" class="vc-select" aria-label="oMLX TTS and speech-to-speech model">' + modelOpts + '</select>' +
+    (activeModel !== '__system__'
+      ? '<select id="vc-voice" class="vc-select vc-voice" aria-label="Speaker voice">' + voiceOpts + '</select>'
+      : '') +
+    '<button id="vc-regen" class="vc-regen-btn' + (job ? ' is-spinning' : '') + '" type="button"' +
+      ' title="' + esc(regenTitle) + '" aria-label="' + esc(regenTitle) + '"' +
+      (job ? ' aria-busy="true"' : '') + '>' + RELOAD_SVG + '</button>' +
+    statusHtml;
+
+  const modelSel = $('vc-model');
+  const voiceSel = $('vc-voice');
+  const regenBtn = $('vc-regen');
+
+  if (modelSel) {
+    modelSel.onchange = () => {
+      const nextModel = modelSel.value;
+      hardPausePlayback();
+      if (nextModel === '__system__') {
+        useSystem = true;
+        voiceFeedback = { kind: 'done', text: 'System voice · press Play' };
+        $('voicebtn').textContent = 'Use recorded audio';
+        updateVoiceMeta();
+        return;
+      }
+      const nextVoices = resolveVoicesForModel(nextModel);
+      const modelMeta = audioCatalog.models.find((m) => m.id === nextModel);
+      const nextVoice = (modelMeta && modelMeta.defaultVoice && nextVoices.includes(modelMeta.defaultVoice))
+        ? modelMeta.defaultVoice
+        : (nextVoices[0] || 'default');
+      triggerAudioRegen(nextModel, nextVoice);
+    };
+  }
+  if (voiceSel) {
+    voiceSel.onchange = () => {
+      const m = modelSel ? modelSel.value : activeModel;
+      const v = voiceSel.value;
+      if (!m || m === '__system__' || !v) return;
+      triggerAudioRegen(m, v);
+    };
+  }
+  if (regenBtn) {
+    regenBtn.onclick = () => {
+      if (currentPackRegenJob()) return;
+      const curM = modelSel ? modelSel.value : activeModel;
+      if (curM === '__system__') {
+        const preferred = audioCatalog.models[0];
+        if (!preferred) {
+          hardPausePlayback();
+          voiceFeedback = { kind: 'err', text: 'No oMLX voice models found' };
+          updateVoiceMeta();
+          return;
+        }
+        triggerAudioRegen(preferred.id, preferred.defaultVoice || preferred.voices[0] || 'default');
+        return;
+      }
+      const curV = voiceSel ? voiceSel.value : (selectedVoice || 'default');
+      triggerAudioRegen(curM, curV);
+    };
   }
 }
 
 function updatePlayButtons() {
-  $('play').disabled = playing;
+  const busy = Boolean(currentPackRegenJob());
+  $('play').disabled = playing || busy;
   const mp = $('mini-play');
-  if (mp) mp.innerHTML = playing ? '&#10074;&#10074; Pause' : '&#9654; Play';
+  if (mp) {
+    mp.disabled = busy;
+    mp.innerHTML = busy ? '&#8635; Recording…' : (playing ? '&#10074;&#10074; Pause' : '&#9654; Play');
+  }
 }
 
 function syncStickyMedia() {
@@ -2474,11 +2814,21 @@ function speakFrom(t) {
 
 function play() {
   if (playing) return;
+  if (currentPackRegenJob()) return; // Do not play stale audio while re-recording in background
+  if (voiceFeedback && voiceFeedback.kind === 'done') {
+    voiceFeedback = null;
+    updateVoiceMeta();
+  }
   if (wallBase >= DATA.total - 0.1) wallBase = 0;
   setFooterLiveChat(null);
   playing = true;
   updatePlayButtons();
   wallStart = performance.now();
+  if (!HAS_MASTER_AUDIO && (!DATA.tts || !DATA.tts.model || DATA.tts.model === 'none')) {
+    useSystem = true;
+    $('voicebtn').textContent = 'Use recorded audio';
+    updateVoiceMeta();
+  }
   if (useSystem) {
     speakFrom(now());
   } else if (HAS_MASTER_AUDIO) {
@@ -2507,14 +2857,22 @@ function play() {
   raf = requestAnimationFrame(tick);
 }
 
-function pause() {
-  if (!playing && pending === null) return;
+function hardPausePlayback() {
   wallBase = now();
   playing = false;
-  updatePlayButtons();
+  pending = null;
   cancelAnimationFrame(raf);
-  if (useSystem) { speechSynthesis.cancel(); sysOffset = wallBase; }
-  else player.pause();
+  try { player.pause(); } catch (e) {}
+  if (typeof window.speechSynthesis !== 'undefined') {
+    try { window.speechSynthesis.cancel(); } catch (e) {}
+  }
+  sysOffset = wallBase;
+  updatePlayButtons();
+}
+
+function pause() {
+  if (!playing && pending === null) return;
+  hardPausePlayback();
 }
 
 function restart() {
@@ -2544,14 +2902,13 @@ bindTrackSeek($('full-track'));
 bindTrackSeek($('mini-track'));
 
 $('voicebtn').onclick = () => {
-  const wasPlaying = playing;
   const at = now();
-  pause();
+  hardPausePlayback();
   useSystem = !useSystem;
   $('voicebtn').textContent = useSystem ? 'Use recorded audio' : 'Use system voice';
+  voiceFeedback = { kind: 'done', text: (useSystem ? 'System voice' : 'Recorded audio') + ' · press Play' };
   updateVoiceMeta();
   sysOffset = at; sysScene = -1; sceneIdx = -1;
-  if (wasPlaying) play();
 };
 
 document.addEventListener('keydown', (e) => {
@@ -2753,6 +3110,10 @@ window.state = () => ({
   packCount: discoveredPacks.length,
   selectedPackId,
   queueFilter: { ...queueFilter },
+  audioModels: audioCatalog.models.map((m) => ({ id: m.id, kind: m.kind, voices: m.voices })),
+  activeTts: DATA.tts || null,
+  hasMasterAudio: HAS_MASTER_AUDIO,
+  audioRegenerating: Boolean(currentPackRegenJob()),
   liveTelemetryMeasuredAt: liveTelemetry ? liveTelemetry.measuredAt : null,
   liveChatTarget,
   lastA2uiAction,
@@ -2766,7 +3127,9 @@ window.state = () => ({
   connectBridgeEvents();
   loadHuds();
   loadPacks();
+  loadAudioModels();
   loadTelemetry(false);
+  if ($('voicebtn')) $('voicebtn').textContent = useSystem ? 'Use recorded audio' : 'Use system voice';
   updateVoiceMeta();
   updatePlayButtons();
   tick();

@@ -8,7 +8,7 @@
 //   4. Structured session.send({ prompt, displayPrompt, mode }) when an AI turn
 //      is required — waking the yielded Copilot agent deterministically.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -22,6 +22,7 @@ const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PLAYER_TEMPLATE_PATH = path.resolve(__dirname, "..", "..", "..", "skills", "narrated-walkthrough", "player", "player.html");
 const DOC_BUILDER_PATH = path.resolve(__dirname, "..", "..", "..", "skills", "narrated-walkthrough", "scripts", "doc_to_walkthrough.py");
+const BUILD_NARRATION_PATH = path.resolve(__dirname, "..", "..", "..", "skills", "narrated-walkthrough", "scripts", "build_narration.py");
 
 export const MAX_BODY_BYTES = 16 * 1024;
 export const DETERMINISTIC_ONLY_ACTIONS = new Set([
@@ -781,6 +782,206 @@ export async function buildPackRuntimeData(deckDir, fallbackTitle = "Narrated Wa
     };
 }
 
+const OPEN_TTS_VOICE_PRESETS = ["US_James", "US_Emily", "UK_Charles", "UK_Sophia"];
+
+/**
+ * Classify an oMLX / OpenAI-compatible model metadata entry into a narration-capable
+ * TTS or Speech-to-Speech (STS / Omni / Realtime voice) category, or null if unsuitable.
+ */
+export function classifyAudioModel(entry) {
+    if (!entry || typeof entry !== "object") return null;
+    const id = String(entry.id || "").trim();
+    if (!id) return null;
+    const mtype = String(entry.model_type || entry.type || "").toLowerCase();
+    const etype = String(entry.engine_type || "").toLowerCase();
+    const ctype = String(entry.config_model_type || "").toLowerCase();
+    const hay = `${id} ${mtype} ${etype} ${ctype}`.toLowerCase();
+
+    // Exclude non-speech / transcription-only models
+    if (
+        mtype === "audio_stt" || etype === "audio_stt" || mtype === "reranker" ||
+        mtype === "markitdown" || mtype === "embedding" ||
+        /\b(whisper|parakeet|transcrib|asr|stt|rerank|markitdown|ocr|embed)\b/.test(hay)
+    ) {
+        return null;
+    }
+
+    // Speech-to-speech / Omni / Realtime voice models
+    if (
+        entry.realtime_voice === true ||
+        mtype === "audio_sts" || etype === "audio_sts" || mtype === "sts" || mtype === "audio_omni" ||
+        /(omni|sts|lfm[\d.]*[-_]?audio|mossformer|sesame|csm)/.test(`${id.toLowerCase()} ${ctype}`)
+    ) {
+        return { kind: "sts", kindLabel: "Speech-to-Speech" };
+    }
+
+    // Text-to-speech models
+    if (
+        mtype === "audio_tts" || etype === "audio_tts" || mtype === "tts" || mtype === "speech" ||
+        /(tts|kokoro|orpheus|chatterbox|cosyvoice|parler|bark|f5[-_]?tts|dia[-_]|lingv3_tts|spark[-_]?tts)/.test(`${id.toLowerCase()} ${ctype}`)
+    ) {
+        return { kind: "tts", kindLabel: "TTS" };
+    }
+
+    return null;
+}
+
+function originFromEndpoint(endpointStr) {
+    if (typeof endpointStr !== "string" || !endpointStr.trim()) return null;
+    try {
+        const u = new URL(endpointStr.trim());
+        if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+        return u.origin;
+    } catch {
+        return null;
+    }
+}
+
+async function resolveAudioServerBase({ endpointBase, activeDeckDir, packsRoot }) {
+    const explicit = originFromEndpoint(endpointBase);
+    if (explicit) return explicit;
+    const envBase = originFromEndpoint(process.env.OMLX_BASE_URL || process.env.NARRATED_WALKTHROUGH_TTS_ENDPOINT || "");
+    if (envBase) return envBase;
+
+    // Inspect active pack first, then any sibling pack in packsRoot for an existing tts.endpoint
+    const candidateDirs = [];
+    if (activeDeckDir) candidateDirs.push(path.resolve(activeDeckDir));
+    if (packsRoot) {
+        const packs = await discoverArtifactPacks({ packsRoot, activeDeckDir }).catch(() => []);
+        for (const p of packs) {
+            if (p.deckDir && !candidateDirs.includes(p.deckDir)) candidateDirs.push(p.deckDir);
+        }
+    }
+    for (const dir of candidateDirs) {
+        try {
+            const tl = JSON.parse(await readFile(path.join(dir, "timeline.json"), "utf8"));
+            const found = originFromEndpoint(tl?.tts?.endpoint);
+            if (found) return found;
+        } catch {
+            // ignore unreadable timeline
+        }
+    }
+    return "http://127.0.0.1:18001";
+}
+
+function isAllowedAudioEndpoint(endpointUrl, discoveredBaseUrl) {
+    try {
+        const u = new URL(endpointUrl);
+        if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+        if (u.hostname === "127.0.0.1" || u.hostname === "localhost" || u.hostname === "::1") return true;
+        if (discoveredBaseUrl) {
+            const d = new URL(discoveredBaseUrl);
+            if (u.origin === d.origin) return true;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Dynamically discover available oMLX TTS and Speech-to-Speech models and their voices.
+ */
+export async function discoverAudioModels({
+    endpointBase,
+    activeDeckDir,
+    packsRoot,
+    fetchImpl = globalThis.fetch,
+    timeoutMs = 2500,
+} = {}) {
+    const baseUrl = await resolveAudioServerBase({ endpointBase, activeDeckDir, packsRoot });
+    const speechEndpoint = `${baseUrl}/v1/audio/speech`;
+    if (typeof fetchImpl !== "function") {
+        return { ok: true, available: false, baseUrl, endpoint: speechEndpoint, models: [], error: "fetch unavailable" };
+    }
+
+    async function fetchJson(url) {
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), timeoutMs);
+        try {
+            const resp = await fetchImpl(url, { signal: ac.signal });
+            if (!resp.ok) return null;
+            return await resp.json();
+        } catch {
+            return null;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    // Prefer /v1/models/status (rich oMLX metadata incl. realtime_voice & config_model_type),
+    // falling back to OpenAI-standard /v1/models.
+    let rawList = null;
+    const statusJson = await fetchJson(`${baseUrl}/v1/models/status`);
+    if (statusJson && Array.isArray(statusJson.models)) {
+        rawList = statusJson.models;
+    } else {
+        const modelsJson = await fetchJson(`${baseUrl}/v1/models`);
+        if (modelsJson && Array.isArray(modelsJson.data)) {
+            rawList = modelsJson.data;
+        }
+    }
+
+    if (!rawList) {
+        return {
+            ok: true,
+            available: false,
+            baseUrl,
+            endpoint: speechEndpoint,
+            models: [],
+            error: `oMLX server unreachable at ${baseUrl}`,
+        };
+    }
+
+    const candidates = [];
+    for (const entry of rawList) {
+        const cls = classifyAudioModel(entry);
+        if (!cls) continue;
+        candidates.push({ entry, cls });
+    }
+
+    const enriched = await Promise.all(
+        candidates.map(async ({ entry, cls }) => {
+            const id = String(entry.id);
+            const vJson = await fetchJson(`${baseUrl}/v1/audio/voices?model=${encodeURIComponent(id)}`);
+            const serverVoices = Array.isArray(vJson?.voices)
+                ? vJson.voices.map((v) => String(v)).filter(Boolean)
+                : [];
+            const hasExplicitVoices = serverVoices.length > 0;
+            const voices = hasExplicitVoices ? serverVoices : [...OPEN_TTS_VOICE_PRESETS];
+            const defaultVoice = hasExplicitVoices
+                ? (serverVoices.includes("male") ? "male" : serverVoices[0])
+                : voices[0];
+            return {
+                id,
+                label: id,
+                kind: cls.kind,
+                kindLabel: cls.kindLabel,
+                voices,
+                defaultVoice,
+                supportsAnchor: cls.kind === "tts" && !hasExplicitVoices,
+                openVoice: !hasExplicitVoices,
+                loaded: Boolean(entry.loaded),
+                size: entry.estimated_size_formatted || null,
+            };
+        }),
+    );
+
+    // Order TTS models first, then Speech-to-Speech, alphabetically within each group
+    enriched.sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === "tts" ? -1 : 1;
+        return a.id.localeCompare(b.id);
+    });
+
+    return {
+        ok: true,
+        available: true,
+        baseUrl,
+        endpoint: speechEndpoint,
+        models: enriched,
+    };
+}
+
 /**
  * Discover all browsable repository HUDs (sibling `<repo>-artifacts/` directories
  * plus the currently active HUD root) so the Architect can switch across HUDs.
@@ -953,11 +1154,15 @@ export async function startWalkthroughServer({
     title = "Narrated Walkthrough",
     session,
     telemetryRunner,
+    audioFetchImpl,
+    audioEndpointBase,
+    audioRegenerator,
     telemetryPollMs = 45000,
     telemetryTtlMs = 15000,
 }) {
     const token = randomBytes(24).toString("hex");
     const clients = new Set();
+    const regenJobs = new Map(); // deckDir -> { jobId, child, status, ... }
     const resolvedDeck = deckDir ? path.resolve(deckDir) : null;
     const resolvedRepo = repoPath ? path.resolve(repoPath) : null;
     const resolvedPacksRoot = packsRoot
@@ -1036,6 +1241,160 @@ export async function startWalkthroughServer({
             }
         },
     };
+
+    function summarizeRegenJob(job) {
+        if (!job) return null;
+        return {
+            jobId: job.jobId,
+            deckDir: job.deckDir,
+            model: job.model,
+            voice: job.voice,
+            endpoint: job.endpoint,
+            status: job.status,
+            stage: job.stage,
+            completedScenes: job.completedScenes,
+            totalScenes: job.totalScenes,
+            currentScene: job.currentScene,
+            startedAt: job.startedAt,
+            error: job.error || null,
+        };
+    }
+
+    function startBackgroundAudioRegen({ targetDeckDir, model, voice, endpoint, supportsAnchor, firstSceneId, totalScenes }) {
+        const resolved = path.resolve(targetDeckDir);
+        const existing = regenJobs.get(resolved);
+        if (existing && existing.status === "running") {
+            existing.superseded = true;
+            if (existing.child && !existing.child.killed) {
+                try { existing.child.kill("SIGTERM"); } catch {}
+            }
+        }
+
+        const jobId = `regen_${randomBytes(6).toString("hex")}`;
+        const job = {
+            jobId,
+            deckDir: resolved,
+            model,
+            voice,
+            endpoint,
+            status: "running",
+            stage: "synthesizing",
+            completedScenes: 0,
+            totalScenes: totalScenes || 0,
+            currentScene: null,
+            startedAt: new Date().toISOString(),
+            superseded: false,
+            child: null,
+            error: null,
+        };
+        regenJobs.set(resolved, job);
+        runtime.broadcast("audio_regen_started", summarizeRegenJob(job));
+
+        const onComplete = async () => {
+            if (job.superseded) return;
+            job.status = "complete";
+            job.stage = "complete";
+            job.completedScenes = job.totalScenes;
+            if (resolved === state.deckDir) {
+                state.telemetryCache = null;
+                state.telemetryCachedAt = 0;
+                state.telemetryFingerprint = "";
+            }
+            const freshData = await buildPackRuntimeData(resolved, state.title).catch(() => null);
+            runtime.broadcast("audio_regen_complete", {
+                ...summarizeRegenJob(job),
+                totalDuration: freshData?.total ?? null,
+                data: freshData,
+                timestamp: new Date().toISOString(),
+            });
+        };
+
+        const onError = (errMsg) => {
+            if (job.superseded) return;
+            job.status = "error";
+            job.stage = "error";
+            job.error = String(errMsg || "Audio regeneration failed").slice(0, 400);
+            runtime.broadcast("audio_regen_error", summarizeRegenJob(job));
+        };
+
+        if (typeof audioRegenerator === "function") {
+            Promise.resolve(audioRegenerator({
+                deckDir: resolved,
+                model,
+                voice,
+                endpoint,
+                supportsAnchor,
+                firstSceneId,
+                onProgress: (patch) => {
+                    if (job.superseded) return;
+                    Object.assign(job, patch);
+                    runtime.broadcast("audio_regen_progress", summarizeRegenJob(job));
+                },
+            })).then(() => onComplete()).catch((err) => onError(err?.message || String(err)));
+            return summarizeRegenJob(job);
+        }
+
+        const args = [
+            BUILD_NARRATION_PATH,
+            "--plan", path.join(resolved, "timeline.json"),
+            "--endpoint", endpoint,
+            "--model", model,
+            "--voice", voice,
+            "--force",
+            "--balance-pace",
+            "--language", "en",
+            "--temperature", "0.0",
+        ];
+        if (supportsAnchor && firstSceneId) {
+            args.push("--anchor-scene", firstSceneId);
+        } else {
+            args.push("--clear-anchor");
+        }
+
+        const child = spawn("python3", args, {
+            cwd: resolved,
+            stdio: ["ignore", "pipe", "pipe"],
+            env: { ...process.env, PYTHONUNBUFFERED: "1" },
+        });
+        job.child = child;
+        let stdoutBuf = "";
+        let stderrBuf = "";
+
+        child.stdout.on("data", (chunk) => {
+            stdoutBuf += chunk.toString("utf8");
+            let nl;
+            while ((nl = stdoutBuf.indexOf("\n")) >= 0) {
+                const line = stdoutBuf.slice(0, nl).trim();
+                stdoutBuf = stdoutBuf.slice(nl + 1);
+                if (job.superseded) continue;
+                const m = line.match(/^synth\s+(\S+)/);
+                if (m) {
+                    job.currentScene = m[1];
+                    job.stage = "synthesizing";
+                    job.completedScenes = Math.min(job.totalScenes || 999, job.completedScenes + 1);
+                    runtime.broadcast("audio_regen_progress", summarizeRegenJob(job));
+                } else if (line.startsWith("pace balanced:")) {
+                    job.stage = "mastering";
+                    runtime.broadcast("audio_regen_progress", summarizeRegenJob(job));
+                }
+            }
+        });
+        child.stderr.on("data", (chunk) => {
+            stderrBuf = (stderrBuf + chunk.toString("utf8")).slice(-2000);
+        });
+        child.on("error", (err) => onError(err?.message || String(err)));
+        child.on("close", (code) => {
+            if (job.superseded) return;
+            if (code === 0) {
+                onComplete();
+            } else {
+                const tail = (stderrBuf || stdoutBuf || `build_narration.py exited with code ${code}`).trim();
+                onError(tail);
+            }
+        });
+
+        return summarizeRegenJob(job);
+    }
 
     const telemetryPoller = telemetryPollMs > 0
         ? setInterval(() => {
@@ -1185,6 +1544,93 @@ export async function startWalkthroughServer({
                 return;
             }
 
+            if (req.method === "GET" && url.pathname === "/audio/models") {
+                const info = await discoverAudioModels({
+                    endpointBase: audioEndpointBase,
+                    activeDeckDir: state.deckDir,
+                    packsRoot: state.packsRoot,
+                    ...(audioFetchImpl ? { fetchImpl: audioFetchImpl } : {}),
+                });
+                const activeJob = state.deckDir ? summarizeRegenJob(regenJobs.get(path.resolve(state.deckDir))) : null;
+                sendJson(res, 200, {
+                    ...info,
+                    activeJob: activeJob && activeJob.status === "running" ? activeJob : null,
+                });
+                return;
+            }
+
+            if (req.method === "POST" && url.pathname === "/audio/regenerate") {
+                const provided = req.headers["x-canvas-token"];
+                if (!tokensMatch(token, typeof provided === "string" ? provided : "")) {
+                    sendJson(res, 403, { ok: false, error: "Invalid or missing x-canvas-token." });
+                    return;
+                }
+                const payload = await readJsonBody(req);
+                const targetDir = typeof payload?.deckDir === "string" && payload.deckDir.trim()
+                    ? path.resolve(payload.deckDir)
+                    : state.deckDir;
+                if (!targetDir) {
+                    sendJson(res, 400, { ok: false, error: "No active presentation deck to regenerate." });
+                    return;
+                }
+                const packs = await discoverArtifactPacks({
+                    packsRoot: state.packsRoot,
+                    activeDeckDir: state.deckDir,
+                });
+                const allowed = (state.deckDir && path.resolve(state.deckDir) === targetDir) ||
+                    packs.some((p) => p.deckDir === targetDir);
+                if (!allowed) {
+                    sendJson(res, 403, { ok: false, error: "Target deckDir is outside the discovered workspace." });
+                    return;
+                }
+                const model = typeof payload?.model === "string" ? payload.model.trim() : "";
+                const voice = typeof payload?.voice === "string" ? payload.voice.trim() : "";
+                if (!model || model === "__system__") {
+                    sendJson(res, 400, { ok: false, error: "A valid oMLX TTS or Speech-to-Speech model is required." });
+                    return;
+                }
+                if (!voice) {
+                    sendJson(res, 400, { ok: false, error: "A speaker voice name is required." });
+                    return;
+                }
+                const discovered = await discoverAudioModels({
+                    endpointBase: audioEndpointBase,
+                    activeDeckDir: targetDir,
+                    packsRoot: state.packsRoot,
+                    ...(audioFetchImpl ? { fetchImpl: audioFetchImpl } : {}),
+                });
+                const endpoint = typeof payload?.endpoint === "string" && payload.endpoint.trim()
+                    ? payload.endpoint.trim()
+                    : discovered.endpoint;
+                if (!isAllowedAudioEndpoint(endpoint, discovered.baseUrl)) {
+                    sendJson(res, 403, { ok: false, error: "Audio endpoint must be local loopback or the configured oMLX server." });
+                    return;
+                }
+                const modelMeta = discovered.models.find((m) => m.id === model) || null;
+                let firstSceneId = null;
+                let totalScenes = 0;
+                try {
+                    const tl = JSON.parse(await readFile(path.join(targetDir, "timeline.json"), "utf8"));
+                    const scs = Array.isArray(tl.scenes) ? tl.scenes : [];
+                    totalScenes = scs.length;
+                    firstSceneId = scs[0]?.id || null;
+                } catch {
+                    sendJson(res, 404, { ok: false, error: "timeline.json not found for target presentation." });
+                    return;
+                }
+                const job = startBackgroundAudioRegen({
+                    targetDeckDir: targetDir,
+                    model,
+                    voice,
+                    endpoint,
+                    supportsAnchor: modelMeta ? Boolean(modelMeta.supportsAnchor) : false,
+                    firstSceneId,
+                    totalScenes,
+                });
+                sendJson(res, 202, { ok: true, dispatchedToAgent: false, job });
+                return;
+            }
+
             if (req.method === "POST" && url.pathname === "/packs/select") {
                 const provided = req.headers["x-canvas-token"];
                 if (!tokensMatch(token, typeof provided === "string" ? provided : "")) {
@@ -1255,6 +1701,8 @@ export async function startWalkthroughServer({
                     hudsUrl: "/huds",
                     selectHudUrl: "/huds/select",
                     telemetryUrl: "/telemetry",
+                    audioModelsUrl: "/audio/models",
+                    audioRegenerateUrl: "/audio/regenerate",
                 });
                 res.writeHead(200, {
                     "content-type": "text/html; charset=utf-8",
@@ -1339,6 +1787,13 @@ export async function startWalkthroughServer({
         runtime,
         async close() {
             if (telemetryPoller) clearInterval(telemetryPoller);
+            for (const job of regenJobs.values()) {
+                job.superseded = true;
+                if (job.child && !job.child.killed) {
+                    try { job.child.kill("SIGTERM"); } catch {}
+                }
+            }
+            regenJobs.clear();
             for (const client of clients) {
                 try {
                     client.end();

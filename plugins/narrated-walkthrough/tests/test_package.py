@@ -626,6 +626,54 @@ class PackageTests(unittest.TestCase):
         self.assertIn('"kind": "opening"', html)
         self.assertIn('"action": "inspect_diff"', html)
         self.assertIn('"readyForSteer": true', html)
+        self.assertIn('"tts": {"model": "none", "voice": "none"}', html)
+
+    def test_clear_anchor_and_ref_audio_http_fallback(self):
+        """Models that reject ref_audio cloning (e.g. native-voice S2S) fall back cleanly."""
+        seen = []
+
+        class RejectCloneHandler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(n))
+                seen.append(body)
+                if "ref_audio" in body:
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"error":{"message":"does not clone one"}}')
+                    return
+                wav = _fake_wav(1.0)
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/wav")
+                self.end_headers()
+                self.wfile.write(wav)
+
+            def log_message(self, *_args):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), RejectCloneHandler)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / "clip.wav"
+                bn.synth(
+                    "Hello world.",
+                    out,
+                    f"http://127.0.0.1:{srv.server_port}/v1/audio/speech",
+                    "Fake-S2S-Model",
+                    "male",
+                    ref_audio_b64="AAAA",
+                    ref_text="ref",
+                )
+                self.assertEqual(len(seen), 2)
+                self.assertIn("ref_audio", seen[0])
+                self.assertNotIn("ref_audio", seen[1])
+                self.assertTrue(out.read_bytes().startswith(b"RIFF"))
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
     def test_cli_validate_runs(self):
         result = subprocess.run(

@@ -6,7 +6,9 @@ import test from "node:test";
 
 import {
     buildAgentTurnPayload,
+    classifyAudioModel,
     discoverArtifactPacks,
+    discoverAudioModels,
     discoverHuds,
     generateDocWalkthroughPack,
     injectBridgeBootstrap,
@@ -354,5 +356,152 @@ test("Multi-HUD browser discovers sibling *-artifacts HUDs, switches HUDs determ
         }
     } finally {
         await rm(parentDir, { recursive: true, force: true });
+    }
+});
+
+test("discoverAudioModels classifies oMLX TTS and Speech-to-Speech models and /audio/regenerate streams background progress", async () => {
+    assert.deepEqual(classifyAudioModel({ id: "Ming-3.0-tts-tiny-4bit", model_type: "audio_tts" }), { kind: "tts", kindLabel: "TTS" });
+    assert.deepEqual(classifyAudioModel({ id: "LFM3-Omni-2B-MLX-4bit", model_type: "vlm", realtime_voice: true }), { kind: "sts", kindLabel: "Speech-to-Speech" });
+    assert.equal(classifyAudioModel({ id: "Qwen2.5-0.5B-Instruct-4bit", model_type: "llm" }), null);
+    assert.equal(classifyAudioModel({ id: "whisper-large-v3", model_type: "audio_stt" }), null);
+    assert.equal(classifyAudioModel({ id: "jina-reranker-v3.5-mlx", model_type: "reranker" }), null);
+
+    const mockFetch = async (url) => {
+        const s = String(url);
+        if (s.endsWith("/v1/models/status")) {
+            return {
+                ok: true,
+                async json() {
+                    return {
+                        models: [
+                            { id: "LFM3-Omni-2B-MLX-4bit", model_type: "vlm", realtime_voice: true, config_model_type: "lfm3_omni", estimated_size_formatted: "1.92 GB" },
+                            { id: "Ming-3.0-tts-tiny-4bit", model_type: "audio_tts", realtime_voice: false, config_model_type: "lingv3_tts", estimated_size_formatted: "6.48 GB" },
+                            { id: "Qwen2.5-0.5B-Instruct-4bit", model_type: "llm", realtime_voice: false },
+                        ],
+                    };
+                },
+            };
+        }
+        if (s.includes("/v1/audio/voices?model=LFM3-Omni-2B-MLX-4bit")) {
+            return { ok: true, async json() { return { model: "LFM3-Omni-2B-MLX-4bit", voices: ["female", "male"] }; } };
+        }
+        if (s.includes("/v1/audio/voices?model=Ming-3.0-tts-tiny-4bit")) {
+            return { ok: true, async json() { return { model: "Ming-3.0-tts-tiny-4bit", voices: [] }; } };
+        }
+        return { ok: false, async json() { return {}; } };
+    };
+
+    const cat = await discoverAudioModels({ endpointBase: "http://127.0.0.1:18001", fetchImpl: mockFetch });
+    assert.equal(cat.available, true);
+    assert.equal(cat.models.length, 2);
+    assert.equal(cat.models[0].id, "Ming-3.0-tts-tiny-4bit");
+    assert.equal(cat.models[0].kind, "tts");
+    assert.equal(cat.models[0].supportsAnchor, true);
+    assert.equal(cat.models[1].id, "LFM3-Omni-2B-MLX-4bit");
+    assert.equal(cat.models[1].kind, "sts");
+    assert.deepEqual(cat.models[1].voices, ["female", "male"]);
+    assert.equal(cat.models[1].supportsAnchor, false);
+
+    // Full server round-trip: GET /audio/models + CSRF-guarded POST /audio/regenerate + SSE events
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "nw-audio-regen-"));
+    try {
+        await writeFile(path.join(tmpDir, "slides.html"), "<html><head></head><body>DECK</body></html>");
+        await writeFile(path.join(tmpDir, "timeline.json"), JSON.stringify({
+            title: "Regen Demo",
+            total_duration: 10,
+            scenes: [
+                { id: "s1", title: "One", mermaid: "flowchart LR\n A", narration: "First.", captions: ["First."], audio: "audio/s1.wav", start: 0, duration: 5 },
+                { id: "s2", title: "Two", mermaid: "flowchart LR\n B", narration: "Second.", captions: ["Second."], audio: "audio/s2.wav", start: 5, duration: 5 },
+            ],
+        }));
+
+        const srv = await startWalkthroughServer({
+            instanceId: "regen-1",
+            deckDir: tmpDir,
+            session: { async send() { return "m1"; } },
+            audioEndpointBase: "http://127.0.0.1:18001",
+            audioFetchImpl: mockFetch,
+            audioRegenerator: async ({ deckDir, model, voice, onProgress }) => {
+                onProgress({ completedScenes: 1, currentScene: "s1", stage: "synthesizing" });
+                onProgress({ completedScenes: 2, currentScene: "s2", stage: "mastering" });
+                await writeFile(path.join(deckDir, "timeline.json"), JSON.stringify({
+                    title: "Regen Demo",
+                    total_duration: 14.5,
+                    tts: { model, voice, endpoint: "http://127.0.0.1:18001/v1/audio/speech" },
+                    scenes: [
+                        { id: "s1", title: "One", mermaid: "flowchart LR\n A", narration: "First.", captions: ["First."], audio: "audio/s1.wav", start: 0, duration: 6.5 },
+                        { id: "s2", title: "Two", mermaid: "flowchart LR\n B", narration: "Second.", captions: ["Second."], audio: "audio/s2.wav", start: 6.5, duration: 8.0 },
+                    ],
+                }));
+            },
+            telemetryPollMs: 0,
+        });
+        try {
+            const mRes = await fetch(`${srv.url}audio/models`);
+            assert.equal(mRes.status, 200);
+            const mJson = await mRes.json();
+            assert.equal(mJson.models.length, 2);
+
+            // Missing CSRF token must fail closed (403)
+            const noTok = await fetch(`${srv.url}audio/regenerate`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ model: "LFM3-Omni-2B-MLX-4bit", voice: "male" }),
+            });
+            assert.equal(noTok.status, 403);
+
+            // Subscribe to SSE before triggering regeneration
+            const ac = new AbortController();
+            const sseResp = await fetch(`${srv.url}events`, { signal: ac.signal });
+            const reader = sseResp.body.getReader();
+            const dec = new TextDecoder();
+            const seenEvents = [];
+            let buf = "";
+
+            const regRes = await fetch(`${srv.url}audio/regenerate`, {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-canvas-token": srv.token },
+                body: JSON.stringify({ model: "LFM3-Omni-2B-MLX-4bit", voice: "male" }),
+            });
+            assert.equal(regRes.status, 202);
+            const regJson = await regRes.json();
+            assert.equal(regJson.ok, true);
+            assert.equal(regJson.job.model, "LFM3-Omni-2B-MLX-4bit");
+
+            let completePayload = null;
+            const deadline = Date.now() + 5000;
+            while (!completePayload && Date.now() < deadline) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buf += dec.decode(value, { stream: true });
+                let sep;
+                while ((sep = buf.indexOf("\n\n")) >= 0) {
+                    const frame = buf.slice(0, sep);
+                    buf = buf.slice(sep + 2);
+                    const evLine = frame.split("\n").find((l) => l.startsWith("event:"));
+                    const dataLine = frame.split("\n").find((l) => l.startsWith("data:"));
+                    if (evLine && dataLine) {
+                        const evName = evLine.slice(6).trim();
+                        seenEvents.push(evName);
+                        if (evName === "audio_regen_complete") {
+                            completePayload = JSON.parse(dataLine.slice(5).trim());
+                        }
+                    }
+                }
+            }
+            ac.abort();
+
+            assert.ok(seenEvents.includes("audio_regen_started"), `missing started in ${seenEvents}`);
+            assert.ok(seenEvents.includes("audio_regen_progress"), `missing progress in ${seenEvents}`);
+            assert.ok(completePayload, "missing audio_regen_complete event");
+            assert.equal(completePayload.data.total, 14.5);
+            assert.equal(completePayload.data.tts.model, "LFM3-Omni-2B-MLX-4bit");
+            assert.equal(completePayload.data.tts.voice, "male");
+            assert.equal(completePayload.data.scenes[1].start, 6.5);
+        } finally {
+            await srv.close();
+        }
+    } finally {
+        await rm(tmpDir, { recursive: true, force: true });
     }
 });

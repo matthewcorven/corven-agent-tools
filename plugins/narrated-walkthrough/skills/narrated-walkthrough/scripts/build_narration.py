@@ -77,11 +77,46 @@ def synth(
         payload["language"] = language
     if temperature is not None:
         payload["temperature"] = temperature
-    body = json.dumps(payload).encode()
-    req = urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"})
-    try:
+
+    def _post(body_dict: dict) -> bytes:
+        req = urllib.request.Request(
+            endpoint,
+            data=json.dumps(body_dict).encode(),
+            headers={"Content-Type": "application/json"},
+        )
         with urllib.request.urlopen(req, timeout=180) as resp:
-            out.write_bytes(resp.read())
+            return resp.read()
+
+    try:
+        out.write_bytes(_post(payload))
+    except urllib.error.HTTPError as exc:
+        # Some speech-to-speech / built-in-voice models reject ref_audio cloning;
+        # gracefully retry once with native voice conditioning only.
+        if ref_audio_b64 is not None:
+            fallback_payload = {
+                k: v for k, v in payload.items() if k not in ("ref_audio", "ref_text")
+            }
+            print(
+                f"  note: model {model} rejected ref_audio (HTTP {exc.code}); retrying with native voice '{voice}'",
+                flush=True,
+            )
+            try:
+                out.write_bytes(_post(fallback_payload))
+                return
+            except urllib.error.URLError as retry_exc:
+                raise SystemExit(
+                    f"TTS request failed ({endpoint}, model={model}): {retry_exc}\n"
+                    "Is the local server running? Try: curl -s <host>/v1/models"
+                ) from retry_exc
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:240]
+        except Exception:
+            pass
+        raise SystemExit(
+            f"TTS request failed ({endpoint}, model={model}): HTTP {exc.code} {detail}\n"
+            "Is the local server running? Try: curl -s <host>/v1/models"
+        ) from exc
     except urllib.error.URLError as exc:
         raise SystemExit(
             f"TTS request failed ({endpoint}, model={model}): {exc}\n"
@@ -638,6 +673,10 @@ def render(tl: dict) -> str:
             "disposition": tl.get("disposition"),
             "hud": tl.get("hud"),
             "a2ui": tl.get("a2ui"),
+            "tts": {
+                "model": (tl.get("tts") or {}).get("model") or "none",
+                "voice": (tl.get("tts") or {}).get("voice") or "none",
+            },
         },
         ensure_ascii=False,
     )
@@ -659,6 +698,7 @@ def main() -> int:
     ap.add_argument("--model", default=None)
     ap.add_argument("--endpoint", default=None)
     ap.add_argument("--anchor-scene", default=None, help="scene id used as ref_audio/ref_text anchor for other scenes")
+    ap.add_argument("--clear-anchor", action="store_true", help="remove saved anchor_scene/ref_audio/ref_text before synthesizing (for native-voice models)")
     ap.add_argument("--language", default=None, help="optional language hint forwarded to /v1/audio/speech")
     ap.add_argument("--temperature", type=float, default=None, help="optional sampling temperature forwarded to /v1/audio/speech")
     ap.add_argument("--only", default=None, help="re-synthesize a single scene id (overwriting its clip)")
@@ -707,6 +747,10 @@ def main() -> int:
         tts["voice"] = args.voice
     if args.endpoint is not None:
         tts["endpoint"] = args.endpoint
+    if args.clear_anchor:
+        tts.pop("anchor_scene", None)
+        tts.pop("ref_audio", None)
+        tts.pop("ref_text", None)
     if args.anchor_scene is not None:
         tts["anchor_scene"] = args.anchor_scene
     if args.language is not None:
