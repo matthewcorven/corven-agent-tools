@@ -182,8 +182,9 @@ __MERMAID__
                 white-space:nowrap; min-width:74px; text-align:right; }
   header .meta { font-size:12px; color:var(--dim); margin-left:auto; white-space:nowrap; }
   header .meta.is-fallback { color:var(--warn-ink); font-weight:600; }
-  main { max-width:1080px; margin:0 auto; padding:24px 22px 148px; }
+  main { max-width:1080px; margin:0 auto; padding:24px 22px 148px; overflow-anchor:none; }
   main.has-queue { max-width:1380px; }
+  .hud, .workspace, .stage-pane { overflow-anchor:none; }
   .workspace { display:block; }
   .workspace.has-queue { display:grid; grid-template-columns:320px minmax(0,1fr); gap:18px; align-items:start; }
   @media (max-width:960px) {
@@ -501,7 +502,7 @@ __MERMAID__
 </footer>
 
 <script>
-const DATA = __DATA__;
+let DATA = __DATA__;
 
 function detectDarkMode() {
   const htmlMode = document.documentElement.getAttribute('data-color-mode');
@@ -599,7 +600,10 @@ let expandedRulesNodeId = null;
 let liveChatTarget = null;
 const DEFAULT_FOOTER_HINT = 'Space = play/pause · ←/→ = previous/next scene · briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat';
 const BRIDGE = (typeof window.__WALKTHROUGH_BRIDGE__ === 'object' && window.__WALKTHROUGH_BRIDGE__) ? window.__WALKTHROUGH_BRIDGE__ : null;
-const recordedMetaHtml = $('voice-meta').innerHTML;
+let recordedMetaHtml = $('voice-meta').innerHTML;
+if (BRIDGE && typeof history !== 'undefined' && 'scrollRestoration' in history) {
+  try { history.scrollRestoration = 'manual'; } catch (e) {}
+}
 
 // Deterministic GitHub PR / Issue reference normalizer & linker.
 // Mutates standard PR #000 / Issue #000 / owner/repo#000 / bare #000 text into
@@ -1082,10 +1086,12 @@ function renderQueuePane() {
       const targetDir = b.dataset.packDir;
       const targetId = b.dataset.packId;
       if (targetDir === selectedPackDir || !BRIDGE || !BRIDGE.selectPackUrl) return;
+      const keepY = window.scrollY;
       selectedPackDir = targetDir;
       selectedPackId = targetId;
       persistQueueFilter();
-      b.disabled = true;
+      discoveredPacks = discoveredPacks.map((p) => ({ ...p, active: p.deckDir === targetDir }));
+      renderQueuePane();
       try {
         const resp = await fetch(BRIDGE.selectPackUrl, {
           method: 'POST',
@@ -1093,12 +1099,79 @@ function renderQueuePane() {
           body: JSON.stringify({ deckDir: targetDir, id: targetId }),
         });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        window.location.reload();
+        const body = await resp.json();
+        if (body && body.data) {
+          await applyPackData(body.data, keepY);
+          // Refresh live PR/cadence telemetry in background without shifting scroll
+          loadTelemetry(true);
+        } else {
+          window.location.reload();
+        }
       } catch (e) {
-        b.disabled = false;
+        loadPacks();
       }
     };
   });
+}
+
+async function applyPackData(nextData, preserveScrollY) {
+  if (!nextData || !Array.isArray(nextData.scenes)) return;
+  const targetY = typeof preserveScrollY === 'number' ? preserveScrollY : window.scrollY;
+
+  // 1. Stop any active playback cleanly without triggering auto-scroll
+  pause();
+  useSystem = false;
+  $('voicebtn').textContent = 'Use system voice';
+  wallBase = 0; sysOffset = 0; sysScene = -1; sceneIdx = -1; idx = -1; pending = null;
+  liveA2uiOverride = null;
+
+  // 2. Swap DATA in place (zero page reload, zero HUD collapse, zero scroll jump)
+  DATA = nextData;
+  HAS_MASTER_AUDIO = Boolean(DATA.master_audio);
+  document.title = DATA.title || 'Narrated Walkthrough';
+  const h1 = document.querySelector('#sticky-header h1');
+  if (h1) h1.textContent = DATA.title || '';
+  const ttsModel = (DATA.tts && DATA.tts.model) || 'none';
+  const ttsVoice = (DATA.tts && DATA.tts.voice) || 'none';
+  recordedMetaHtml = 'narration: <b>' + esc(ttsModel) + '</b> &middot; voice <b>' + esc(ttsVoice) + '</b>';
+  updateVoiceMeta();
+
+  if (HAS_MASTER_AUDIO) {
+    player.src = DATA.master_audio;
+  } else {
+    player.removeAttribute('src');
+    try { player.load(); } catch (e) {}
+  }
+
+  // 3. Rescue #ask from previous <nw-closing-scene> before replacing #slides
+  const askEl = $('ask');
+  const stage = $('stage-pane');
+  if (askEl && stage && askEl.parentElement !== stage) {
+    stage.appendChild(askEl);
+  }
+  if (askEl) {
+    askEl.innerHTML = '';
+    askEl.hidden = true;
+  }
+
+  // 4. Rebuild only the right stage (#slides + #ask) in place
+  const slidesHost = $('slides');
+  slidesHost.innerHTML = '';
+  await build();
+  renderAsk();
+  const summaryEl = document.querySelector('#hud .hud-summary');
+  if (summaryEl && DATA.hud && DATA.hud.summary) {
+    summaryEl.textContent = DATA.hud.summary;
+    enhanceDomGitHubRefs(summaryEl);
+  }
+  tick();
+  enhanceAllRefs();
+  syncStickyMedia();
+
+  // 5. Keep exact scroll position steady so queue pane & cursor never jerk
+  if (Math.abs(window.scrollY - targetY) > 1) {
+    window.scrollTo({ top: targetY, behavior: 'instant' });
+  }
 }
 
 async function loadHuds() {
@@ -1147,20 +1220,34 @@ function syncScenesTelemetry(tel) {
 async function loadTelemetry(force) {
   if (!BRIDGE || !BRIDGE.telemetryUrl) return;
   telemetryLoading = true;
-  renderHud();
+  // Never re-render/collapse #hud while loading — only toggle the refresh button label
+  const refBtn = $('hud-refresh-btn');
+  if (refBtn) { refBtn.disabled = true; refBtn.textContent = 'Refreshing…'; }
   try {
     const url = BRIDGE.telemetryUrl + (force ? '?force=1' : '');
     const resp = await fetch(url, { cache: 'no-store' });
     if (!resp.ok) return;
     const data = await resp.json();
     if (data && data.ok) {
+      const keepY = window.scrollY;
+      const hadTelemetry = Boolean(liveTelemetry);
+      const prevHudH = $('hud') ? $('hud').getBoundingClientRect().height : 0;
       liveTelemetry = data;
       syncScenesTelemetry(liveTelemetry);
+      renderHud();
+      enhanceAllRefs();
+      // Compensate scrollY if HUD height changed while user is scrolled below HUD
+      if (hadTelemetry && keepY > 40 && $('hud')) {
+        const deltaH = $('hud').getBoundingClientRect().height - prevHudH;
+        if (Math.abs(deltaH) > 1) {
+          window.scrollTo({ top: Math.max(0, keepY + deltaH), behavior: 'instant' });
+        }
+      }
     }
   } catch (e) {} finally {
     telemetryLoading = false;
-    renderHud();
-    enhanceAllRefs();
+    const btnAfter = $('hud-refresh-btn');
+    if (btnAfter) { btnAfter.disabled = false; btnAfter.textContent = 'Refresh live'; }
     syncStickyMedia();
   }
 }
@@ -1275,12 +1362,32 @@ function connectBridgeEvents() {
     try {
       const msg = JSON.parse(ev.data);
       if (msg && msg.ok) {
+        const keepY = window.scrollY;
+        const hadTelemetry = Boolean(liveTelemetry);
+        const prevHudH = $('hud') ? $('hud').getBoundingClientRect().height : 0;
         liveTelemetry = msg;
         syncScenesTelemetry(liveTelemetry);
         renderHud();
         enhanceAllRefs();
+        if (hadTelemetry && keepY > 40 && $('hud')) {
+          const deltaH = $('hud').getBoundingClientRect().height - prevHudH;
+          if (Math.abs(deltaH) > 1) {
+            window.scrollTo({ top: Math.max(0, keepY + deltaH), behavior: 'instant' });
+          }
+        }
         syncStickyMedia();
       }
+    } catch (e) {}
+  });
+  bridgeSource.addEventListener('pack_switched', (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (!msg || !msg.deckDir || msg.deckDir === selectedPackDir) return;
+      selectedPackDir = msg.deckDir;
+      selectedPackId = msg.packId || selectedPackId;
+      discoveredPacks = discoveredPacks.map((p) => ({ ...p, active: p.deckDir === msg.deckDir }));
+      renderQueuePane();
+      if (msg.data) applyPackData(msg.data, window.scrollY);
     } catch (e) {}
   });
   bridgeSource.addEventListener('deck_reloaded', () => {
@@ -2214,7 +2321,7 @@ function renderHud() {
   });
 }
 
-const HAS_MASTER_AUDIO = Boolean(DATA.master_audio);
+let HAS_MASTER_AUDIO = Boolean(DATA.master_audio);
 if (HAS_MASTER_AUDIO) {
   player.src = DATA.master_audio;
 }

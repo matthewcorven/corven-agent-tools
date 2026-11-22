@@ -9,7 +9,7 @@
 //      is required — waking the yielded Copilot agent deterministically.
 
 import { execFile } from "node:child_process";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -692,6 +692,95 @@ export async function discoverArtifactPacks({ packsRoot, activeDeckDir }) {
         .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
 }
 
+function estimateSyllablesJs(text) {
+    const words = String(text || "").match(/[A-Za-z0-9]+(?:'[A-Za-z]+)?/g) || [];
+    let total = 0;
+    for (const w of words) {
+        const letters = w.toLowerCase().replace(/[^a-z]/g, "");
+        if (!letters) { total += Math.max(1, w.length); continue; }
+        let c = (letters.match(/[aeiouy]+/g) || []).length;
+        if (letters.endsWith("e") && c > 1) c -= 1;
+        total += Math.max(1, c);
+    }
+    return Math.max(1, total);
+}
+
+/**
+ * Load a built pack's runtime JSON payload for zero-reload in-place SPA switching.
+ */
+export async function buildPackRuntimeData(deckDir, fallbackTitle = "Narrated Walkthrough") {
+    if (!deckDir) return null;
+    const resolved = path.resolve(deckDir);
+    const tl = JSON.parse(await readFile(path.join(resolved, "timeline.json"), "utf8"));
+    const scenes = Array.isArray(tl.scenes) ? tl.scenes : [];
+    const cues = [];
+    let running = 0;
+    const normScenes = scenes.map((s) => {
+        const dur = Number(s.duration) || 1;
+        const start = typeof s.start === "number" ? s.start : Math.round(running * 1000) / 1000;
+        running = start + dur;
+        const caps = Array.isArray(s.captions) && s.captions.length ? s.captions : [s.narration || s.title || ""];
+        const weights = caps.map((c) => estimateSyllablesJs(c));
+        const totalW = weights.reduce((a, b) => a + b, 0) || 1;
+        let cur = start;
+        const endScene = start + dur;
+        caps.forEach((text, i) => {
+            const endT = i === caps.length - 1 ? endScene : cur + dur * (weights[i] / totalW);
+            cues.push({
+                t: Math.round(cur * 1000) / 1000,
+                end: Math.round(endT * 1000) / 1000,
+                text,
+                scene: s.id,
+            });
+            cur = endT;
+        });
+        return {
+            id: s.id,
+            title: s.title,
+            mermaid: s.mermaid,
+            start,
+            duration: dur,
+            audio: s.audio,
+            narration: s.narration,
+            ...(s.kind ? { kind: s.kind } : {}),
+            ...(s.choices ? { choices: s.choices } : {}),
+            ...(s.meta ? { meta: s.meta } : {}),
+        };
+    });
+
+    let masterUrl = null;
+    const masterRel = tl.master_audio || "audio/master.wav";
+    const masterFile = path.join(resolved, masterRel);
+    try {
+        const bytes = await readFile(masterFile);
+        const sha8 = createHash("sha256").update(bytes).digest("hex").slice(0, 8);
+        masterUrl = `${masterRel}?v=${sha8}`;
+    } catch {
+        masterUrl = null;
+    }
+
+    let repo = typeof tl.repo === "string" && tl.repo.includes("/") ? tl.repo : null;
+    if (!repo && Array.isArray(tl.hud?.artifacts)) {
+        for (const a of tl.hud.artifacts) {
+            const m = String(a?.url || "").match(/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:\/|$)/i);
+            if (m) { repo = m[1]; break; }
+        }
+    }
+
+    return {
+        title: tl.title || fallbackTitle,
+        ...(repo ? { repo } : {}),
+        master_audio: masterUrl,
+        scenes: normScenes,
+        cues,
+        total: typeof tl.total_duration === "number" ? tl.total_duration : Math.round(running * 1000) / 1000,
+        disposition: tl.disposition || null,
+        hud: tl.hud || null,
+        a2ui: tl.a2ui || null,
+        tts: tl.tts ? { model: tl.tts.model || "none", voice: tl.tts.voice || "none" } : null,
+    };
+}
+
 /**
  * Discover all browsable repository HUDs (sibling `<repo>-artifacts/` directories
  * plus the currently active HUD root) so the Architect can switch across HUDs.
@@ -1088,6 +1177,14 @@ export async function startWalkthroughServer({
                 return;
             }
 
+            if (req.method === "GET" && url.pathname === "/pack-data") {
+                const data = state.deckDir
+                    ? await buildPackRuntimeData(state.deckDir, state.title).catch(() => null)
+                    : null;
+                sendJson(res, 200, { ok: true, deckDir: state.deckDir, data });
+                return;
+            }
+
             if (req.method === "POST" && url.pathname === "/packs/select") {
                 const provided = req.headers["x-canvas-token"];
                 if (!tokensMatch(token, typeof provided === "string" ? provided : "")) {
@@ -1111,16 +1208,20 @@ export async function startWalkthroughServer({
                 state.telemetryCache = null;
                 state.telemetryCachedAt = 0;
                 state.telemetryFingerprint = "";
-                runtime.broadcast("deck_reloaded", {
+                const data = await buildPackRuntimeData(matched.deckDir, matched.title).catch(() => null);
+                // Broadcast pack_switched (in-place SPA swap, zero scroll jump) instead of full reload
+                runtime.broadcast("pack_switched", {
                     deckDir: matched.deckDir,
                     packId: matched.id,
                     title: matched.title,
+                    data,
                     timestamp: new Date().toISOString(),
                 });
                 sendJson(res, 200, {
                     ok: true,
                     dispatchedToAgent: false,
                     pack: { ...matched, active: true },
+                    data,
                 });
                 return;
             }

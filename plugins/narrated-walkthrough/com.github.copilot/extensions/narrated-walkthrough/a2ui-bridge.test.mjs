@@ -233,6 +233,8 @@ test("A-HUD landscape discovers runs.jsonl artifact packs and switches packs det
             const swJson = await okSwitch.json();
             assert.equal(swJson.dispatchedToAgent, false);
             assert.equal(swJson.pack.kind, "standup");
+            assert.equal(swJson.data.title, "Daily Standup Brief");
+            assert.equal(swJson.data.scenes.length, 2);
             assert.equal(sent.length, 0);
 
             const htmlAfter = await (await fetch(srv.url)).text();
