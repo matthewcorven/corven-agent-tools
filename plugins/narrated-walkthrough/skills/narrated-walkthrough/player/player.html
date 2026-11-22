@@ -349,10 +349,9 @@ __MERMAID__
   a.gh-ref .gh-ref-sep { opacity:.55; padding:0 1px; }
   a.gh-ref .gh-ref-num { font-weight:700; }
   a.gh-ref .gh-ref-ext { font-size:.82em; opacity:.72; margin-left:1px; }
-  .diagram svg a.gh-ref { padding:0 4px; font-size:12px; background:rgba(255,255,255,.78);
-                          color:#1c4da1 !important; border-color:rgba(61,111,208,.45); }
-  .diagram svg a.gh-ref-issue { color:#166534 !important; border-color:rgba(31,107,56,.45); }
-  .diagram svg a.gh-ref span { color:inherit !important; }
+  .scene-refs-bar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:10px; }
+  .scene-refs-label { font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--dim);
+                      font-weight:700; margin-right:2px; }
   .diagram { margin:16px 0 4px; display:flex; justify-content:center; padding:12px;
              border-radius:10px; background:var(--surface-sub); }
   .diagram svg { max-width:100%; height:auto; }
@@ -374,8 +373,8 @@ __MERMAID__
            border-top:1px solid var(--line); padding:14px 22px; backdrop-filter:blur(8px); z-index:9; }
   .cap { max-width:1080px; margin:0 auto; font-size:17px; line-height:1.5; min-height:52px;
          display:flex; align-items:center; color:var(--ink); }
-  .cap span { opacity:0; transform:translateY(4px); transition:opacity .22s, transform .22s; }
-  .cap span.on { opacity:1; transform:none; }
+  .cap > span { opacity:0; transform:translateY(4px); transition:opacity .22s, transform .22s; }
+  .cap > span.on { opacity:1; transform:none; }
   .hint { max-width:1080px; margin:6px auto 0; font-size:12px; color:var(--dim); }
 
   /* A2UI v1.0 / Disposition Choice Surface */
@@ -679,7 +678,50 @@ function linkifyGitHubRefs(rawText, ctxOverride) {
   return out;
 }
 
-const SKIP_REF_TAGS = new Set(['A', 'BUTTON', 'CODE', 'PRE', 'SCRIPT', 'STYLE', 'DEFS', 'TITLE', 'INPUT', 'TEXTAREA', 'SUMMARY']);
+function extractGitHubRefs(rawText, ctxOverride) {
+  const text = String(rawText ?? '');
+  const ctx = ctxOverride || getRepoRefContext();
+  if (!ctx.defaultSlug && !/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]/.test(text)) return [];
+  const seen = new Set();
+  const refs = [];
+  GH_REF_RE.lastIndex = 0;
+  let m;
+  while ((m = GH_REF_RE.exec(text)) !== null) {
+    let slug = null;
+    let explicitKind = null;
+    let num = null;
+    if (m[1] && m[2]) {
+      slug = m[1];
+      num = m[2];
+    } else if (m[3] && m[7]) {
+      const shortName = m[3];
+      const sep = m[4] || '';
+      const knownSlug = ctx.slugByShort.get(shortName.toLowerCase());
+      if (knownSlug) slug = knownSlug;
+      else if (sep === '#' && ctx.defaultOwner) slug = ctx.defaultOwner + '/' + shortName;
+      else slug = ctx.defaultSlug;
+      if (m[5]) explicitKind = 'pr';
+      else if (m[6]) explicitKind = 'issue';
+      num = m[7];
+    } else if (m[10]) {
+      slug = ctx.defaultSlug;
+      explicitKind = m[8] ? 'pr' : 'issue';
+      num = m[10];
+    } else if (m[11]) {
+      slug = ctx.defaultSlug;
+      num = m[11];
+    }
+    if (!slug || !num) continue;
+    const key = slug.toLowerCase() + '#' + num;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const kind = explicitKind || ctx.kindByKey.get(key) || 'issue';
+    refs.push({ slug, kind, num });
+  }
+  return refs;
+}
+
+const SKIP_REF_TAGS = new Set(['A', 'BUTTON', 'CODE', 'PRE', 'SCRIPT', 'STYLE', 'SVG', 'DEFS', 'TITLE', 'INPUT', 'TEXTAREA', 'SUMMARY']);
 
 function enhanceDomGitHubRefs(rootEl, ctxOverride) {
   if (!rootEl || typeof document.createTreeWalker !== 'function') return;
@@ -743,6 +785,9 @@ function enhanceAllRefs() {
   enhanceDomGitHubRefs($('slides'), ctx);
   enhanceDomGitHubRefs($('ask'), ctx);
   enhanceDomGitHubRefs($('cap'), ctx);
+  for (const comp of sceneComponents) {
+    if (comp && typeof comp.renderDiagramRefs === 'function') comp.renderDiagramRefs(ctx);
+  }
 }
 
 window.linkifyGitHubRefs = linkifyGitHubRefs;
@@ -1013,7 +1058,6 @@ async function renderDiagrams() {
     } catch (e) {
       target.textContent = 'diagram failed: ' + e.message;
     }
-    enhanceDomGitHubRefs(target);
   }
 }
 
@@ -1176,6 +1220,26 @@ class WalkthroughSceneBase extends HTMLElement {
     });
   }
 
+  renderDiagramRefs(ctxOverride) {
+    const slot = this.querySelector(':scope > .scene-refs-host');
+    if (!slot || !this._sceneRef) return;
+    // Strip Mermaid style lines so hex colors never enter extraction
+    const mermaidClean = String(this._sceneRef.mermaid || '')
+      .split(/\r?\n/)
+      .filter((line) => !/^\s*style\s+/i.test(line))
+      .join('\n');
+    const refs = extractGitHubRefs(mermaidClean, ctxOverride);
+    if (!refs.length) {
+      slot.innerHTML = '';
+      return;
+    }
+    slot.innerHTML =
+      '<div class="scene-refs-bar" role="group" aria-label="Referenced pull requests and issues">' +
+        '<span class="scene-refs-label">References</span>' +
+        refs.map((r) => buildGhRefHtml(r)).join('') +
+      '</div>';
+  }
+
   renderBase() {
     this._rendered = true;
     const tag = this.tagName.toLowerCase();
@@ -1187,8 +1251,10 @@ class WalkthroughSceneBase extends HTMLElement {
       '<h2>' + esc(this.header) + '</h2>' +
       '<div class="scene-before-host">' + this.renderSpecializedBefore() + '</div>' +
       '<div class="diagram" id="d-' + esc(this.sceneId) + '"></div>' +
+      '<div class="scene-refs-host"></div>' +
       '<div class="scene-choices-host"></div>' +
       '<div class="scene-after-host">' + this.renderSpecializedAfter() + '</div>';
+    this.renderDiagramRefs();
     this.renderInlineChoices();
     this.bindSpecializedEvents();
     enhanceDomGitHubRefs(this);
