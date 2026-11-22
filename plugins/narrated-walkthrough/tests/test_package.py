@@ -493,6 +493,14 @@ class PackageTests(unittest.TestCase):
             'loadTelemetry',
             'pauseForLiveChat',
             'HAS_MASTER_AUDIO',
+            'class WalkthroughSceneBase extends HTMLElement',
+            'nw-opening-scene',
+            'nw-comparison-scene',
+            'nw-evidence-scene',
+            'nw-narrative-scene',
+            'nw-closing-scene',
+            'openingContext',
+            'closingContext',
             'briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat',
         ):
             self.assertIn(token, html, f"player.html missing expected UI hook: {token}")
@@ -547,6 +555,37 @@ class PackageTests(unittest.TestCase):
             ],
         }
         self.assertEqual(_shape_errors(tl, schema), [])
+
+    def test_semantic_scene_component_fields_conform_and_render(self):
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        tl = {
+            "title": "Semantic components test",
+            "scenes": [
+                {
+                    "id": "s1", "title": "Opening", "mermaid": "flowchart LR\n    A",
+                    "narration": "Opening claim.", "captions": ["Opening claim."],
+                    "audio": "audio/s1.wav", "duration": 3.0, "start": 0.0,
+                    "kind": "opening",
+                    "choices": [{"label": "Inspect diff", "action": "inspect_diff", "variant": "secondary", "context": {"pr": 351}}],
+                    "meta": {"pr": 351, "phase": 1},
+                },
+                {
+                    "id": "s2", "title": "Closing", "mermaid": "flowchart LR\n    B",
+                    "narration": "Tell me which way to go.", "captions": ["Tell me which way to go."],
+                    "audio": "audio/s2.wav", "duration": 3.0, "start": 3.0,
+                    "kind": "closing",
+                    "meta": {"readyForSteer": True},
+                },
+            ],
+            "total_duration": 6.0,
+            "disposition": {"prompt": "Next?", "options": ["Option A"]},
+        }
+        self.assertEqual(_shape_errors(tl, schema), [])
+        tl["_mermaid_resolved"] = "<script></script>"
+        html = bn.render(tl)
+        self.assertIn('"kind": "opening"', html)
+        self.assertIn('"action": "inspect_diff"', html)
+        self.assertIn('"readyForSteer": true', html)
 
     def test_cli_validate_runs(self):
         result = subprocess.run(

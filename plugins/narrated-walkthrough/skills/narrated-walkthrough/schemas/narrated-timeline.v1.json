@@ -238,6 +238,30 @@
           "description": "DERIVED. Written by the builder as the running sum of previous durations. Never author this; a test asserts the cumulative invariant when present.",
           "type": "number",
           "minimum": 0
+        },
+        "kind": {
+          "description": "Optional semantic scene component role. Maps to a custom Web Component subclass of WalkthroughSceneBase: opening (<nw-opening-scene>), comparison (<nw-comparison-scene>), evidence (<nw-evidence-scene>), narrative (<nw-narrative-scene>), or closing (<nw-closing-scene>). When omitted, inferred deterministically from scene position and content.",
+          "type": "string",
+          "enum": ["opening", "narrative", "comparison", "evidence", "closing"]
+        },
+        "choices": {
+          "description": "Optional inline contextual choices inherited by every WalkthroughSceneBase component, dispatched through the deterministic A2UI callback bridge.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "action"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1 },
+              "action": { "type": "string", "minLength": 1 },
+              "variant": { "type": "string" },
+              "context": { "type": "object" }
+            }
+          }
+        },
+        "meta": {
+          "description": "Optional specialized object reference payload bound to the semantic scene subclass (for example openingContext, comparisonContext, evidenceContext, or closingContext).",
+          "type": "object"
         }
       }
     }

@@ -591,6 +591,9 @@ def render(tl: dict) -> str:
                     "duration": s["duration"],
                     "audio": s["audio"],
                     "narration": s["narration"],
+                    **({"kind": s["kind"]} if s.get("kind") else {}),
+                    **({"choices": s["choices"]} if s.get("choices") else {}),
+                    **({"meta": s["meta"]} if s.get("meta") else {}),
                 }
                 for s in scenes
             ],

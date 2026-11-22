@@ -306,11 +306,34 @@ __MERMAID__
   .hud-link:hover { border-color:var(--accent); background:var(--surface-hover); }
   .hud-status { font-size:12px; color:var(--ok-ink); margin-top:8px; min-height:18px; }
 
-  .slide { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:26px 28px;
+  nw-opening-scene, nw-narrative-scene, nw-comparison-scene, nw-evidence-scene, nw-closing-scene { display:block; }
+  .slide { display:block; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:26px 28px;
            margin-bottom:20px; opacity:.42; transition:opacity .35s, box-shadow .35s, transform .35s; }
-  .slide.active { opacity:1; box-shadow:var(--shadow-lg); transform:translateY(-1px); }
+  .slide.active, .slide[active] { opacity:1; box-shadow:var(--shadow-lg); transform:translateY(-1px); }
   .slide h2 { font-size:22px; margin:0 0 4px; font-weight:650; color:var(--ink); }
+  .slide-head-meta { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:4px; }
   .slide .n { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:.09em; }
+  .scene-tag { font-size:10.5px; font-family:var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+               padding:2px 8px; border-radius:999px; background:var(--pill-bg); color:var(--dim);
+               border:1px solid var(--line); font-weight:600; }
+  nw-opening-scene .scene-tag { background:var(--accent-soft-bg); color:var(--accent-soft-ink); border-color:var(--accent-soft-border); }
+  nw-comparison-scene .scene-tag { background:var(--warn-bg); color:var(--warn-ink); border-color:var(--warn-border); }
+  nw-evidence-scene .scene-tag { background:var(--ok-bg); color:var(--ok-ink); border-color:var(--ok-border); }
+  nw-closing-scene .scene-tag { background:var(--ask-bg); color:var(--warn-ink); border-color:var(--ask-border); }
+  .scene-context-strip { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:10px 0 4px; }
+  .scene-chip { font-size:11.5px; padding:3px 9px; border-radius:999px; background:var(--surface-sub);
+                border:1px solid var(--line); color:var(--dim); font-weight:600; text-decoration:none; }
+  a.scene-chip { color:var(--accent); }
+  a.scene-chip:hover { border-color:var(--accent); background:var(--surface-hover); }
+  .scene-chip.ok { background:var(--ok-bg); color:var(--ok-ink); border-color:var(--ok-border); }
+  .scene-chip.warn { background:var(--warn-bg); color:var(--warn-ink); border-color:var(--warn-border); }
+  .scene-choices { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:14px;
+                   padding-top:12px; border-top:1px solid var(--line); }
+  .scene-choices-label { font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--dim);
+                         font-weight:700; margin-right:2px; }
+  .scene-choice-btn { font-size:12.5px; padding:6px 12px; border-radius:8px; }
+  .scene-closing-slot { margin-top:18px; }
+  .scene-closing-slot .ask { margin-bottom:0; }
   .diagram { margin:16px 0 4px; display:flex; justify-content:center; padding:12px;
              border-radius:10px; background:var(--surface-sub); }
   .diagram svg { max-width:100%; height:auto; }
@@ -544,6 +567,15 @@ async function loadPacks() {
   } catch (e) {}
 }
 
+function syncScenesTelemetry(tel) {
+  if (!tel) return;
+  for (const comp of sceneComponents) {
+    if (comp && typeof comp.syncTelemetry === 'function') {
+      comp.syncTelemetry(tel);
+    }
+  }
+}
+
 async function loadTelemetry(force) {
   if (!BRIDGE || !BRIDGE.telemetryUrl) return;
   telemetryLoading = true;
@@ -555,6 +587,7 @@ async function loadTelemetry(force) {
     const data = await resp.json();
     if (data && data.ok) {
       liveTelemetry = data;
+      syncScenesTelemetry(liveTelemetry);
     }
   } catch (e) {} finally {
     telemetryLoading = false;
@@ -674,6 +707,7 @@ function connectBridgeEvents() {
       const msg = JSON.parse(ev.data);
       if (msg && msg.ok) {
         liveTelemetry = msg;
+        syncScenesTelemetry(liveTelemetry);
         renderHud();
         syncStickyMedia();
       }
@@ -753,16 +787,463 @@ async function renderDiagrams() {
   }
 }
 
+// Semantic Light-DOM Web Component hierarchy for walkthrough scenes.
+// Every scene inherits base attributes (position, total-scenes, header, start-time,
+// duration, active, role-kind) and JS object properties (sceneRef, headerMeta, choices).
+// Specialized subclasses (opening, comparison, evidence, narrative, closing) extend
+// WalkthroughSceneBase with direct object references to their own specialized contexts.
+const sceneComponents = [];
+
+class WalkthroughSceneBase extends HTMLElement {
+  static get observedAttributes() {
+    return ['scene-id', 'position', 'total-scenes', 'header', 'start-time', 'duration', 'active', 'role-kind'];
+  }
+
+  constructor() {
+    super();
+    this._sceneRef = null;
+    this._choices = [];
+    this._rendered = false;
+  }
+
+  get sceneId() { return this.getAttribute('scene-id') || ''; }
+  set sceneId(v) { this.setAttribute('scene-id', String(v ?? '')); }
+
+  get position() { return Number(this.getAttribute('position') || 0); }
+  set position(v) { this.setAttribute('position', String(v)); }
+
+  get totalScenes() { return Number(this.getAttribute('total-scenes') || 0); }
+  set totalScenes(v) { this.setAttribute('total-scenes', String(v)); }
+
+  get header() { return this.getAttribute('header') || ''; }
+  set header(v) { this.setAttribute('header', String(v ?? '')); }
+
+  get startTime() { return Number(this.getAttribute('start-time') || 0); }
+  set startTime(v) { this.setAttribute('start-time', String(v)); }
+
+  get duration() { return Number(this.getAttribute('duration') || 0); }
+  set duration(v) { this.setAttribute('duration', String(v)); }
+
+  get roleKind() { return this.getAttribute('role-kind') || 'narrative'; }
+  set roleKind(v) { this.setAttribute('role-kind', String(v ?? 'narrative')); }
+
+  get active() { return this.hasAttribute('active'); }
+  set active(flag) {
+    const on = Boolean(flag);
+    this.toggleAttribute('active', on);
+    this.classList.toggle('active', on);
+  }
+
+  get sceneRef() { return this._sceneRef; }
+  set sceneRef(obj) {
+    this._sceneRef = obj || null;
+    if (obj) {
+      this.sceneId = obj.id;
+      this.header = obj.title;
+      this.startTime = obj.start;
+      this.duration = obj.duration;
+      if (Array.isArray(obj.choices)) this._choices = obj.choices;
+    }
+  }
+
+  get headerMeta() {
+    return {
+      sceneId: this.sceneId,
+      position: this.position,
+      totalScenes: this.totalScenes,
+      startTime: this.startTime,
+      duration: this.duration,
+      roleKind: this.roleKind,
+      header: this.header,
+      tagName: this.tagName.toLowerCase(),
+    };
+  }
+
+  get choices() { return this._choices; }
+  set choices(list) {
+    this._choices = Array.isArray(list) ? list : [];
+    if (this._rendered) this.renderInlineChoices();
+  }
+
+  connectedCallback() {
+    this.classList.add('slide');
+    if (this.sceneId && !this.id) this.id = 's-' + this.sceneId;
+    if (!this._rendered) this.renderBase();
+  }
+
+  attributeChangedCallback(name, oldVal, newVal) {
+    if (oldVal === newVal) return;
+    if (name === 'active') {
+      this.classList.toggle('active', newVal !== null);
+    } else if (this._rendered && (name === 'header' || name === 'position' || name === 'total-scenes' || name === 'start-time')) {
+      const nEl = this.querySelector(':scope > .slide-head-meta > .n');
+      const hEl = this.querySelector(':scope > h2');
+      if (nEl) nEl.innerHTML = 'Scene ' + this.position + ' of ' + this.totalScenes + ' &middot; ' + fmt(this.startTime);
+      if (hEl) hEl.textContent = this.header;
+    }
+  }
+
+  renderSpecializedBefore() { return ''; }
+  renderSpecializedAfter() { return ''; }
+  bindSpecializedEvents() {}
+  specializedContextName() { return null; }
+  specializedContextRef() { return null; }
+
+  renderInlineChoices() {
+    const slot = this.querySelector(':scope > .scene-choices-host');
+    if (!slot) return;
+    // Closing scene owns its full A2UI surface; non-closing scenes render compact inherited choice chips
+    if (this.roleKind === 'closing' || !this._choices.length) {
+      slot.innerHTML = '';
+      return;
+    }
+    slot.innerHTML =
+      '<div class="scene-choices" role="group" aria-label="Contextual scene choices">' +
+        '<span class="scene-choices-label">Scene choices</span>' +
+        this._choices.map((ch, idx) =>
+          '<button type="button" class="scene-choice-btn' + (ch.variant === 'primary' ? ' primary' : '') +
+          '" data-scene-choice="' + idx + '">' + esc(ch.label) + '</button>'
+        ).join('') +
+      '</div>';
+    slot.querySelectorAll('button[data-scene-choice]').forEach((btn) => {
+      btn.onclick = async () => {
+        const ch = this._choices[Number(btn.dataset.sceneChoice)];
+        if (!ch) return;
+        const payload = {
+          version: 'v1.0',
+          label: ch.label,
+          sceneId: 's-' + this.sceneId,
+          action: {
+            name: ch.action || 'select_scene_choice',
+            surfaceId: 'scene-' + this.sceneId,
+            sourceComponentId: 'choice-' + this.sceneId + '-' + btn.dataset.sceneChoice,
+            context: { sceneId: this.sceneId, position: this.position, ...(ch.context || {}) },
+          },
+        };
+        lastA2uiAction = payload;
+        window.dispatchEvent(new CustomEvent('a2ui:action', { detail: payload }));
+        if (BRIDGE) {
+          pauseForLiveChat(ch.label);
+          btn.disabled = true;
+          try {
+            const res = await sendBridgeCallback(payload);
+            if (res.result) { lastDetResult = res.result; renderHud(); }
+            btn.classList.add('copied');
+            btn.textContent = res.dispatchedToAgent ? 'sent to agent' : 'computed';
+            setTimeout(() => { btn.classList.remove('copied'); btn.textContent = ch.label; }, 2000);
+          } catch (e) {
+            btn.textContent = 'failed';
+          } finally {
+            btn.disabled = false;
+          }
+        } else {
+          try { await navigator.clipboard.writeText(ch.label); } catch (e) {}
+          btn.classList.add('copied');
+          btn.textContent = 'copied';
+          setTimeout(() => { btn.classList.remove('copied'); btn.textContent = ch.label; }, 1600);
+        }
+      };
+    });
+  }
+
+  renderBase() {
+    this._rendered = true;
+    const tag = this.tagName.toLowerCase();
+    this.innerHTML =
+      '<div class="slide-head-meta">' +
+        '<div class="n">Scene ' + this.position + ' of ' + this.totalScenes + ' &middot; ' + fmt(this.startTime) + '</div>' +
+        '<span class="scene-tag" title="Semantic Web Component inheriting WalkthroughSceneBase">&lt;' + esc(tag) + '&gt;</span>' +
+      '</div>' +
+      '<h2>' + esc(this.header) + '</h2>' +
+      '<div class="scene-before-host">' + this.renderSpecializedBefore() + '</div>' +
+      '<div class="diagram" id="d-' + esc(this.sceneId) + '"></div>' +
+      '<div class="scene-choices-host"></div>' +
+      '<div class="scene-after-host">' + this.renderSpecializedAfter() + '</div>';
+    this.renderInlineChoices();
+    this.bindSpecializedEvents();
+  }
+
+  describeComponent() {
+    const ctxName = this.specializedContextName();
+    return {
+      tagName: this.tagName.toLowerCase(),
+      inheritsBase: this instanceof WalkthroughSceneBase,
+      sceneId: this.sceneId,
+      position: this.position,
+      totalScenes: this.totalScenes,
+      header: this.header,
+      roleKind: this.roleKind,
+      active: this.active,
+      choiceCount: this.choices.length,
+      specializedRef: ctxName,
+      hasSpecializedObject: Boolean(this.specializedContextRef()),
+    };
+  }
+}
+
+class WalkthroughOpeningScene extends WalkthroughSceneBase {
+  constructor() {
+    super();
+    this._openingContext = null;
+  }
+
+  get openingContext() { return this._openingContext; }
+  set openingContext(obj) {
+    this._openingContext = obj || null;
+    this.refreshOpeningStrip();
+  }
+
+  specializedContextName() { return 'openingContext'; }
+  specializedContextRef() { return this._openingContext; }
+
+  syncTelemetry(tel) {
+    if (!this._openingContext) this._openingContext = {};
+    this._openingContext.liveTelemetry = tel;
+    this.refreshOpeningStrip();
+  }
+
+  renderSpecializedBefore() {
+    return this._buildOpeningStripHtml();
+  }
+
+  _buildOpeningStripHtml() {
+    const ctx = this._openingContext;
+    if (!ctx) return '';
+    const chips = [];
+    if (ctx.packKind) chips.push('<span class="scene-chip ok">' + esc(formatPackKind(ctx.packKind)) + '</span>');
+    if (ctx.producer) chips.push('<span class="scene-chip">' + esc(ctx.producer) + '</span>');
+    if (typeof ctx.totalDuration === 'number' && ctx.totalDuration > 0) {
+      chips.push('<span class="scene-chip">Runtime ' + esc(fmt(ctx.totalDuration)) + '</span>');
+    }
+    const tel = ctx.liveTelemetry;
+    if (tel && tel.packFreshness && tel.packFreshness.packPrState) {
+      chips.push('<span class="scene-chip ' + (tel.packFreshness.packPrState === 'MERGED' ? 'ok' : 'warn') + '">Live PR: ' + esc(tel.packFreshness.packPrState) + '</span>');
+    }
+    if (tel && tel.branch && tel.headSha) {
+      chips.push('<span class="scene-chip">' + esc(tel.branch + ' @ ' + tel.headSha) + '</span>');
+    }
+    return chips.length ? '<div class="scene-context-strip" data-opening-strip>' + chips.join('') + '</div>' : '';
+  }
+
+  refreshOpeningStrip() {
+    const host = this.querySelector(':scope > .scene-before-host');
+    if (host) host.innerHTML = this._buildOpeningStripHtml();
+  }
+}
+
+class WalkthroughComparisonScene extends WalkthroughSceneBase {
+  constructor() {
+    super();
+    this._comparisonContext = null;
+  }
+
+  get comparisonContext() { return this._comparisonContext; }
+  set comparisonContext(obj) {
+    this._comparisonContext = obj || null;
+    const host = this.querySelector(':scope > .scene-before-host');
+    if (host) host.innerHTML = this.renderSpecializedBefore();
+  }
+
+  specializedContextName() { return 'comparisonContext'; }
+  specializedContextRef() { return this._comparisonContext; }
+
+  renderSpecializedBefore() {
+    const ctx = this._comparisonContext;
+    if (!ctx) return '';
+    const chips = [];
+    if (ctx.beforeLabel || ctx.afterLabel) {
+      chips.push('<span class="scene-chip warn">' + esc((ctx.beforeLabel || 'Before') + ' → ' + (ctx.afterLabel || 'After')) + '</span>');
+    }
+    (ctx.highlights || []).forEach((h) => chips.push('<span class="scene-chip">' + esc(h) + '</span>'));
+    return chips.length ? '<div class="scene-context-strip" data-comparison-strip>' + chips.join('') + '</div>' : '';
+  }
+}
+
+class WalkthroughEvidenceScene extends WalkthroughSceneBase {
+  constructor() {
+    super();
+    this._evidenceContext = null;
+  }
+
+  get evidenceContext() { return this._evidenceContext; }
+  set evidenceContext(obj) {
+    this._evidenceContext = obj || null;
+    this.refreshEvidenceStrip();
+  }
+
+  specializedContextName() { return 'evidenceContext'; }
+  specializedContextRef() { return this._evidenceContext; }
+
+  syncTelemetry(tel) {
+    if (!this._evidenceContext) this._evidenceContext = { artifacts: [] };
+    if (Array.isArray(tel.artifacts) && tel.artifacts.length) {
+      this._evidenceContext.artifacts = tel.artifacts;
+    }
+    this._evidenceContext.liveStats = tel.stats || [];
+    this.refreshEvidenceStrip();
+  }
+
+  renderSpecializedAfter() {
+    return this._buildEvidenceHtml();
+  }
+
+  _buildEvidenceHtml() {
+    const ctx = this._evidenceContext;
+    if (!ctx) return '';
+    const arts = (ctx.artifacts || []).slice(0, 4);
+    if (!arts.length) return '';
+    return '<div class="scene-context-strip" data-evidence-strip>' +
+      arts.map((a) => {
+        const href = safeUrl(a.url);
+        return href
+          ? '<a class="scene-chip" href="' + esc(href) + '" target="_blank" rel="noopener noreferrer">' + esc(a.label) + '</a>'
+          : '<span class="scene-chip">' + esc(a.label) + '</span>';
+      }).join('') +
+    '</div>';
+  }
+
+  refreshEvidenceStrip() {
+    const host = this.querySelector(':scope > .scene-after-host');
+    if (host) host.innerHTML = this._buildEvidenceHtml();
+  }
+}
+
+class WalkthroughNarrativeScene extends WalkthroughSceneBase {
+  constructor() {
+    super();
+    this._narrativeContext = null;
+  }
+
+  get narrativeContext() { return this._narrativeContext; }
+  set narrativeContext(obj) { this._narrativeContext = obj || null; }
+
+  specializedContextName() { return 'narrativeContext'; }
+  specializedContextRef() { return this._narrativeContext; }
+}
+
+class WalkthroughClosingScene extends WalkthroughSceneBase {
+  constructor() {
+    super();
+    this._closingContext = null;
+  }
+
+  get closingContext() { return this._closingContext; }
+  set closingContext(obj) {
+    this._closingContext = obj || null;
+    if (obj && Array.isArray(obj.choices)) {
+      this._choices = obj.choices;
+    }
+  }
+
+  specializedContextName() { return 'closingContext'; }
+  specializedContextRef() { return this._closingContext; }
+
+  renderSpecializedAfter() {
+    return '<div class="scene-closing-slot" data-closing-slot></div>';
+  }
+
+  mountActionSurface(askEl) {
+    const slot = this.querySelector(':scope > .scene-after-host > .scene-closing-slot');
+    if (slot && askEl && askEl.parentElement !== slot) {
+      slot.appendChild(askEl);
+    }
+  }
+}
+
+if (typeof customElements !== 'undefined') {
+  if (!customElements.get('nw-opening-scene')) customElements.define('nw-opening-scene', WalkthroughOpeningScene);
+  if (!customElements.get('nw-comparison-scene')) customElements.define('nw-comparison-scene', WalkthroughComparisonScene);
+  if (!customElements.get('nw-evidence-scene')) customElements.define('nw-evidence-scene', WalkthroughEvidenceScene);
+  if (!customElements.get('nw-narrative-scene')) customElements.define('nw-narrative-scene', WalkthroughNarrativeScene);
+  if (!customElements.get('nw-closing-scene')) customElements.define('nw-closing-scene', WalkthroughClosingScene);
+}
+
+window.WalkthroughSceneBase = WalkthroughSceneBase;
+window.WalkthroughOpeningScene = WalkthroughOpeningScene;
+window.WalkthroughComparisonScene = WalkthroughComparisonScene;
+window.WalkthroughEvidenceScene = WalkthroughEvidenceScene;
+window.WalkthroughNarrativeScene = WalkthroughNarrativeScene;
+window.WalkthroughClosingScene = WalkthroughClosingScene;
+window.sceneComponents = sceneComponents;
+
+function resolveSceneKind(scene, index, total) {
+  if (scene.kind) return scene.kind;
+  if (index === 0) return 'opening';
+  if (total > 1 && index === total - 1) return 'closing';
+  const m = String(scene.mermaid || '');
+  if (/subgraph\s+Before\b/i.test(m) && /subgraph\s+After\b/i.test(m)) return 'comparison';
+  const hay = (String(scene.id || '') + ' ' + String(scene.title || '')).toLowerCase();
+  if (/\b(proof|ci|evidence|guard|budget|flake|risk|parity)\b/.test(hay)) return 'evidence';
+  return 'narrative';
+}
+
+function tagForSceneKind(kind) {
+  switch (kind) {
+    case 'opening': return 'nw-opening-scene';
+    case 'comparison': return 'nw-comparison-scene';
+    case 'evidence': return 'nw-evidence-scene';
+    case 'closing': return 'nw-closing-scene';
+    default: return 'nw-narrative-scene';
+  }
+}
+
 async function build() {
   const host = $('slides');
-  for (let i = 0; i < DATA.scenes.length; i++) {
+  sceneComponents.length = 0;
+  const total = DATA.scenes.length;
+  for (let i = 0; i < total; i++) {
     const s = DATA.scenes[i];
-    const el = document.createElement('section');
-    el.className = 'slide'; el.id = 's-' + s.id;
-    el.innerHTML = '<div class="n">Scene ' + (i+1) + ' of ' + DATA.scenes.length +
-                   ' &middot; ' + fmt(s.start) + '</div><h2>' + esc(s.title) + '</h2>' +
-                   '<div class="diagram" id="d-' + s.id + '"></div>';
+    const kind = resolveSceneKind(s, i, total);
+    const el = document.createElement(tagForSceneKind(kind));
+    el.id = 's-' + s.id;
+    el.sceneRef = s;
+    el.position = i + 1;
+    el.totalScenes = total;
+    el.roleKind = kind;
+
+    if (kind === 'opening') {
+      el.openingContext = {
+        packKind: (DATA.hud && DATA.hud.pack_kind) || null,
+        producer: (DATA.hud && DATA.hud.producer) || null,
+        deckTitle: DATA.title,
+        summary: (DATA.hud && DATA.hud.summary) || '',
+        totalDuration: DATA.total,
+        sceneCount: total,
+        liveTelemetry: liveTelemetry,
+        meta: s.meta || null,
+      };
+    } else if (kind === 'comparison') {
+      const m = String(s.mermaid || '');
+      const bm = m.match(/subgraph\s+Before\["([^"]+)"\]/i);
+      const am = m.match(/subgraph\s+After\["([^"]+)"\]/i);
+      el.comparisonContext = {
+        beforeLabel: (s.meta && s.meta.beforeLabel) || (bm && bm[1]) || 'Before',
+        afterLabel: (s.meta && s.meta.afterLabel) || (am && am[1]) || 'After',
+        highlights: (s.meta && Array.isArray(s.meta.highlights)) ? s.meta.highlights : [],
+        meta: s.meta || null,
+      };
+    } else if (kind === 'evidence') {
+      el.evidenceContext = {
+        artifacts: (DATA.hud && Array.isArray(DATA.hud.artifacts)) ? DATA.hud.artifacts : [],
+        liveStats: (liveTelemetry && liveTelemetry.stats) || [],
+        meta: s.meta || null,
+      };
+    } else if (kind === 'closing') {
+      el.closingContext = {
+        disposition: DATA.disposition || null,
+        a2uiMessages: Array.isArray(DATA.a2ui) ? DATA.a2ui : null,
+        bridgeConnected: Boolean(BRIDGE),
+        meta: s.meta || null,
+      };
+    } else {
+      el.narrativeContext = {
+        captionCount: DATA.cues.filter((c) => c.scene === s.id).length,
+        meta: s.meta || null,
+      };
+    }
+
     host.appendChild(el);
+    sceneComponents.push(el);
   }
   await renderDiagrams();
 }
@@ -1241,10 +1722,14 @@ function tick() {
   for (let i = 0; i < DATA.scenes.length; i++) if (t >= DATA.scenes[i].start) si = i;
   if (si !== idx) {
     idx = si;
-    document.querySelectorAll('.slide').forEach((n) => n.classList.remove('active'));
-    const el = $('s-' + DATA.scenes[si].id);
+    document.querySelectorAll('.slide').forEach((n) => {
+      if ('active' in n) n.active = false;
+      else n.classList.remove('active');
+    });
+    const el = DATA.scenes[si] ? $('s-' + DATA.scenes[si].id) : null;
     if (el) {
-      el.classList.add('active');
+      if ('active' in el) el.active = true;
+      else el.classList.add('active');
       if (playing) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }
@@ -1405,6 +1890,10 @@ function renderAsk() {
     : (Array.isArray(DATA.a2ui) && DATA.a2ui.length ? DATA.a2ui : (d ? buildDefaultA2ui(d) : null));
   if (!d && !activeMessages) return;
   const ask = $('ask');
+  const closingScene = sceneComponents.find((c) => c.roleKind === 'closing') || null;
+  if (closingScene && typeof closingScene.mountActionSurface === 'function') {
+    closingScene.mountActionSurface(ask);
+  }
 
   const createMsg = activeMessages.find((m) => m.createSurface);
   const compMsg = activeMessages.find((m) => m.updateComponents);
@@ -1415,6 +1904,33 @@ function renderAsk() {
   const heading = (liveA2uiOverride && firstHeading && firstHeading.text) || (d && d.prompt) || (firstHeading && firstHeading.text) || 'Next action';
   const note = (liveA2uiOverride && liveA2uiOverride.statusNote) || (d && d.note) || (byId.get('note') && byId.get('note').text) || '';
   const catalog = (createMsg && createMsg.createSurface && createMsg.createSurface.catalogId) || 'a2ui/v1.0';
+
+  if (closingScene) {
+    const derivedChoices = buttons.length
+      ? buttons.map((btn) => {
+          const labelComp = byId.get(btn.child);
+          const label = (labelComp && labelComp.text) || btn.id;
+          return {
+            id: btn.id,
+            label,
+            variant: btn.variant || 'secondary',
+            action: (btn.action && btn.action.name) || 'select_option',
+            context: (btn.action && btn.action.context) || { option: label },
+          };
+        })
+      : (d ? d.options.map((o, i) => ({ id: 'opt-' + i, label: o, action: 'select_option', context: { option: o, index: i } })) : []);
+    closingScene.closingContext = {
+      ...(closingScene.closingContext || {}),
+      disposition: d || null,
+      surfaceId,
+      catalogId: catalog,
+      a2uiMessages: activeMessages,
+      prompt: heading,
+      note,
+      choices: derivedChoices,
+      bridgeConnected: Boolean(BRIDGE),
+    };
+  }
 
   const renderedButtons = buttons.length
     ? buttons.map((btn) => {
@@ -1527,18 +2043,21 @@ window.state = () => ({
   liveTelemetryMeasuredAt: liveTelemetry ? liveTelemetry.measuredAt : null,
   liveChatTarget,
   lastA2uiAction,
+  sceneComponents: sceneComponents.map((c) => c.describeComponent()),
 });
 
-build();
-renderHud();
-renderAsk();
-connectBridgeEvents();
-loadPacks();
-loadTelemetry(false);
-updateVoiceMeta();
-updatePlayButtons();
-tick();
-syncStickyMedia();
+(async () => {
+  await build();
+  renderHud();
+  renderAsk();
+  connectBridgeEvents();
+  loadPacks();
+  loadTelemetry(false);
+  updateVoiceMeta();
+  updatePlayButtons();
+  tick();
+  syncStickyMedia();
+})();
 </script>
 </body>
 </html>
