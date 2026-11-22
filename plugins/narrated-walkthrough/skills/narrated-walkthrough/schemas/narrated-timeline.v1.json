@@ -61,6 +61,21 @@
           "type": "number",
           "minimum": 0,
           "description": "Optional sampling temperature forwarded to /v1/audio/speech (for example 0.0 for stable acoustic delivery)."
+        },
+        "pace": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional post-synthesis speaking-pace balancing. Normalizes active articulation rate (syllables/sec), loudness, and leading/trailing silence across scenes via pitch-preserving time-stretch before re-measuring final WAV durations so scene offsets and captions stay locked in exact sync.",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "target_sps": { "type": "number", "exclusiveMinimum": 0 },
+            "min_tempo": { "type": "number", "minimum": 0.5 },
+            "max_tempo": { "type": "number", "minimum": 1.0 },
+            "tolerance": { "type": "number", "minimum": 0 },
+            "lead_ms": { "type": "number", "minimum": 0 },
+            "tail_ms": { "type": "number", "minimum": 0 },
+            "target_dbfs": { "type": "number" }
+          }
         }
       }
     },

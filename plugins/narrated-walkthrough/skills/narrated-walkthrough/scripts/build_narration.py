@@ -19,12 +19,15 @@ import argparse
 import base64
 import gzip
 import json
+import math
 import pathlib
 import re
 import shutil
+import statistics
 import struct
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -113,6 +116,267 @@ def duration(path: pathlib.Path) -> float:
     return data_bytes / byte_rate
 
 
+def estimate_syllables(text: str) -> int:
+    """Estimate spoken syllables for articulation-rate measurement (stdlib only)."""
+    words = re.findall(r"[A-Za-z0-9]+(?:'[A-Za-z]+)?", text or "")
+    total = 0
+    for w in words:
+        letters = re.sub(r"[^a-z]", "", w.lower())
+        if not letters:
+            total += max(1, len(w))
+            continue
+        groups = re.findall(r"[aeiouy]+", letters)
+        count = len(groups)
+        if letters.endswith("e") and count > 1:
+            count -= 1
+        total += max(1, count)
+    return max(1, total)
+
+
+def _read_pcm16_wav(path: pathlib.Path) -> tuple[int, int, list[int]]:
+    """Read a 16-bit PCM RIFF/WAVE file into (sample_rate, channels, interleaved_int16)."""
+    data = path.read_bytes()
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise PlanError(f"{path.name}: expected RIFF/WAVE for pace balancing")
+    pos, audio_fmt, channels, sample_rate, bits = 12, None, None, None, None
+    pcm_bytes = None
+    while pos + 8 <= len(data):
+        chunk_id = data[pos:pos + 4]
+        (size,) = struct.unpack("<I", data[pos + 4:pos + 8])
+        body = pos + 8
+        if chunk_id == b"fmt ":
+            audio_fmt, channels, sample_rate, _, _, bits = struct.unpack("<HHIIHH", data[body:body + 16])
+        elif chunk_id == b"data":
+            nbytes = size if size not in (0, 0xFFFFFFFF) else len(data) - body
+            pcm_bytes = data[body:body + nbytes]
+        pos = body + size + (size & 1)
+    if audio_fmt != 1 or bits != 16 or not channels or not sample_rate or pcm_bytes is None:
+        raise PlanError(f"{path.name}: pace balancing requires 16-bit PCM WAV (fmt={audio_fmt}, bits={bits})")
+    n_samples = len(pcm_bytes) // 2
+    samples = list(struct.unpack(f"<{n_samples}h", pcm_bytes[: n_samples * 2]))
+    return sample_rate, channels, samples
+
+
+def _write_pcm16_wav(path: pathlib.Path, sample_rate: int, channels: int, samples: list[int]) -> None:
+    clamped = [max(-32768, min(32767, int(round(s)))) for s in samples]
+    raw = struct.pack(f"<{len(clamped)}h", *clamped) if clamped else b""
+    byte_rate = sample_rate * channels * 2
+    block_align = channels * 2
+    fmt = struct.pack("<HHIIHH", 1, channels, sample_rate, byte_rate, block_align, 16)
+    riff_size = 4 + (8 + len(fmt)) + (8 + len(raw))
+    payload = (
+        b"RIFF" + struct.pack("<I", riff_size) + b"WAVE"
+        + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+        + b"data" + struct.pack("<I", len(raw)) + raw
+    )
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_bytes(payload)
+    tmp.replace(path)
+
+
+def _active_speech_bounds(
+    samples: list[int],
+    sample_rate: int,
+    channels: int,
+    cushion_ms: float = 20.0,
+) -> tuple[int, int, float, float]:
+    """Locate active speech frame indices (start_frame, end_frame, active_seconds, rms_norm)."""
+    n_frames = len(samples) // channels
+    if n_frames == 0:
+        return 0, 0, 0.0, 0.0
+    win = max(1, int(sample_rate * 0.02))
+    rms_blocks: list[float] = []
+    for f0 in range(0, n_frames, win):
+        f1 = min(n_frames, f0 + win)
+        acc = 0.0
+        count = 0
+        for fi in range(f0 * channels, f1 * channels, channels):
+            v = samples[fi] / 32768.0
+            acc += v * v
+            count += 1
+        rms_blocks.append(math.sqrt(acc / max(1, count)))
+    peak_rms = max(rms_blocks) if rms_blocks else 0.0
+    if peak_rms < 1e-4:
+        return 0, n_frames, n_frames / sample_rate, 0.0
+    thresh = max(0.008, peak_rms * 0.06)
+    active = [i for i, r in enumerate(rms_blocks) if r >= thresh]
+    if not active:
+        return 0, n_frames, n_frames / sample_rate, peak_rms
+    cushion = int(round(sample_rate * (cushion_ms / 1000.0)))
+    start_f = max(0, active[0] * win - cushion)
+    end_f = min(n_frames, (active[-1] + 1) * win + cushion)
+    active_sec = max(0.05, ((active[-1] - active[0] + 1) * win) / sample_rate)
+    # Active-segment RMS for loudness normalization
+    acc = 0.0
+    seg_count = 0
+    for fi in range(start_f * channels, end_f * channels, channels):
+        v = samples[fi] / 32768.0
+        acc += v * v
+        seg_count += 1
+    seg_rms = math.sqrt(acc / max(1, seg_count))
+    return start_f, end_f, active_sec, seg_rms
+
+
+def _atempo_chain(factor: float) -> str:
+    """Build an ffmpeg atempo filter chain supporting any positive tempo factor."""
+    parts: list[str] = []
+    rem = factor
+    while rem < 0.5:
+        parts.append("atempo=0.5")
+        rem /= 0.5
+    while rem > 2.0:
+        parts.append("atempo=2.0")
+        rem /= 2.0
+    parts.append(f"atempo={rem:.6f}")
+    return ",".join(parts)
+
+
+def balance_scene_pace(
+    scenes: list[dict],
+    root: pathlib.Path,
+    pace_cfg: dict,
+    freshly_synthesized: set[str],
+) -> dict:
+    """Balance speaking cadence, loudness, and lead/tail margins across all scene WAVs.
+
+    Always reads from untouched raw masters stored under ``audio/.raw/`` so repeated builds
+    or target_sps adjustments never compound time-stretches. Mutates the target WAVs in place
+    so subsequent duration/start measurement stays 100% locked to the balanced audio.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise PlanError(
+            "pace balancing requires 'ffmpeg' on PATH for pitch-preserving atempo time-stretching"
+        )
+
+    min_tempo = float(pace_cfg.get("min_tempo", 0.76))
+    max_tempo = float(pace_cfg.get("max_tempo", 1.25))
+    tolerance = float(pace_cfg.get("tolerance", 0.03))
+    lead_ms = float(pace_cfg.get("lead_ms", 100.0))
+    tail_ms = float(pace_cfg.get("tail_ms", 280.0))
+    target_dbfs = pace_cfg.get("target_dbfs", -20.0)
+    target_dbfs = None if target_dbfs is None else float(target_dbfs)
+
+    raw_dir = root / "audio" / ".raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Measure every scene from its lossless raw master
+    measured: list[dict] = []
+    for sc in scenes:
+        wav = root / sc["audio"]
+        if not wav.exists():
+            raise PlanError(f"pace balancing: missing WAV for scene '{sc['id']}' at {wav}")
+        raw_master = raw_dir / wav.name
+        if sc["id"] in freshly_synthesized or not raw_master.exists():
+            shutil.copy2(wav, raw_master)
+        sr, ch, samples = _read_pcm16_wav(raw_master)
+        start_f, end_f, active_sec, seg_rms = _active_speech_bounds(samples, sr, ch)
+        syl = estimate_syllables(sc["narration"])
+        raw_sps = syl / active_sec if active_sec > 0 else 0.0
+        measured.append(
+            {
+                "scene": sc,
+                "wav": wav,
+                "raw_master": raw_master,
+                "sr": sr,
+                "ch": ch,
+                "samples": samples,
+                "start_f": start_f,
+                "end_f": end_f,
+                "active_sec": active_sec,
+                "raw_duration": len(samples) / (sr * ch),
+                "seg_rms": seg_rms,
+                "syllables": syl,
+                "raw_sps": raw_sps,
+            }
+        )
+
+    valid_rates = [m["raw_sps"] for m in measured if m["raw_sps"] > 0]
+    if pace_cfg.get("target_sps") is not None:
+        target_sps = float(pace_cfg["target_sps"])
+    else:
+        target_sps = statistics.median(valid_rates) if valid_rates else 6.2
+
+    report_scenes: list[dict] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = pathlib.Path(tmp)
+        for m in measured:
+            sc = m["scene"]
+            sr, ch = m["sr"], m["ch"]
+            trimmed = m["samples"][m["start_f"] * ch : m["end_f"] * ch]
+            raw_tempo = (target_sps / m["raw_sps"]) if m["raw_sps"] > 0 else 1.0
+            tempo = max(min_tempo, min(max_tempo, raw_tempo))
+            if abs(tempo - 1.0) <= tolerance:
+                tempo = 1.0
+
+            if tempo != 1.0 and trimmed:
+                in_wav = tmp_path / f"{sc['id']}-in.wav"
+                out_wav = tmp_path / f"{sc['id']}-out.wav"
+                _write_pcm16_wav(in_wav, sr, ch, trimmed)
+                cmd = [
+                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", str(in_wav),
+                    "-filter:a", _atempo_chain(tempo),
+                    "-ar", str(sr), "-ac", str(ch),
+                    "-c:a", "pcm_s16le",
+                    str(out_wav),
+                ]
+                proc = subprocess.run(cmd, capture_output=True, text=True)
+                if proc.returncode != 0:
+                    raise PlanError(f"ffmpeg atempo failed on {sc['id']}: {proc.stderr.strip()}")
+                sr, ch, active_samples = _read_pcm16_wav(out_wav)
+            else:
+                active_samples = list(trimmed)
+
+            # Peak-safe RMS loudness leveling so adjacent scenes stay volume-balanced too
+            if target_dbfs is not None and active_samples:
+                acc = sum((s / 32768.0) ** 2 for s in active_samples)
+                cur_rms = math.sqrt(acc / len(active_samples))
+                peak = max(abs(s) for s in active_samples) / 32768.0
+                if cur_rms > 1e-4 and peak > 1e-4:
+                    want_rms = 10.0 ** (target_dbfs / 20.0)
+                    max_safe_gain = (10.0 ** (-1.0 / 20.0)) / peak  # never exceed -1.0 dBFS peak
+                    gain = min(want_rms / cur_rms, max_safe_gain, 3.0)
+                    if abs(gain - 1.0) > 0.03:
+                        active_samples = [s * gain for s in active_samples]
+
+            # Short 8ms micro-fade at active edges prevents any boundary click
+            fade_f = min(len(active_samples) // (2 * ch), max(1, int(sr * 0.008)))
+            for fi in range(fade_f):
+                scale = fi / float(fade_f)
+                for c in range(ch):
+                    active_samples[fi * ch + c] *= scale
+                    idx_end = (len(active_samples) // ch - 1 - fi) * ch + c
+                    active_samples[idx_end] *= scale
+
+            lead_pad = [0] * (int(round(sr * (lead_ms / 1000.0))) * ch)
+            tail_pad = [0] * (int(round(sr * (tail_ms / 1000.0))) * ch)
+            final_samples = lead_pad + active_samples + tail_pad
+            _write_pcm16_wav(m["wav"], sr, ch, final_samples)
+
+            _, _, new_active_sec, _ = _active_speech_bounds(final_samples, sr, ch)
+            balanced_sps = m["syllables"] / new_active_sec if new_active_sec > 0 else 0.0
+            report_scenes.append(
+                {
+                    "id": sc["id"],
+                    "syllables": m["syllables"],
+                    "raw_sps": round(m["raw_sps"], 2),
+                    "balanced_sps": round(balanced_sps, 2),
+                    "tempo": round(tempo, 4),
+                    "raw_duration": round(m["raw_duration"], 3),
+                    "balanced_duration": round(duration(m["wav"]), 3),
+                }
+            )
+
+    return {
+        "target_sps": round(target_sps, 2),
+        "lead_ms": lead_ms,
+        "tail_ms": tail_ms,
+        "target_dbfs": target_dbfs,
+        "scenes": report_scenes,
+    }
+
+
 def validate(tl: dict) -> list[str]:
     """Return contract violations. An empty list means the plan may ship."""
     problems: list[str] = []
@@ -151,6 +415,27 @@ def validate(tl: dict) -> list[str]:
         temp = tts.get("temperature")
         if temp is not None and (isinstance(temp, bool) or not isinstance(temp, (int, float)) or temp < 0):
             problems.append("tts.temperature must be a non-negative number")
+        pace = tts.get("pace")
+        if pace is not None:
+            if not isinstance(pace, dict):
+                problems.append("tts.pace must be an object")
+            else:
+                tsps = pace.get("target_sps")
+                if tsps is not None and (isinstance(tsps, bool) or not isinstance(tsps, (int, float)) or tsps <= 0):
+                    problems.append("tts.pace.target_sps must be a positive number")
+                mint = pace.get("min_tempo", 0.76)
+                maxt = pace.get("max_tempo", 1.25)
+                if isinstance(mint, bool) or not isinstance(mint, (int, float)) or mint < 0.5 or mint > 1.0:
+                    problems.append("tts.pace.min_tempo must be between 0.5 and 1.0")
+                if isinstance(maxt, bool) or not isinstance(maxt, (int, float)) or maxt < 1.0 or maxt > 2.0:
+                    problems.append("tts.pace.max_tempo must be between 1.0 and 2.0")
+                tol = pace.get("tolerance", 0.03)
+                if isinstance(tol, bool) or not isinstance(tol, (int, float)) or tol < 0 or tol >= 1.0:
+                    problems.append("tts.pace.tolerance must be in [0, 1)")
+                for ms_key in ("lead_ms", "tail_ms"):
+                    val = pace.get(ms_key)
+                    if val is not None and (isinstance(val, bool) or not isinstance(val, (int, float)) or val < 0):
+                        problems.append(f"tts.pace.{ms_key} must be a non-negative number")
 
     disp = tl.get("disposition")
     if disp:
@@ -203,17 +488,22 @@ def render(tl: dict) -> str:
     scenes = tl["scenes"]
     cues = []
     for sc in scenes:
-        n = len(sc["captions"])
-        step = sc["duration"] / n
-        for i, text in enumerate(sc["captions"]):
+        caps = sc["captions"]
+        weights = [max(1, estimate_syllables(text)) for text in caps]
+        total_w = float(sum(weights))
+        cursor = float(sc["start"])
+        scene_end = float(sc["start"]) + float(sc["duration"])
+        for i, (text, w) in enumerate(zip(caps, weights)):
+            end_t = scene_end if i == len(caps) - 1 else cursor + sc["duration"] * (w / total_w)
             cues.append(
                 {
-                    "t": round(sc["start"] + i * step, 3),
-                    "end": round(sc["start"] + (i + 1) * step, 3),
+                    "t": round(cursor, 3),
+                    "end": round(end_t, 3),
                     "text": text,
                     "scene": sc["id"],
                 }
             )
+            cursor = end_t
 
     data = json.dumps(
         {
@@ -260,6 +550,8 @@ def main() -> int:
     ap.add_argument("--temperature", type=float, default=None, help="optional sampling temperature forwarded to /v1/audio/speech")
     ap.add_argument("--only", default=None, help="re-synthesize a single scene id (overwriting its clip)")
     ap.add_argument("--force", action="store_true", help="re-synthesize all clips even when WAV files already exist")
+    ap.add_argument("--balance-pace", action="store_true", help="normalize speaking speed, loudness, and margins across scenes before deriving timeline offsets")
+    ap.add_argument("--target-sps", type=float, default=None, help="target speaking rate in syllables/sec (implies --balance-pace)")
     ap.add_argument("--validate", action="store_true", help="check the plan and exit")
     ap.add_argument(
         "--cdn",
@@ -308,6 +600,12 @@ def main() -> int:
         tts["language"] = args.language
     if args.temperature is not None:
         tts["temperature"] = args.temperature
+    if args.balance_pace or args.target_sps is not None:
+        pace_obj = dict(tts.get("pace") or {})
+        pace_obj["enabled"] = True
+        if args.target_sps is not None:
+            pace_obj["target_sps"] = args.target_sps
+        tts["pace"] = pace_obj
     missing_cfg = [] if args.no_audio else [
         k for k in ("endpoint", "model", "voice") if not tts.get(k)
     ]
@@ -368,6 +666,7 @@ def main() -> int:
 
         anchor_b64: str | None = None
         anchor_text: str | None = None
+        freshly_synthesized: set[str] = set()
         for scene in ordered_scenes:
             is_anchor = bool(anchor_id and scene["id"] == anchor_id)
             wav = ROOT / scene["audio"]
@@ -386,6 +685,7 @@ def main() -> int:
                         language=tts.get("language"),
                         temperature=tts.get("temperature"),
                     )
+                    freshly_synthesized.add(scene["id"])
                 if not wav.exists():
                     raise PlanError(
                         f"anchor scene '{anchor_id}' has no audio at {wav}; run without --only first"
@@ -411,7 +711,26 @@ def main() -> int:
                         language=tts.get("language"),
                         temperature=tts.get("temperature"),
                     )
+                    freshly_synthesized.add(scene["id"])
                 scene["duration"] = round(duration(wav), 3)
+
+        pace_cfg = tts.get("pace") if isinstance(tts, dict) else None
+        pace_report = None
+        if isinstance(pace_cfg, dict) and pace_cfg.get("enabled", True):
+            pace_report = balance_scene_pace(tl["scenes"], ROOT, pace_cfg, freshly_synthesized)
+            # Re-measure every scene's duration directly from its final balanced WAV so
+            # cumulative starts, total_duration, and caption cues stay 100% locked in sync.
+            for scene in tl["scenes"]:
+                scene["duration"] = round(duration(ROOT / scene["audio"]), 3)
+            raw_rates = [r["raw_sps"] for r in pace_report["scenes"]]
+            bal_rates = [r["balanced_sps"] for r in pace_report["scenes"]]
+            print(
+                f"pace balanced: target {pace_report['target_sps']:.2f} syl/s | "
+                f"raw {min(raw_rates):.2f}..{max(raw_rates):.2f} -> "
+                f"balanced {min(bal_rates):.2f}..{max(bal_rates):.2f} syl/s"
+            )
+    else:
+        pace_report = None
 
     missing = [s["id"] for s in tl["scenes"] if s.get("duration") is None]
     if missing:
@@ -435,6 +754,8 @@ def main() -> int:
         "total_duration": tl["total_duration"],
         "generated_by": "build_narration.py",
     }
+    if pace_report is not None:
+        manifest["pace"] = pace_report
     (ROOT / "deck.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"total {tl['total_duration']}s across {len(tl['scenes'])} scenes")
 

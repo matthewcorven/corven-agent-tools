@@ -81,9 +81,14 @@ Both fields are optional and closed: an unknown key fails the plan contract.
 
 ## Voice & Hygiene Rules
 
-- **Consistent speaker across every scene:** pin a real server voice (e.g.
-  `US_James` on `Ming-3.0-tts-tiny-4bit`), set `tts.anchor_scene` to the first
-  scene id, and pass `language` + `temperature: 0.0`.
+- **Consistent speaker & balanced pace across every scene:** pin a real server
+  voice (e.g. `US_James` on `Ming-3.0-tts-tiny-4bit`), set `tts.anchor_scene` to
+  the first scene id, pass `language` + `temperature: 0.0`, and enable
+  `tts.pace` (or `--balance-pace --target-sps 6.3`). The builder trims dead air,
+  applies pitch-preserving `atempo` balancing + peak-safe loudness leveling from
+  raw masters in `audio/.raw/`, pads uniform breath margins, and **re-measures
+  every final WAV** before deriving scene `start` offsets and syllable-weighted
+  captions so audio and slides stay locked in exact sync.
 - **Keep raw coordinates in chat, not narration:** file paths, line numbers,
   commit SHAs, and clickable GitHub/Actions URLs belong in the accompanying chat
   summary; narration speaks plain English claims and human-readable numbers.

@@ -213,9 +213,15 @@ def _shape_errors(instance, schema, path="$", root=None):
         return _shape_errors(instance, target, path, root)
     errors = []
     t = schema.get("type")
-    pytypes = {"object": dict, "array": list, "string": str, "number": (int, float)}
-    if t and not isinstance(instance, pytypes[t]):
-        return [f"{path}: expected {t}"]
+    if t == "boolean":
+        return [] if isinstance(instance, bool) else [f"{path}: expected boolean"]
+    if t == "number":
+        if isinstance(instance, bool) or not isinstance(instance, (int, float)):
+            return [f"{path}: expected number"]
+    else:
+        pytypes = {"object": dict, "array": list, "string": str}
+        if t and not isinstance(instance, pytypes[t]):
+            return [f"{path}: expected {t}"]
     if t == "object":
         for key in schema.get("required", []):
             if key not in instance:
@@ -452,8 +458,8 @@ class PackageTests(unittest.TestCase):
         source = BUILDER.read_text()
         imports = re.findall(r"^(?:import|from)\s+([a-zA-Z0-9_.]+)", source, re.M)
         roots = {name.split(".")[0] for name in imports}
-        allowed = {"__future__", "argparse", "base64", "json", "pathlib", "re", "subprocess", "sys",
-                   "urllib", "shutil", "struct", "gzip"}
+        allowed = {"__future__", "argparse", "base64", "json", "math", "pathlib", "re", "statistics",
+                   "subprocess", "sys", "tempfile", "urllib", "shutil", "struct", "gzip"}
         self.assertTrue(roots <= allowed, roots - allowed)
 
     def test_pr_review_walkthrough_reference_ships_and_guards_merge_authority(self):
@@ -742,6 +748,143 @@ class VoiceConsistencyTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+
+def _tone_wav(active_seconds: float, lead_seconds: float = 0.05, tail_seconds: float = 0.05, sample_rate: int = 16000) -> bytes:
+    """Build a valid 16-bit mono PCM WAV containing a 440 Hz tone surrounded by silence."""
+    import math as _m
+    lead = [0] * int(round(lead_seconds * sample_rate))
+    tail = [0] * int(round(tail_seconds * sample_rate))
+    n_act = max(1, int(round(active_seconds * sample_rate)))
+    tone = [int(round(9000 * _m.sin(2 * _m.pi * 440.0 * i / sample_rate))) for i in range(n_act)]
+    samples = lead + tone + tail
+    raw = struct.pack(f"<{len(samples)}h", *samples)
+    byte_rate = sample_rate * 2
+    fmt = struct.pack("<HHIIHH", 1, 1, sample_rate, byte_rate, 2, 16)
+    riff_size = 4 + (8 + len(fmt)) + (8 + len(raw))
+    return b"RIFF" + struct.pack("<I", riff_size) + b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(raw)) + raw
+
+
+class PaceBalancingTests(unittest.TestCase):
+    """Pace balancing normalizes speaking cadence without breaking audio/scene sync."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.schema = json.loads(SCHEMA_PATH.read_text())
+
+    def test_schema_accepts_pace_config_and_rejects_unknown(self):
+        tl = {
+            "title": "Pace schema test",
+            "tts": {
+                "endpoint": "http://127.0.0.1:1/v1/audio/speech",
+                "model": "m",
+                "voice": "US_James",
+                "pace": {
+                    "enabled": True,
+                    "target_sps": 6.3,
+                    "min_tempo": 0.76,
+                    "max_tempo": 1.25,
+                    "tolerance": 0.03,
+                    "lead_ms": 100,
+                    "tail_ms": 280,
+                    "target_dbfs": -20.0,
+                },
+            },
+            "scenes": [
+                {
+                    "id": "a", "title": "A", "mermaid": "flowchart LR\n    x",
+                    "narration": "One claim.", "audio": "audio/a.wav",
+                    "captions": ["One claim."], "duration": 2.0,
+                }
+            ],
+        }
+        self.assertEqual(_shape_errors(tl, self.schema), [])
+        tl_bad = json.loads(json.dumps(tl))
+        tl_bad["tts"]["pace"]["unknown_knob"] = 1
+        self.assertTrue(any("unknown_knob" in e for e in _shape_errors(tl_bad, self.schema)))
+
+    def test_validator_rejects_invalid_pace_bounds(self):
+        tl = plan(tts={
+            "endpoint": "http://127.0.0.1:1/v1/audio/speech", "model": "m", "voice": "v",
+            "pace": {"target_sps": -1, "min_tempo": 1.2, "max_tempo": 0.8, "tolerance": 1.5, "lead_ms": -5},
+        })
+        problems = bn.validate(tl)
+        for token in ("target_sps", "min_tempo", "max_tempo", "tolerance", "lead_ms"):
+            self.assertTrue(any(token in p for p in problems), f"expected error for {token}, got {problems}")
+
+    def test_pace_balancing_converges_rate_preserves_sync_and_is_idempotent(self):
+        import shutil as _shutil
+        if not _shutil.which("ffmpeg"):
+            self.skipTest("ffmpeg not installed in test environment")
+
+        # Scene 1: 24 syllables spoken in 3.0s (~8.0 syl/s -> rushed)
+        # Scene 2: 24 syllables spoken in 4.8s (~5.0 syl/s -> slow)
+        text_24 = "Validation verifies every artifact signature continuously before publication."
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "audio").mkdir()
+            (tmp_path / "audio" / "fast.wav").write_bytes(_tone_wav(3.0, lead_seconds=0.40, tail_seconds=0.50))
+            (tmp_path / "audio" / "slow.wav").write_bytes(_tone_wav(4.8, lead_seconds=0.02, tail_seconds=0.05))
+            plan_file = tmp_path / "timeline.json"
+            tl = {
+                "title": "Pace balance sync test",
+                "mermaid_source": str(SKILL / "assets" / "mermaid.min.js.gz"),
+                "tts": {
+                    "endpoint": "http://127.0.0.1:1/v1/audio/speech",
+                    "model": "test-tts",
+                    "voice": "US_James",
+                    "pace": {"enabled": True, "target_sps": 6.2, "min_tempo": 0.72, "max_tempo": 1.30},
+                },
+                "scenes": [
+                    {
+                        "id": "fast", "title": "Fast", "mermaid": "flowchart LR\n    A",
+                        "narration": text_24,
+                        "captions": ["Validation verifies every artifact.", "Signature continuously before publication."],
+                        "audio": "audio/fast.wav",
+                        "duration": 1.0,
+                    },
+                    {
+                        "id": "slow", "title": "Slow", "mermaid": "flowchart LR\n    B",
+                        "narration": text_24,
+                        "captions": ["Validation verifies every artifact.", "Signature continuously before publication."],
+                        "audio": "audio/slow.wav",
+                        "duration": 1.0,
+                    },
+                ],
+            }
+            plan_file.write_text(json.dumps(tl))
+
+            res1 = subprocess.run([sys.executable, str(BUILDER), "--plan", str(plan_file)], capture_output=True, text=True)
+            self.assertEqual(res1.returncode, 0, res1.stdout + res1.stderr)
+            self.assertIn("pace balanced:", res1.stdout)
+
+            # Raw masters preserved untouched
+            self.assertTrue((tmp_path / "audio" / ".raw" / "fast.wav").exists())
+            self.assertTrue((tmp_path / "audio" / ".raw" / "slow.wav").exists())
+
+            updated = json.loads(plan_file.read_text())
+            manifest = json.loads((tmp_path / "deck.json").read_text())
+            d0 = updated["scenes"][0]["duration"]
+            d1 = updated["scenes"][1]["duration"]
+            # Fast clip lengthened, slow clip shortened -> converged to near-identical duration!
+            self.assertAlmostEqual(d0, d1, delta=0.25)
+            # Exact audio-to-timeline sync invariant: durations equal actual WAV headers & starts are cumulative
+            self.assertAlmostEqual(d0, bn.duration(tmp_path / "audio" / "fast.wav"), delta=0.002)
+            self.assertAlmostEqual(d1, bn.duration(tmp_path / "audio" / "slow.wav"), delta=0.002)
+            self.assertEqual(updated["scenes"][0]["start"], 0.0)
+            self.assertAlmostEqual(updated["scenes"][1]["start"], d0, delta=0.002)
+            self.assertAlmostEqual(updated["total_duration"], d0 + d1, delta=0.002)
+            # Balanced rates reported cleanly in deck.json
+            rates = [s["balanced_sps"] for s in manifest["pace"]["scenes"]]
+            self.assertLess(max(rates) / min(rates), 1.08)
+
+            # Second build is idempotent (reads from audio/.raw/, never double-stretches!)
+            res2 = subprocess.run([sys.executable, str(BUILDER), "--plan", str(plan_file)], capture_output=True, text=True)
+            self.assertEqual(res2.returncode, 0, res2.stdout + res2.stderr)
+            updated2 = json.loads(plan_file.read_text())
+            self.assertEqual(updated2["scenes"][0]["duration"], d0)
+            self.assertEqual(updated2["scenes"][1]["duration"], d1)
+            self.assertEqual(updated2["total_duration"], updated["total_duration"])
 
 
 if __name__ == "__main__":
