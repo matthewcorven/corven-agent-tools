@@ -5,9 +5,16 @@
   },
   "metadata": {
     "description": "Corven Agent Plugins 1.0 tooling",
-    "version": "0.9.0"
+    "version": "0.10.0"
   },
   "plugins": [
+    {
+      "name": "visual-proposal",
+      "source": "plugins/visual-proposal",
+      "version": "0.1.0",
+      "description": "Diagram-first PRD and architecture proposals: outcome-first scope reset, live Marp, local Mermaid/PlantUML, offline HTML and Playwright evidence",
+      "keywords": ["prd", "architecture", "proposal", "mvp", "marp", "mermaid", "plantuml", "playwright"]
+    },
     {
       "name": "change-learn",
       "source": "plugins/change-learn",

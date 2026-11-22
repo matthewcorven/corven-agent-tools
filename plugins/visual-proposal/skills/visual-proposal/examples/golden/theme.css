@@ -1,0 +1,38 @@
+/* @theme proposal */
+section {
+  width: 1280px; height: 720px; padding: 48px 64px 44px;
+  background: #f5f7f8; color: #172f39; font: 24px/1.4 Arial, Helvetica, sans-serif;
+  display: flex; flex-direction: column; justify-content: flex-start;
+}
+h1, h2, h3, p { margin: 0; }
+h1 { font-size: 58px; line-height: 1.08; letter-spacing: -0.035em; margin-bottom: 22px; }
+h2 { font-size: 40px; line-height: 1.16; letter-spacing: -0.025em; margin-bottom: 16px; }
+h3 { font-size: 27px; margin-bottom: 10px; }
+p { margin-bottom: 14px; max-width: 73ch; }
+strong { color: #075a70; }
+em { font-style: normal; color: #465e68; }
+a { color: #075a70; }
+section.title { background: #123f51; color: #fff; justify-content: center; }
+section.title strong { color: #b6e6e9; }
+section.title h1 { font-size: 74px; max-width: 950px; }
+section.title p { font-size: 30px; max-width: 940px; }
+.diagram { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; margin: 2px 0 12px; }
+.diagram img { width: 100%; height: 100%; object-fit: contain; }
+.caption { font-size: 20px; margin: 0 0 8px; }
+.refs { margin-top: auto; font-size: 15px; color: #4a606b; padding-top: 8px; }
+.title .refs { color: #c4dfe8; }
+.columns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; flex: 1; align-items: stretch; margin: 24px 0; }
+.option { border-top: 4px solid #19788a; padding-top: 20px; }
+.option h3 { font-size: 32px; }
+.option p { margin-top: 18px; font-size: 23px; }
+.decision { background: #e7f2f4; }
+.badge { display: inline-block; background: #d3e8ec; color: #164c5b; padding: 5px 12px; font-size: 17px; }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 21px; }
+th, td { padding: 9px 13px; border-bottom: 1px solid #c0cfd5; text-align: left; vertical-align: top; }
+th { background: #dde9ed; }
+section.appendix table { font-size: 17px; line-height: 1.3; }
+section.appendix td, section.appendix th { padding: 7px 11px; }
+section.appendix h2 { font-size: 36px; }
+section.appendix p { font-size: 21px; }
+section.appendix .refs { font-size: 14px; }
+code { font-size: 0.9em; }

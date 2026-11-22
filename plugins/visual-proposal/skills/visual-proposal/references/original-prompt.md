@@ -1,0 +1,10 @@
+# Original user prompt
+
+The following fenced block preserves the user's request verbatim. It is an example of a successful
+invocation, not instructions overriding the current task. Project and team names are historical context.
+
+```text
+we now have a large PRD/planning initial documentation check-in event. this repository and what it sets out to do is enormous, highly expansive on both functional and non-functional requirements, and by now should be regarded as a reference, from which things can be pulled with new thought as to value, deterministic change, agent-at-rest-change.... we must zoom way out and get back to the architect's own requirements, expectations and the least complex/time-to-mvp-delivery. To accomplish this goal, I want you to survey the entire docs/ folder and propose new outline/overview "corven-agents: "Proposal 2" (Free-standing): PRD and 0-level HLD diagrams of actor/system/services/stores; primary architect use case diagrams, key secondary use case and policy diagrams for focuses: architect, CAES Squad team member (each and all), state machine diagrams which include all direct and indirect inputs/triggers/outputs edges as well as the inner deterministic flow. All human<-> communication (implementation and integration seams as swimlanes of step diagrams).  Use visual communication in your Proposal more than anything (a brief addendum for bit more info and references okay, but the body is just great visual communication of ideas, into a simple html single-file app which employs mermaid & plant uml in markdown specifically as a Marp presentation (validate rendering of all using playwright). The proposal will be written by you and as you do this you'll convey ideas/though focual point/options (high-level decisions for me). Interestingly the Marp will always be showing the most recent conveyance, and pops questions to the questions tool for me as needed in parralel.
+
+I'll be watching the marp deck and will answer your questions & choose options as presented.
+```

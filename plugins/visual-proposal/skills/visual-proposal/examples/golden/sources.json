@@ -1,0 +1,10 @@
+{
+  "scope": "Fictional teaching fixture, not a surveyed real project or accepted product specification",
+  "documents": [
+    { "path": "brief.md", "status": "Illustrative input", "coverage": "Read in full; all requirements mapped to deck views" }
+  ],
+  "decisions": [
+    { "id": "D1", "status": "unaccepted", "recommendation": "Manual draft for review" },
+    { "id": "D2", "status": "unaccepted", "recommendation": "Activate a reviewed template only between runs" }
+  ]
+}

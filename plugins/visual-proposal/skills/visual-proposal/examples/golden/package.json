@@ -1,0 +1,17 @@
+{
+  "name": "visual-proposal-golden",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "setup:plantuml": "node setup-plantuml.mjs",
+    "build": "node build.mjs",
+    "serve": "node serve.mjs",
+    "test": "node verify.mjs"
+  },
+  "devDependencies": {
+    "@marp-team/marp-core": "4.4.0",
+    "mermaid": "12.3.0",
+    "playwright": "1.65.0"
+  }
+}

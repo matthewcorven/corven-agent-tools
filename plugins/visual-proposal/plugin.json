@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "visual-proposal",
+  "version": "0.1.0",
+  "description": "Survey a project, epic or feature and turn it into a visual decision instrument: a free-standing PRD, level-zero architecture, use cases, state machines and human/system swimlanes in a live, offline-capable Marp presentation with locally rendered Mermaid and PlantUML.",
+  "author": { "name": "Matthew Corven" },
+  "license": "MIT",
+  "keywords": ["prd", "architecture", "proposal", "mvp", "marp", "mermaid", "plantuml", "playwright"]
+}

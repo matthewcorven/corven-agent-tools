@@ -1,0 +1,6 @@
+node_modules/
+.tools/
+.cache/
+evidence/
+index.html
+*.next
