@@ -606,17 +606,17 @@ function buildGhRefHtml({ slug, kind, num }) {
     '" target="_blank" rel="noopener noreferrer" title="Open ' + esc(slug + ' ' + labelKind + ' #' + num) +
     ' in browser" data-gh-repo="' + esc(slug) + '" data-gh-kind="' + kind + '" data-gh-num="' + esc(num) + '">' +
     '<span class="gh-ref-repo">' + esc(repoName) + '</span>' +
-    '<span class="gh-ref-sep">/</span>' +
+    '<span class="gh-ref-sep"> / </span>' +
     '<span class="gh-ref-num">' + labelKind + ' #' + esc(num) + '</span>' +
-    '<span class="gh-ref-ext" aria-hidden="true">&#8599;</span></a>';
+    '<span class="gh-ref-ext" aria-hidden="true"> &#8599;</span></a>';
 }
 
-// Combined deterministic pattern (longest/most-qualified branches first):
+// Combined deterministic pattern (longest/most-qualified branches first; positive non-zero numbers only):
 //  1. owner/repo#123
 //  2. short-repo-name#123 (no space before #) OR known repo-name + (PR|Issue)? #123
 //  3. PR #123 / PR 123 / Pull Request #123 / Issue #123 / Issue 123
-//  4. bare #123 (guarded against hex colors, HTML entities, URL fragments)
-const GH_REF_RE = /(?<![A-Za-z0-9_/.])([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d{1,6})\b|(?<![A-Za-z0-9_/.])([A-Za-z0-9]+(?:-[A-Za-z0-9_.-]+)+)(\s+(?:(PR|Pull\s+Request)|(Issue))\s*#?|\s+#|#)(\d{1,6})\b|\b(?:(PR|Pull\s+[Rr]equest)|(Issue))\s*#?(\d{1,6})\b|(?<![A-Za-z0-9_&#/.])#(\d{1,6})\b/gi;
+//  4. bare #123 (positive non-zero integer, guarded against hex colors like #000/#e8f6ec, HTML entities, URLs)
+const GH_REF_RE = /(?<![A-Za-z0-9_/.])([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,5})\b|(?<![A-Za-z0-9_/.])([A-Za-z0-9]+(?:-[A-Za-z0-9_.-]+)+)(\s+(?:(PR|Pull\s+Request)|(Issue))\s*#?|\s+#|#)([1-9]\d{0,5})\b|\b(?:(PR|Pull\s+[Rr]equest)|(Issue))\s*#?([1-9]\d{0,5})\b|(?<![A-Za-z0-9_&#/.])#([1-9]\d{0,5})\b/gi;
 
 function linkifyGitHubRefs(rawText, ctxOverride) {
   const text = String(rawText ?? '');
@@ -679,7 +679,7 @@ function linkifyGitHubRefs(rawText, ctxOverride) {
   return out;
 }
 
-const SKIP_REF_TAGS = new Set(['A', 'BUTTON', 'CODE', 'PRE', 'SCRIPT', 'STYLE', 'INPUT', 'TEXTAREA', 'SUMMARY']);
+const SKIP_REF_TAGS = new Set(['A', 'BUTTON', 'CODE', 'PRE', 'SCRIPT', 'STYLE', 'DEFS', 'TITLE', 'INPUT', 'TEXTAREA', 'SUMMARY']);
 
 function enhanceDomGitHubRefs(rootEl, ctxOverride) {
   if (!rootEl || typeof document.createTreeWalker !== 'function') return;
@@ -711,11 +711,12 @@ function enhanceDomGitHubRefs(rootEl, ctxOverride) {
   let node;
   while ((node = walker.nextNode())) {
     const val = node.nodeValue;
-    if (!val || !/(?:#\d|\b(?:PR|Pull\s+[Rr]equest|Issue)\s*\d)/i.test(val)) continue;
+    if (!val || !/(?:#[1-9]|\b(?:PR|Pull\s+[Rr]equest|Issue)\s*#?[1-9])/i.test(val)) continue;
     let p = node.parentElement;
     let skip = false;
     while (p && p !== rootEl.parentElement) {
-      if (SKIP_REF_TAGS.has(p.tagName) || p.classList.contains('gh-ref') || p.classList.contains('scene-tag') || p.classList.contains('node-rules-box') || p.classList.contains('det-formula')) {
+      const upperTag = (p.tagName || '').toUpperCase();
+      if (SKIP_REF_TAGS.has(upperTag) || p.classList.contains('gh-ref') || p.classList.contains('scene-tag') || p.classList.contains('node-rules-box') || p.classList.contains('det-formula')) {
         skip = true;
         break;
       }
