@@ -22,6 +22,11 @@ jobs:
         run: python3 -m unittest discover -s plugins/visual-proposal/tests -v
       - name: Run narrated-walkthrough package contract tests
         run: python3 -m unittest discover -s plugins/narrated-walkthrough/tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run narrated-walkthrough Extension Canvas A2UI bridge tests
+        run: node --test plugins/narrated-walkthrough/com.github.copilot/extensions/narrated-walkthrough/a2ui-bridge.test.mjs
 
   visual-proposal:
     runs-on: ubuntu-latest

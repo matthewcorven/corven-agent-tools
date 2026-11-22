@@ -484,8 +484,25 @@ class PackageTests(unittest.TestCase):
             'renderHud',
             'a2ui-json-drawer',
             'system voice fallback',
+            '__WALKTHROUGH_BRIDGE__',
+            'sendBridgeCallback',
+            'connectBridgeEvents',
         ):
             self.assertIn(token, html, f"player.html missing expected UI hook: {token}")
+
+    def test_plugin_ships_copilot_extension_canvas_with_a2ui_bridge(self):
+        ext_dir = PLUGIN / "com.github.copilot" / "extensions" / "narrated-walkthrough"
+        ext_entry = ext_dir / "extension.mjs"
+        bridge_mod = ext_dir / "a2ui-bridge.mjs"
+        self.assertTrue(ext_entry.is_file(), "extension.mjs must ship with the plugin")
+        self.assertTrue(bridge_mod.is_file(), "a2ui-bridge.mjs must ship with the plugin")
+        ext_src = ext_entry.read_text(encoding="utf-8")
+        bridge_src = bridge_mod.read_text(encoding="utf-8")
+        self.assertIn('id: "narrated-walkthrough"', ext_src)
+        self.assertIn("createCanvas", ext_src)
+        self.assertIn("push_a2ui", ext_src)
+        self.assertIn("session.send", bridge_src)
+        self.assertIn("x-canvas-token", bridge_src)
 
     def test_hud_and_a2ui_fields_conform_to_closed_schema(self):
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))

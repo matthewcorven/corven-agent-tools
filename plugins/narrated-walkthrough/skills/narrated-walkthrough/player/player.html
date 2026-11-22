@@ -5,11 +5,13 @@
 <title>__TITLE__</title>
 __MERMAID__
 <style>
-  :root { --ink:#1b1b1f; --dim:#6b6b76; --line:#e3e3ea; --accent:#3d6fd0;
+  :root { --ink:var(--text-color-default, #1b1b1f); --dim:var(--text-color-muted, #6b6b76);
+          --line:var(--border-color-default, #e3e3ea); --accent:#3d6fd0;
           --ok-bg:#e8f6ec; --ok-ink:#216e3a; --warn-bg:#fff4e5; --warn-ink:#9a5b08;
-          --surface:#ffffff; --bg:#fafafc; }
+          --surface:var(--background-color-default, #ffffff); --bg:#fafafc;
+          --status-bar-color:var(--background-color-default, #ffffff); }
   * { box-sizing: border-box; }
-  body { margin:0; font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  body { margin:0; font:16px/1.55 var(--font-sans, -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);
          color:var(--ink); background:var(--bg); }
   header { display:flex; align-items:center; gap:14px; padding:12px 22px;
            border-bottom:1px solid var(--line); background:rgba(255,255,255,.97);
@@ -121,6 +123,17 @@ __MERMAID__
   .ask .opts button.copied { border-color:#3d9a5b; color:#3d9a5b; background:#fff; }
   .ask .tip { margin:14px 0 0; font-size:13px; color:#6b6b76; }
   .ask .tip b { color:var(--ink); }
+  .bridge-pill { display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:650;
+                 padding:3px 9px; border-radius:999px; background:var(--ok-bg); color:var(--ok-ink);
+                 border:1px solid #bfe3c9; }
+  .bridge-pill.busy { background:#eef4ff; color:var(--accent); border-color:#c9dafc; }
+  .bridge-pill.err { background:#fdecec; color:#b42318; border-color:#f5c2c0; }
+  .steer-row { display:flex; gap:8px; margin-top:12px; }
+  .steer-input { flex:1 1 auto; font:inherit; font-size:14px; padding:8px 12px; border-radius:9px;
+                 border:1px solid var(--line); background:#fff; color:var(--ink); }
+  .steer-input:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  .a2ui-status { font-size:12px; color:var(--ok-ink); margin-top:8px; min-height:16px; }
+  .a2ui-status.err { color:#b42318; }
   .a2ui-raw { margin-top:14px; border-top:1px solid #efe4be; padding-top:10px; }
   .a2ui-raw summary { font-size:12px; color:var(--dim); cursor:pointer; font-weight:600; }
   .a2ui-raw pre { margin:8px 0 0; padding:12px; background:#1c1e26; color:#e6edf3; border-radius:10px;
@@ -183,7 +196,108 @@ let pending = null;
 let wallStart = 0, wallBase = 0;
 let hudOversight = (DATA.hud && DATA.hud.oversight_default) || 'lead';
 let lastA2uiAction = null;
+let liveA2uiOverride = null;
+let bridgeAgentStatus = 'standalone';
+let bridgeSource = null;
+const BRIDGE = (typeof window.__WALKTHROUGH_BRIDGE__ === 'object' && window.__WALKTHROUGH_BRIDGE__) ? window.__WALKTHROUGH_BRIDGE__ : null;
 const recordedMetaHtml = $('voice-meta').innerHTML;
+
+function activeSceneId() {
+  return (document.querySelector('.slide.active') || {}).id || (DATA.scenes[0] ? 's-' + DATA.scenes[0].id : '');
+}
+
+function renderBridgePill(status) {
+  bridgeAgentStatus = status;
+  const labelMap = {
+    ready: 'Live Copilot Bridge · Ready',
+    dispatching: 'Live Copilot Bridge · Dispatching…',
+    thinking: 'Live Copilot Bridge · Agent turn active…',
+    responded: 'Live Copilot Bridge · Agent replied',
+    error: 'Live Copilot Bridge · Error',
+  };
+  const cls = (status === 'dispatching' || status === 'thinking') ? 'busy' : (status === 'error' ? 'err' : '');
+  document.querySelectorAll('[data-bridge-pill]').forEach((el) => {
+    el.className = 'bridge-pill ' + cls;
+    el.textContent = labelMap[status] || ('Live Copilot Bridge · ' + status);
+  });
+}
+
+async function sendBridgeCallback(payload) {
+  if (!BRIDGE || !BRIDGE.actionUrl || !BRIDGE.token) return { bridged: false };
+  const enriched = {
+    version: 'v1.0',
+    sceneId: activeSceneId(),
+    timestampSec: Math.round(now() * 100) / 100,
+    oversight: hudOversight,
+    ...payload,
+  };
+  const resp = await fetch(BRIDGE.actionUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-canvas-token': BRIDGE.token,
+    },
+    body: JSON.stringify(enriched),
+  });
+  const body = await resp.json().catch(() => ({ ok: false, error: 'Invalid response' }));
+  if (!resp.ok || !body.ok) {
+    throw new Error(body.error || ('Bridge HTTP ' + resp.status));
+  }
+  return { bridged: true, ...body };
+}
+
+function connectBridgeEvents() {
+  if (!BRIDGE || !BRIDGE.eventsUrl || typeof EventSource !== 'function') return;
+  bridgeAgentStatus = 'ready';
+  bridgeSource = new EventSource(BRIDGE.eventsUrl);
+  bridgeSource.addEventListener('bridge_ready', (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.oversight) { hudOversight = msg.oversight; renderHud(); }
+      if (msg.liveA2ui && Array.isArray(msg.liveA2ui.messages)) {
+        liveA2uiOverride = msg.liveA2ui;
+        renderAsk();
+      }
+      renderBridgePill(msg.agentStatus || 'ready');
+    } catch (e) {}
+  });
+  bridgeSource.addEventListener('callback_ack', (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.dispatchedToAgent) renderBridgePill('dispatching');
+      const st = $('a2ui-status');
+      if (st && msg.displayPrompt) {
+        st.classList.remove('err');
+        st.textContent = msg.dispatchedToAgent
+          ? 'Sent to Copilot agent: ' + msg.displayPrompt
+          : 'Handled deterministically: ' + msg.action;
+      }
+    } catch (e) {}
+  });
+  bridgeSource.addEventListener('agent_status', (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      renderBridgePill(msg.status || 'ready');
+      const st = $('a2ui-status');
+      if (st && msg.status === 'error' && msg.error) {
+        st.classList.add('err');
+        st.textContent = 'Bridge error: ' + msg.error;
+      }
+    } catch (e) {}
+  });
+  bridgeSource.addEventListener('a2ui_update', (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (Array.isArray(msg.messages) && msg.messages.length) {
+        liveA2uiOverride = msg;
+        renderAsk();
+      }
+    } catch (e) {}
+  });
+  bridgeSource.addEventListener('deck_reloaded', () => {
+    window.location.reload();
+  });
+}
 
 function updateVoiceMeta() {
   const meta = $('voice-meta');
@@ -252,6 +366,7 @@ function renderHud() {
   host.innerHTML =
     '<div class="hud-top">' +
       '<span class="hud-title">Architect HUD &middot; Oversight &amp; Agent Routing</span>' +
+      (BRIDGE ? '<span class="bridge-pill" data-bridge-pill>Live Copilot Bridge &middot; Ready</span>' : '') +
       '<div class="oversight" role="tablist" aria-label="Oversight depth">' +
         ['executive', 'lead', 'full'].map((lvl) =>
           '<button type="button" data-oversight="' + lvl + '" class="' + (hudOversight === lvl ? 'on' : '') + '">' +
@@ -283,16 +398,51 @@ function renderHud() {
     '<div class="hud-status" id="hud-status" role="status"></div>';
 
   host.hidden = false;
+  if (BRIDGE) renderBridgePill(bridgeAgentStatus === 'standalone' ? 'ready' : bridgeAgentStatus);
   host.querySelectorAll('button[data-oversight]').forEach((b) => {
-    b.onclick = () => { hudOversight = b.dataset.oversight; renderHud(); syncStickyMedia(); };
+    b.onclick = () => {
+      hudOversight = b.dataset.oversight;
+      renderHud();
+      syncStickyMedia();
+      if (BRIDGE) {
+        sendBridgeCallback({
+          label: 'Oversight: ' + hudOversight,
+          action: { name: 'set_oversight', surfaceId: 'architect-hud', context: { oversight: hudOversight } },
+        }).catch(() => {});
+      }
+    };
   });
   host.querySelectorAll('button[data-chat-node]').forEach((b) => {
     b.onclick = async () => {
       const node = allNodes.find((n) => n.id === b.dataset.chatNode);
       if (!node) return;
       const prompt = node.chat_prompt || ('Speak with ' + node.name + ' (' + node.role + ') regarding ' + DATA.title);
-      try { await navigator.clipboard.writeText(prompt); } catch (e) {}
       window.dispatchEvent(new CustomEvent('narrated-walkthrough:chat-agent', { detail: { node, prompt } }));
+      if (BRIDGE) {
+        b.disabled = true;
+        try {
+          const res = await sendBridgeCallback({
+            label: 'Chat with ' + node.name,
+            node,
+            action: {
+              name: 'chat_node',
+              surfaceId: 'architect-hud',
+              sourceComponentId: 'node-' + node.id,
+              context: { nodeId: node.id, role: node.role, level: node.level, prompt },
+            },
+          });
+          lastA2uiAction = { version: 'v1.0', action: { name: 'chat_node', surfaceId: 'architect-hud', context: { nodeId: node.id } }, callbackId: res.callbackId };
+          b.classList.add('copied');
+          $('hud-status').textContent = 'Sent directly to Copilot agent (' + node.name + ') — turn active.';
+          setTimeout(() => b.classList.remove('copied'), 2200);
+        } catch (err) {
+          $('hud-status').textContent = 'Bridge callback failed: ' + err.message;
+        } finally {
+          b.disabled = false;
+        }
+        return;
+      }
+      try { await navigator.clipboard.writeText(prompt); } catch (e) {}
       b.classList.add('copied');
       $('hud-status').textContent = 'Pinned handoff to ' + node.name + ' (' + node.role + ') — ready to paste or continue in chat.';
       setTimeout(() => b.classList.remove('copied'), 1800);
@@ -500,16 +650,20 @@ function buildDefaultA2ui(d) {
 // Render the disposition / A2UI v1.0 action surface so choices follow A2UI JSON.
 function renderAsk() {
   const d = DATA.disposition;
-  const a2uiMessages = Array.isArray(DATA.a2ui) && DATA.a2ui.length ? DATA.a2ui : (d ? buildDefaultA2ui(d) : null);
-  if (!d && !a2uiMessages) return;
+  const activeMessages = (liveA2uiOverride && Array.isArray(liveA2uiOverride.messages) && liveA2uiOverride.messages.length)
+    ? liveA2uiOverride.messages
+    : (Array.isArray(DATA.a2ui) && DATA.a2ui.length ? DATA.a2ui : (d ? buildDefaultA2ui(d) : null));
+  if (!d && !activeMessages) return;
   const ask = $('ask');
 
-  const createMsg = a2uiMessages.find((m) => m.createSurface);
-  const compMsg = a2uiMessages.find((m) => m.updateComponents);
+  const createMsg = activeMessages.find((m) => m.createSurface);
+  const compMsg = activeMessages.find((m) => m.updateComponents);
+  const surfaceId = (createMsg && createMsg.createSurface && createMsg.createSurface.surfaceId) || 'walkthrough-disposition';
   const byId = new Map(((compMsg && compMsg.updateComponents && compMsg.updateComponents.components) || []).map((c) => [c.id, c]));
   const buttons = [...byId.values()].filter((c) => c.component === 'Button');
-  const heading = (d && d.prompt) || (byId.get('prompt') && byId.get('prompt').text) || 'Next action';
-  const note = (d && d.note) || (byId.get('note') && byId.get('note').text) || '';
+  const firstHeading = [...byId.values()].find((c) => c.component === 'Text' && (c.variant === 'h3' || c.id === 'prompt' || c.id === 'h' || c.id === 'p'));
+  const heading = (liveA2uiOverride && firstHeading && firstHeading.text) || (d && d.prompt) || (firstHeading && firstHeading.text) || 'Next action';
+  const note = (liveA2uiOverride && liveA2uiOverride.statusNote) || (d && d.note) || (byId.get('note') && byId.get('note').text) || '';
   const catalog = (createMsg && createMsg.createSurface && createMsg.createSurface.catalogId) || 'a2ui/v1.0';
 
   const renderedButtons = buttons.length
@@ -518,32 +672,94 @@ function renderAsk() {
         const label = (labelComp && labelComp.text) || btn.id;
         const actionJson = esc(JSON.stringify(btn.action || { name: 'select_option', context: { option: label } }));
         return '<button type="button" class="' + (btn.variant === 'primary' ? 'primary' : '') +
-               '" data-answer="' + esc(label) + '" data-a2ui-action="' + actionJson + '">' + esc(label) + '</button>';
+               '" data-component-id="' + esc(btn.id) + '" data-answer="' + esc(label) +
+               '" data-a2ui-action="' + actionJson + '">' + esc(label) + '</button>';
       }).join('')
-    : (d ? d.options.map((o) => '<button type="button" data-answer="' + esc(o) + '">' + esc(o) + '</button>').join('') : '');
+    : (d ? d.options.map((o, i) => '<button type="button" data-component-id="opt-' + i + '" data-answer="' + esc(o) + '">' + esc(o) + '</button>').join('') : '');
 
   ask.innerHTML =
-    '<div class="ask-head"><h3>' + esc(heading) + '</h3><span class="a2ui-badge">A2UI v1.0 &middot; ' + esc(catalog) + '</span></div>' +
+    '<div class="ask-head"><h3>' + esc(heading) + '</h3>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+        (BRIDGE ? '<span class="bridge-pill" data-bridge-pill>Live Copilot Bridge &middot; Ready</span>' : '') +
+        '<span class="a2ui-badge">A2UI v1.0 &middot; ' + esc(catalog) + '</span>' +
+      '</div>' +
+    '</div>' +
     (note ? '<p>' + esc(note) + '</p>' : '') +
     '<div class="opts">' + renderedButtons + '</div>' +
-    '<p class="tip">Pick an A2UI action to copy it into chat. <b>Or just say it however you like</b> &mdash; typing or the microphone both work, and no answer is a valid answer.</p>' +
-    '<details class="a2ui-raw" id="a2ui-json-drawer"><summary>Inspect A2UI v1.0 JSON payload (' + a2uiMessages.length + ' messages)</summary>' +
-    '<pre id="a2ui-json-pre">' + esc(JSON.stringify(a2uiMessages, null, 2)) + '</pre></details>';
+    (BRIDGE
+      ? '<form class="steer-row" id="steer-form"><input class="steer-input" id="steer-input" type="text" placeholder="Or send a direct note to the agent from this scene…" aria-label="Message agent"><button type="submit" class="primary">Send to Agent</button></form>'
+      : '') +
+    '<div class="a2ui-status" id="a2ui-status" role="status"></div>' +
+    '<p class="tip">' +
+      (BRIDGE
+        ? 'Clicks run the deterministic JS callback in the Copilot Extension Canvas and <b>wake the agent directly</b>.'
+        : 'Pick an A2UI action to copy it into chat. <b>Or just say it however you like</b> &mdash; typing or the microphone both work, and no answer is a valid answer.') +
+    '</p>' +
+    '<details class="a2ui-raw" id="a2ui-json-drawer"><summary>Inspect A2UI v1.0 JSON payload (' + activeMessages.length + ' messages)</summary>' +
+    '<pre id="a2ui-json-pre">' + esc(JSON.stringify(activeMessages, null, 2)) + '</pre></details>';
   ask.hidden = false;
+  if (BRIDGE) renderBridgePill(bridgeAgentStatus === 'standalone' ? 'ready' : bridgeAgentStatus);
+
   ask.querySelectorAll('button[data-answer]').forEach((b) => {
     b.onclick = async () => {
       const text = b.dataset.answer;
+      const sourceComponentId = b.dataset.componentId || undefined;
+      const act = b.dataset.a2uiAction ? JSON.parse(b.dataset.a2uiAction) : { name: 'select_option', context: { option: text } };
+      const a2uiPayload = {
+        version: 'v1.0',
+        label: text,
+        action: { ...act, surfaceId, ...(sourceComponentId ? { sourceComponentId } : {}) },
+      };
+      lastA2uiAction = a2uiPayload;
+      window.dispatchEvent(new CustomEvent('a2ui:action', { detail: a2uiPayload }));
+
+      if (BRIDGE) {
+        b.disabled = true;
+        try {
+          const res = await sendBridgeCallback(a2uiPayload);
+          b.classList.add('copied');
+          b.textContent = res.dispatchedToAgent ? 'sent to agent' : 'updated';
+          setTimeout(() => { b.classList.remove('copied'); b.textContent = text; }, 2200);
+        } catch (err) {
+          const st = $('a2ui-status');
+          if (st) { st.classList.add('err'); st.textContent = 'Callback failed: ' + err.message; }
+        } finally {
+          b.disabled = false;
+        }
+        return;
+      }
+
       try { await navigator.clipboard.writeText(text); } catch (e) {}
-      try {
-        const act = b.dataset.a2uiAction ? JSON.parse(b.dataset.a2uiAction) : { name: 'select_option', context: { option: text } };
-        lastA2uiAction = { version: 'v1.0', action: { ...act, surfaceId: (createMsg && createMsg.createSurface && createMsg.createSurface.surfaceId) || 'walkthrough-disposition' } };
-        window.dispatchEvent(new CustomEvent('a2ui:action', { detail: lastA2uiAction }));
-      } catch (e) {}
       b.classList.add('copied');
       b.textContent = 'copied — paste in chat';
       setTimeout(() => { b.classList.remove('copied'); b.textContent = text; }, 2200);
     };
   });
+
+  const form = $('steer-form');
+  if (form && BRIDGE) {
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const inp = $('steer-input');
+      const noteText = (inp && inp.value || '').trim();
+      if (!noteText) return;
+      const btn = form.querySelector('button[type="submit"]');
+      if (btn) btn.disabled = true;
+      try {
+        await sendBridgeCallback({
+          label: noteText,
+          userNote: noteText,
+          action: { name: 'reply_custom', surfaceId, sourceComponentId: 'steer-form', context: { message: noteText } },
+        });
+        inp.value = '';
+      } catch (err) {
+        const st = $('a2ui-status');
+        if (st) { st.classList.add('err'); st.textContent = 'Callback failed: ' + err.message; }
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    };
+  }
 }
 
 window.seek = seek;
@@ -553,12 +769,15 @@ window.state = () => ({
   hudShown: !$('hud').hidden, hudOversight,
   stickyCompact: $('sticky-header').classList.contains('is-compact'),
   miniMediaVisible: !$('mini-media').hidden,
+  bridgeConnected: Boolean(BRIDGE),
+  bridgeAgentStatus,
   lastA2uiAction,
 });
 
 build();
 renderHud();
 renderAsk();
+connectBridgeEvents();
 updateVoiceMeta();
 updatePlayButtons();
 tick();
