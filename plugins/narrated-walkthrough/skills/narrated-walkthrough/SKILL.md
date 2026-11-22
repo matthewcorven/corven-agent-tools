@@ -151,16 +151,33 @@ detail rather than a code path:
 "tts": {
   "endpoint": "http://127.0.0.1:18001/v1/audio/speech",
   "model": "Ming-3.0-tts-tiny-4bit",
-  "voice": "default"
+  "voice": "US_James",
+  "language": "en",
+  "temperature": 0.0,
+  "anchor_scene": "01-question"
 }
 ```
 
 - Discover models with `GET <host>/v1/models` and look for `audio_tts`.
-- Voices are server-defined. Probe a few and keep the one you like; they produce
-  genuinely different audio and different lengths.
+- **Use a real named voice AND lock multi-scene consistency.** Some flow-matching
+  / zero-shot checkpoints (including `Ming-3.0-tts-tiny-4bit`) expose built-in
+  named speakers (`US_James`, `US_Emma`, `UK_George`, `UK_Charlotte`,
+  `US_Stella`) even when `GET <host>/v1/audio/voices?model=<id>` returns `[]`,
+  and passing an unknown name like `"default"` leaves the speaker unconditioned
+  so clips drift to different voices mid-deck.
+- **Anchor every clip to one voice.** Set `tts.anchor_scene` (typically the
+  first scene id) plus `language` and `temperature: 0.0` — or supply an explicit
+  `tts.ref_audio` + `tts.ref_text` WAV reference. The builder synthesizes the
+  anchor scene first, base64-encodes its WAV, and sends `ref_audio` + `ref_text`
+  to every remaining scene so speaker timbre stays consistent across all
+  segments (verified via CAMPPlus 192-dim speaker embeddings on
+  `Ming-3.0-tts-tiny-4bit`: minimum similarity jumped from `0.548` unanchored to
+  `0.873` anchored, mean `0.899`).
 - Measured throughput on an MLX host: ~3.7× realtime (127 s of narration in
   33 s), so a two-minute briefing costs well under a minute to produce.
-- `--only <scene> --voice <name>` re-voices one scene and re-derives the clock.
+- `--only <scene> --voice <name>` re-synthesizes one scene (overwriting its
+  clip, anchored if `anchor_scene` is set) and re-derives the clock.
+- `--force` re-synthesizes every clip in place when changing voice or anchor.
 - `--no-audio` renders from the durations already recorded in the plan, so a
   reviewer can see the deck without running a model.
 - If the endpoint is down, fail loudly with the URL and model in the message;
@@ -194,6 +211,7 @@ a server contract breach instead of adding a platform-specific probe.
 | Everything shifts after a re-record | hand-written offsets | never hand-write `start`; let the builder derive it |
 | Diagram renders blank | mermaid `htmlLabels` in an SVG-as-image path | render inline in the DOM, or set `htmlLabels: false` when rasterising |
 | Long narration sounds rushed | a single clip carrying three ideas | split into scenes; one claim per clip |
+| Voice changes between scenes | unknown voice name (e.g. `"default"`) or unanchored zero-shot synthesis | pick a trained named voice (e.g. `US_James`) and set `tts.anchor_scene` (or `tts.ref_audio`/`ref_text`) plus `temperature: 0.0`, then rebuild with `--force` |
 
 ## Guardrails
 

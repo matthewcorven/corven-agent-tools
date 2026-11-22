@@ -17,7 +17,7 @@
       "items": { "$ref": "#/$defs/scene" }
     },
     "tts": {
-      "description": "Speech endpoint configuration. Optional: --no-audio builds without it. When present, all three fields are required, because a silent fallback would aim requests at whatever happens to be listening on a port that belongs to someone else.",
+      "description": "Speech endpoint configuration. Optional: --no-audio builds without it. When present, endpoint, model and voice are required, because a silent fallback would aim requests at whatever happens to be listening on a port that belongs to someone else. Optional anchor_scene (or ref_audio/ref_text), language and temperature lock consistent speaker identity across scenes.",
       "type": "object",
       "additionalProperties": false,
       "required": ["endpoint", "model", "voice"],
@@ -36,6 +36,31 @@
           "type": "string",
           "minLength": 1,
           "description": "Server-defined voice name. No default is shipped."
+        },
+        "anchor_scene": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional scene id whose synthesized WAV and narration are sent as base64 ref_audio and ref_text to every other scene so speaker timbre stays consistent across the deck. Mutually exclusive with ref_audio."
+        },
+        "ref_audio": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional path (relative to the plan directory) to a reference WAV file sent as base64 ref_audio to every scene. Mutually exclusive with anchor_scene."
+        },
+        "ref_text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional transcript matching ref_audio. Only valid when ref_audio is set."
+        },
+        "language": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional language code (for example 'en') forwarded to /v1/audio/speech."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Optional sampling temperature forwarded to /v1/audio/speech (for example 0.0 for stable acoustic delivery)."
         }
       }
     },

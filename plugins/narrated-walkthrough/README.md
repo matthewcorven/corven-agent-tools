@@ -85,8 +85,11 @@ is listening on a port that belongs to someone else.
 
 Any OpenAI-compatible `/v1/audio/speech` endpoint works. Requests pin
 `response_format: "wav"` and length is measured from the RIFF header, so no
-platform-specific audio tool is involved. Voices are server-defined; `--voice`
-re-records a scene and re-derives every later offset.
+platform-specific audio tool is involved. Voices are server-defined; set
+`tts.anchor_scene` (or an explicit `tts.ref_audio` + `tts.ref_text`) along with
+optional `language` and `temperature: 0.0` so every scene conditions on one
+consistent speaker voice. `--only <scene>` re-records one scene in place, and
+`--force` rebuilds all clips and re-derives every offset.
 
 ## Offline by default
 

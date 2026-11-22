@@ -4,7 +4,10 @@
   "tts": {
     "endpoint": "http://127.0.0.1:18001/v1/audio/speech",
     "model": "Ming-3.0-tts-tiny-4bit",
-    "voice": "default"
+    "voice": "US_James",
+    "language": "en",
+    "temperature": 0.0,
+    "anchor_scene": "01-question"
   },
   "scenes": [
     {

@@ -16,6 +16,7 @@ Exit codes: 0 ok, 1 build/runtime failure, 2 invalid plan (validation).
 from __future__ import annotations
 
 import argparse
+import base64
 import gzip
 import json
 import pathlib
@@ -51,10 +52,28 @@ class PlanError(Exception):
     """The plan is internally inconsistent or breaks the disposition contract."""
 
 
-def synth(text: str, out: pathlib.Path, endpoint: str, model: str, voice: str) -> None:
-    body = json.dumps(
-        {"model": model, "input": text, "voice": voice, "response_format": "wav"}
-    ).encode()
+def synth(
+    text: str,
+    out: pathlib.Path,
+    endpoint: str,
+    model: str,
+    voice: str,
+    *,
+    ref_audio_b64: str | None = None,
+    ref_text: str | None = None,
+    language: str | None = None,
+    temperature: float | None = None,
+) -> None:
+    payload: dict = {"model": model, "input": text, "voice": voice, "response_format": "wav"}
+    if ref_audio_b64 is not None:
+        payload["ref_audio"] = ref_audio_b64
+    if ref_text is not None:
+        payload["ref_text"] = ref_text
+    if language is not None:
+        payload["language"] = language
+    if temperature is not None:
+        payload["temperature"] = temperature
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=180) as resp:
@@ -117,6 +136,21 @@ def validate(tl: dict) -> list[str]:
                 f"{sid}: narration uses a broadcast sign-off; a walkthrough that leaves work "
                 "open must invite a reply instead"
             )
+
+    tts = tl.get("tts") or {}
+    if isinstance(tts, dict):
+        anchor_scene = tts.get("anchor_scene")
+        ref_audio = tts.get("ref_audio")
+        ref_text = tts.get("ref_text")
+        if anchor_scene and anchor_scene not in seen:
+            problems.append(f"tts.anchor_scene '{anchor_scene}' does not match any scene id")
+        if anchor_scene and ref_audio:
+            problems.append("tts: 'anchor_scene' and 'ref_audio' are mutually exclusive")
+        if ref_text and not ref_audio:
+            problems.append("tts: 'ref_text' requires 'ref_audio'")
+        temp = tts.get("temperature")
+        if temp is not None and (isinstance(temp, bool) or not isinstance(temp, (int, float)) or temp < 0):
+            problems.append("tts.temperature must be a non-negative number")
 
     disp = tl.get("disposition")
     if disp:
@@ -202,11 +236,12 @@ def render(tl: dict) -> str:
         ensure_ascii=False,
     )
     mermaid = tl["_mermaid_resolved"]
+    tts_cfg = tl.get("tts") or {}
     return (
         template().replace("__DATA__", data)
         .replace("__TITLE__", tl["title"])
-        .replace("__VOICE__", tl["tts"]["voice"])
-        .replace("__MODEL__", tl["tts"]["model"])
+        .replace("__VOICE__", tts_cfg.get("voice") or "none")
+        .replace("__MODEL__", tts_cfg.get("model") or "none")
         .replace("__MERMAID__", mermaid)
     )
 
@@ -217,7 +252,11 @@ def main() -> int:
     ap.add_argument("--voice", default=None)
     ap.add_argument("--model", default=None)
     ap.add_argument("--endpoint", default=None)
-    ap.add_argument("--only", default=None, help="rebuild a single scene id")
+    ap.add_argument("--anchor-scene", default=None, help="scene id used as ref_audio/ref_text anchor for other scenes")
+    ap.add_argument("--language", default=None, help="optional language hint forwarded to /v1/audio/speech")
+    ap.add_argument("--temperature", type=float, default=None, help="optional sampling temperature forwarded to /v1/audio/speech")
+    ap.add_argument("--only", default=None, help="re-synthesize a single scene id (overwriting its clip)")
+    ap.add_argument("--force", action="store_true", help="re-synthesize all clips even when WAV files already exist")
     ap.add_argument("--validate", action="store_true", help="check the plan and exit")
     ap.add_argument(
         "--cdn",
@@ -249,10 +288,23 @@ def main() -> int:
         return 1
     ROOT = plan_path.parent
     tl = json.loads(plan_path.read_text())
-    tts = tl.setdefault("tts", {})
-    tts["model"] = args.model or tts.get("model")
-    tts["voice"] = args.voice or tts.get("voice")
-    tts["endpoint"] = args.endpoint or tts.get("endpoint")
+    has_tts_input = bool(tl.get("tts")) or any(
+        v is not None
+        for v in (args.model, args.voice, args.endpoint, args.anchor_scene, args.language, args.temperature)
+    )
+    tts = tl.setdefault("tts", {}) if (has_tts_input or not args.no_audio) else {}
+    if args.model is not None:
+        tts["model"] = args.model
+    if args.voice is not None:
+        tts["voice"] = args.voice
+    if args.endpoint is not None:
+        tts["endpoint"] = args.endpoint
+    if args.anchor_scene is not None:
+        tts["anchor_scene"] = args.anchor_scene
+    if args.language is not None:
+        tts["language"] = args.language
+    if args.temperature is not None:
+        tts["temperature"] = args.temperature
     missing_cfg = [] if args.no_audio else [
         k for k in ("endpoint", "model", "voice") if not tts.get(k)
     ]
@@ -291,14 +343,72 @@ def main() -> int:
             return 2
     if not args.no_audio:
         (ROOT / "audio").mkdir(exist_ok=True)
-    for scene in tl["scenes"] if not args.no_audio else []:
-        if args.only and scene["id"] != args.only:
-            continue
-        wav = ROOT / scene["audio"]
-        if not wav.exists():
-            print(f"  synth {scene['id']} ...", flush=True)
-            synth(scene["narration"], wav, tts["endpoint"], tts["model"], tts["voice"])
-        scene["duration"] = round(duration(wav), 3)
+        anchor_id = tts.get("anchor_scene")
+        ext_ref_path = tts.get("ref_audio")
+        ext_ref_b64: str | None = None
+        ext_ref_text: str | None = tts.get("ref_text")
+        if ext_ref_path:
+            resolved_ref = (ROOT / ext_ref_path).resolve()
+            if not resolved_ref.exists():
+                raise PlanError(f"tts.ref_audio not found: {resolved_ref}")
+            ext_ref_b64 = base64.b64encode(resolved_ref.read_bytes()).decode("ascii")
+
+        scenes_by_id = {s["id"]: s for s in tl["scenes"]}
+        if args.only and args.only not in scenes_by_id:
+            raise PlanError(f"--only '{args.only}' does not match any scene id")
+
+        # Synthesize the anchor scene first so every subsequent clip can condition on it.
+        ordered_scenes = list(tl["scenes"])
+        if anchor_id and anchor_id in scenes_by_id:
+            anchor_sc = scenes_by_id[anchor_id]
+            ordered_scenes = [anchor_sc] + [s for s in ordered_scenes if s["id"] != anchor_id]
+
+        anchor_b64: str | None = None
+        anchor_text: str | None = None
+        for scene in ordered_scenes:
+            is_anchor = bool(anchor_id and scene["id"] == anchor_id)
+            wav = ROOT / scene["audio"]
+            targeted = args.only is None or scene["id"] == args.only
+            need_synth = targeted and (args.force or args.only == scene["id"] or not wav.exists())
+
+            if is_anchor:
+                if need_synth:
+                    print(f"  synth {scene['id']} (anchor) ...", flush=True)
+                    synth(
+                        scene["narration"],
+                        wav,
+                        tts["endpoint"],
+                        tts["model"],
+                        tts["voice"],
+                        language=tts.get("language"),
+                        temperature=tts.get("temperature"),
+                    )
+                if not wav.exists():
+                    raise PlanError(
+                        f"anchor scene '{anchor_id}' has no audio at {wav}; run without --only first"
+                    )
+                anchor_b64 = base64.b64encode(wav.read_bytes()).decode("ascii")
+                anchor_text = scene["narration"]
+                if targeted:
+                    scene["duration"] = round(duration(wav), 3)
+            elif targeted:
+                if need_synth:
+                    ref_b64 = anchor_b64 if anchor_id else ext_ref_b64
+                    ref_txt = anchor_text if anchor_id else ext_ref_text
+                    suffix = f" (anchored to {anchor_id})" if anchor_id else ""
+                    print(f"  synth {scene['id']}{suffix} ...", flush=True)
+                    synth(
+                        scene["narration"],
+                        wav,
+                        tts["endpoint"],
+                        tts["model"],
+                        tts["voice"],
+                        ref_audio_b64=ref_b64,
+                        ref_text=ref_txt,
+                        language=tts.get("language"),
+                        temperature=tts.get("temperature"),
+                    )
+                scene["duration"] = round(duration(wav), 3)
 
     missing = [s["id"] for s in tl["scenes"] if s.get("duration") is None]
     if missing:
