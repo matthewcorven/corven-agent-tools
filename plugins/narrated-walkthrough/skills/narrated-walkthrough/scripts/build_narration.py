@@ -557,6 +557,40 @@ def _inline_script(body: str) -> str:
     return "<script>\n" + body.replace("</script", "<\\/script") + "\n</script>"
 
 
+def _detect_repo_slug(tl: dict, base: pathlib.Path | None = None) -> str | None:
+    """Detect GitHub owner/repo deterministically from plan.repo, hud.artifacts, or git remote."""
+    explicit = tl.get("repo")
+    if isinstance(explicit, str) and re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", explicit.strip()):
+        return explicit.strip()
+
+    counts: dict[str, int] = {}
+    hud = tl.get("hud") or {}
+    for art in (hud.get("artifacts") or []):
+        url = str(art.get("url") or "")
+        m = re.search(r"github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/|$)", url, re.I)
+        if m:
+            slug = m.group(1)
+            counts[slug] = counts.get(slug, 0) + 1
+    if counts:
+        return max(counts.items(), key=lambda kv: kv[1])[0]
+
+    for candidate_dir in (base, pathlib.Path.cwd()):
+        if not candidate_dir or not candidate_dir.exists():
+            continue
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(candidate_dir), "config", "--get", "remote.origin.url"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if proc.returncode == 0:
+                m = re.search(r"github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?$", proc.stdout.strip(), re.I)
+                if m:
+                    return m.group(1)
+        except Exception:
+            pass
+    return None
+
+
 def render(tl: dict) -> str:
     scenes = tl["scenes"]
     cues = []
@@ -578,9 +612,11 @@ def render(tl: dict) -> str:
             )
             cursor = end_t
 
+    repo_slug = _detect_repo_slug(tl, ROOT)
     data = json.dumps(
         {
             "title": tl["title"],
+            **({"repo": repo_slug} if repo_slug else {}),
             "master_audio": tl.get("_master_audio_url"),
             "scenes": [
                 {

@@ -334,6 +334,25 @@ __MERMAID__
   .scene-choice-btn { font-size:12.5px; padding:6px 12px; border-radius:8px; }
   .scene-closing-slot { margin-top:18px; }
   .scene-closing-slot .ask { margin-bottom:0; }
+
+  /* Inline GitHub Repository / PR & Issue reference links (open in _blank) */
+  a.gh-ref { display:inline-flex; align-items:baseline; gap:3px; padding:1px 7px; margin:0 1px;
+             border-radius:6px; font-size:.86em; font-weight:600; line-height:1.35;
+             text-transform:none; letter-spacing:normal;
+             text-decoration:none; vertical-align:baseline; white-space:nowrap;
+             background:var(--accent-soft-bg); color:var(--accent-soft-ink);
+             border:1px solid var(--accent-soft-border);
+             transition:border-color .14s ease, filter .14s ease; }
+  a.gh-ref:hover { border-color:var(--accent); text-decoration:underline; filter:brightness(1.06); }
+  a.gh-ref-issue { background:var(--ok-bg); color:var(--ok-ink); border-color:var(--ok-border); }
+  a.gh-ref .gh-ref-repo { opacity:.82; font-weight:550; }
+  a.gh-ref .gh-ref-sep { opacity:.55; padding:0 1px; }
+  a.gh-ref .gh-ref-num { font-weight:700; }
+  a.gh-ref .gh-ref-ext { font-size:.82em; opacity:.72; margin-left:1px; }
+  .diagram svg a.gh-ref { padding:0 4px; font-size:12px; background:rgba(255,255,255,.78);
+                          color:#1c4da1 !important; border-color:rgba(61,111,208,.45); }
+  .diagram svg a.gh-ref-issue { color:#166534 !important; border-color:rgba(31,107,56,.45); }
+  .diagram svg a.gh-ref span { color:inherit !important; }
   .diagram { margin:16px 0 4px; display:flex; justify-content:center; padding:12px;
              border-radius:10px; background:var(--surface-sub); }
   .diagram svg { max-width:100%; height:auto; }
@@ -522,6 +541,213 @@ const DEFAULT_FOOTER_HINT = 'Space = play/pause · ←/→ = previous/next scene
 const BRIDGE = (typeof window.__WALKTHROUGH_BRIDGE__ === 'object' && window.__WALKTHROUGH_BRIDGE__) ? window.__WALKTHROUGH_BRIDGE__ : null;
 const recordedMetaHtml = $('voice-meta').innerHTML;
 
+// Deterministic GitHub PR / Issue reference normalizer & linker.
+// Mutates standard PR #000 / Issue #000 / owner/repo#000 / bare #000 text into
+// "[Repository-Name] / [PR #000 | Issue #000]" hyperlinks opening in _blank.
+function getRepoRefContext() {
+  let defaultSlug = (liveTelemetry && liveTelemetry.repoSlug) || DATA.repo || null;
+  const kindByKey = new Map();
+  const slugByShort = new Map();
+
+  const registerSlug = (slug) => {
+    if (!slug || !slug.includes('/')) return;
+    const parts = slug.split('/');
+    slugByShort.set(parts[1].toLowerCase(), slug);
+    if (!defaultSlug) defaultSlug = slug;
+  };
+
+  const ingestUrl = (url) => {
+    if (typeof url !== 'string') return;
+    const m = url.match(/https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:\/(pull|issues)\/(\d+))?/i);
+    if (!m) return;
+    const slug = m[1];
+    registerSlug(slug);
+    if (m[2] && m[3]) {
+      kindByKey.set(slug.toLowerCase() + '#' + m[3], m[2].toLowerCase() === 'pull' ? 'pr' : 'issue');
+    }
+  };
+
+  if (defaultSlug) registerSlug(defaultSlug);
+  ((DATA.hud && DATA.hud.artifacts) || []).forEach((a) => ingestUrl(a && a.url));
+  ((liveTelemetry && liveTelemetry.artifacts) || []).forEach((a) => ingestUrl(a && a.url));
+
+  const defaultOwner = defaultSlug ? defaultSlug.split('/')[0] : null;
+  const defaultKeyPrefix = defaultSlug ? defaultSlug.toLowerCase() + '#' : null;
+
+  if (defaultKeyPrefix) {
+    ((liveTelemetry && liveTelemetry.stats) || []).forEach((st) => {
+      const pm = String(st && st.label || '').match(/\bPR\s*#?(\d+)\b/i);
+      if (pm) kindByKey.set(defaultKeyPrefix + pm[1], 'pr');
+    });
+    ((liveTelemetry && liveTelemetry.nodes) || []).forEach((nd) => {
+      ((nd && nd.quick_actions) || []).forEach((qa) => {
+        const ctx = qa && qa.context;
+        if (ctx && ctx.issue) kindByKey.set(defaultKeyPrefix + ctx.issue, 'issue');
+        if (ctx && ctx.pr) kindByKey.set(defaultKeyPrefix + ctx.pr, 'pr');
+      });
+    });
+    (DATA.scenes || []).forEach((sc) => {
+      if (sc && sc.meta && sc.meta.pr) kindByKey.set(defaultKeyPrefix + sc.meta.pr, 'pr');
+      if (sc && sc.meta && sc.meta.issue) kindByKey.set(defaultKeyPrefix + sc.meta.issue, 'issue');
+    });
+    const titlePr = String(DATA.title || '').match(/\bPR\s*#?(\d+)\b/i);
+    if (titlePr) kindByKey.set(defaultKeyPrefix + titlePr[1], 'pr');
+  }
+
+  return { defaultSlug, defaultOwner, kindByKey, slugByShort };
+}
+
+function buildGhRefHtml({ slug, kind, num }) {
+  const repoName = slug.includes('/') ? slug.split('/')[1] : slug;
+  const labelKind = kind === 'pr' ? 'PR' : 'Issue';
+  const pathSeg = kind === 'pr' ? 'pull' : 'issues';
+  const href = 'https://github.com/' + encodeURI(slug) + '/' + pathSeg + '/' + encodeURIComponent(String(num));
+  return '<a class="gh-ref gh-ref-' + kind + '" href="' + esc(href) +
+    '" target="_blank" rel="noopener noreferrer" title="Open ' + esc(slug + ' ' + labelKind + ' #' + num) +
+    ' in browser" data-gh-repo="' + esc(slug) + '" data-gh-kind="' + kind + '" data-gh-num="' + esc(num) + '">' +
+    '<span class="gh-ref-repo">' + esc(repoName) + '</span>' +
+    '<span class="gh-ref-sep">/</span>' +
+    '<span class="gh-ref-num">' + labelKind + ' #' + esc(num) + '</span>' +
+    '<span class="gh-ref-ext" aria-hidden="true">&#8599;</span></a>';
+}
+
+// Combined deterministic pattern (longest/most-qualified branches first):
+//  1. owner/repo#123
+//  2. short-repo-name#123 (no space before #) OR known repo-name + (PR|Issue)? #123
+//  3. PR #123 / PR 123 / Pull Request #123 / Issue #123 / Issue 123
+//  4. bare #123 (guarded against hex colors, HTML entities, URL fragments)
+const GH_REF_RE = /(?<![A-Za-z0-9_/.])([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d{1,6})\b|(?<![A-Za-z0-9_/.])([A-Za-z0-9]+(?:-[A-Za-z0-9_.-]+)+)(\s+(?:(PR|Pull\s+Request)|(Issue))\s*#?|\s+#|#)(\d{1,6})\b|\b(?:(PR|Pull\s+[Rr]equest)|(Issue))\s*#?(\d{1,6})\b|(?<![A-Za-z0-9_&#/.])#(\d{1,6})\b/gi;
+
+function linkifyGitHubRefs(rawText, ctxOverride) {
+  const text = String(rawText ?? '');
+  const ctx = ctxOverride || getRepoRefContext();
+  if (!ctx.defaultSlug && !/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#\d/.test(text)) {
+    return esc(text);
+  }
+  let out = '';
+  let last = 0;
+  GH_REF_RE.lastIndex = 0;
+  let m;
+  while ((m = GH_REF_RE.exec(text)) !== null) {
+    const matchStr = m[0];
+    const start = m.index;
+    let slug = null;
+    let explicitKind = null;
+    let num = null;
+    let consumeStart = start;
+
+    if (m[1] && m[2]) {
+      // owner/repo#N
+      slug = m[1];
+      num = m[2];
+    } else if (m[3] && m[7]) {
+      const shortName = m[3];
+      const sep = m[4] || '';
+      const knownSlug = ctx.slugByShort.get(shortName.toLowerCase());
+      if (knownSlug) {
+        slug = knownSlug;
+      } else if (sep === '#' && ctx.defaultOwner) {
+        // Attached shorthand like corven-agents#57
+        slug = ctx.defaultOwner + '/' + shortName;
+      } else {
+        // Hyphenated English phrase before a normal PR/Issue ref (e.g. "Follow-Up PR #353"):
+        // emit shortName verbatim as plain text and linkify only the trailing PR/Issue ref!
+        slug = ctx.defaultSlug;
+        consumeStart = start + shortName.length + (sep.length - sep.trimStart().length);
+      }
+      if (m[5]) explicitKind = 'pr';
+      else if (m[6]) explicitKind = 'issue';
+      num = m[7];
+    } else if (m[10]) {
+      // PR #N / Pull Request #N / Issue #N
+      slug = ctx.defaultSlug;
+      explicitKind = m[8] ? 'pr' : 'issue';
+      num = m[10];
+    } else if (m[11]) {
+      // bare #N
+      slug = ctx.defaultSlug;
+      num = m[11];
+    }
+
+    if (!slug || !num) continue;
+    const key = slug.toLowerCase() + '#' + num;
+    const kind = explicitKind || ctx.kindByKey.get(key) || 'issue';
+    out += esc(text.slice(last, consumeStart)) + buildGhRefHtml({ slug, kind, num });
+    last = start + matchStr.length;
+  }
+  out += esc(text.slice(last));
+  return out;
+}
+
+const SKIP_REF_TAGS = new Set(['A', 'BUTTON', 'CODE', 'PRE', 'SCRIPT', 'STYLE', 'INPUT', 'TEXTAREA', 'SUMMARY']);
+
+function enhanceDomGitHubRefs(rootEl, ctxOverride) {
+  if (!rootEl || typeof document.createTreeWalker !== 'function') return;
+  const ctx = ctxOverride || getRepoRefContext();
+  if (!ctx.defaultSlug && ctx.slugByShort.size === 0) return;
+
+  // 1. Format existing direct GitHub PR/Issue anchor labels (e.g. "PR #351 (MERGED)" -> "venom-dog-sports / PR #351 (MERGED)")
+  rootEl.querySelectorAll('a[href*="github.com/"]:not(.gh-ref)').forEach((a) => {
+    a.setAttribute('target', '_blank');
+    a.setAttribute('rel', 'noopener noreferrer');
+    const hm = (a.getAttribute('href') || '').match(/https?:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(pull|issues)\/(\d+)/i);
+    if (!hm) return;
+    const repo = hm[2];
+    const kindLbl = hm[3].toLowerCase() === 'pull' ? 'PR' : 'Issue';
+    const num = hm[4];
+    const cur = (a.textContent || '').trim();
+    if (cur.toLowerCase().includes(repo.toLowerCase() + ' /')) return;
+    const statusMatch = cur.match(/\(([^)]+)\)\s*$/);
+    const suffix = statusMatch ? ' (' + statusMatch[1] + ')' : '';
+    a.textContent = repo + ' / ' + kindLbl + ' #' + num + suffix + ' ↗';
+    a.setAttribute('data-gh-repo', hm[1] + '/' + repo);
+    a.setAttribute('data-gh-kind', hm[3].toLowerCase() === 'pull' ? 'pr' : 'issue');
+    a.setAttribute('data-gh-num', num);
+  });
+
+  // 2. Mutate text nodes cleanly across cards, scene headers, captions, and Mermaid SVG foreignObjects
+  const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT);
+  const targets = [];
+  let node;
+  while ((node = walker.nextNode())) {
+    const val = node.nodeValue;
+    if (!val || !/(?:#\d|\b(?:PR|Pull\s+[Rr]equest|Issue)\s*\d)/i.test(val)) continue;
+    let p = node.parentElement;
+    let skip = false;
+    while (p && p !== rootEl.parentElement) {
+      if (SKIP_REF_TAGS.has(p.tagName) || p.classList.contains('gh-ref') || p.classList.contains('scene-tag') || p.classList.contains('node-rules-box') || p.classList.contains('det-formula')) {
+        skip = true;
+        break;
+      }
+      p = p.parentElement;
+    }
+    if (!skip) targets.push(node);
+  }
+
+  for (const textNode of targets) {
+    const raw = textNode.nodeValue || '';
+    const html = linkifyGitHubRefs(raw, ctx);
+    if (!html.includes('class="gh-ref')) continue;
+    const frag = document.createRange().createContextualFragment(html);
+    if (textNode.parentNode) {
+      textNode.parentNode.replaceChild(frag, textNode);
+    }
+  }
+}
+
+function enhanceAllRefs() {
+  const ctx = getRepoRefContext();
+  if (!ctx.defaultSlug) return;
+  enhanceDomGitHubRefs($('hud'), ctx);
+  enhanceDomGitHubRefs($('slides'), ctx);
+  enhanceDomGitHubRefs($('ask'), ctx);
+  enhanceDomGitHubRefs($('cap'), ctx);
+}
+
+window.linkifyGitHubRefs = linkifyGitHubRefs;
+window.getRepoRefContext = getRepoRefContext;
+window.enhanceDomGitHubRefs = enhanceDomGitHubRefs;
+
 function setFooterLiveChat(targetLabel) {
   liveChatTarget = targetLabel || null;
   const el = $('footer-hint');
@@ -592,6 +818,7 @@ async function loadTelemetry(force) {
   } catch (e) {} finally {
     telemetryLoading = false;
     renderHud();
+    enhanceAllRefs();
     syncStickyMedia();
   }
 }
@@ -709,6 +936,7 @@ function connectBridgeEvents() {
         liveTelemetry = msg;
         syncScenesTelemetry(liveTelemetry);
         renderHud();
+        enhanceAllRefs();
         syncStickyMedia();
       }
     } catch (e) {}
@@ -784,6 +1012,7 @@ async function renderDiagrams() {
     } catch (e) {
       target.textContent = 'diagram failed: ' + e.message;
     }
+    enhanceDomGitHubRefs(target);
   }
 }
 
@@ -961,6 +1190,7 @@ class WalkthroughSceneBase extends HTMLElement {
       '<div class="scene-after-host">' + this.renderSpecializedAfter() + '</div>';
     this.renderInlineChoices();
     this.bindSpecializedEvents();
+    enhanceDomGitHubRefs(this);
   }
 
   describeComponent() {
@@ -1027,7 +1257,10 @@ class WalkthroughOpeningScene extends WalkthroughSceneBase {
 
   refreshOpeningStrip() {
     const host = this.querySelector(':scope > .scene-before-host');
-    if (host) host.innerHTML = this._buildOpeningStripHtml();
+    if (host) {
+      host.innerHTML = this._buildOpeningStripHtml();
+      enhanceDomGitHubRefs(host);
+    }
   }
 }
 
@@ -1104,7 +1337,10 @@ class WalkthroughEvidenceScene extends WalkthroughSceneBase {
 
   refreshEvidenceStrip() {
     const host = this.querySelector(':scope > .scene-after-host');
-    if (host) host.innerHTML = this._buildEvidenceHtml();
+    if (host) {
+      host.innerHTML = this._buildEvidenceHtml();
+      enhanceDomGitHubRefs(host);
+    }
   }
 }
 
@@ -1452,6 +1688,7 @@ function renderHud() {
     '</div>';
 
   host.hidden = false;
+  enhanceDomGitHubRefs(host);
   if (BRIDGE) renderBridgePill(bridgeAgentStatus === 'standalone' ? 'ready' : bridgeAgentStatus);
 
   const refBtn = $('hud-refresh-btn');
@@ -1739,7 +1976,7 @@ function tick() {
   const text = cue ? cue.text : '';
   if (cap.dataset.t !== text) {
     cap.classList.remove('on');
-    setTimeout(() => { cap.textContent = text; cap.classList.add('on'); }, 90);
+    setTimeout(() => { cap.innerHTML = linkifyGitHubRefs(text); cap.classList.add('on'); }, 90);
     cap.dataset.t = text;
   }
   syncStickyMedia();
@@ -1964,6 +2201,7 @@ function renderAsk() {
     '<details class="a2ui-raw" id="a2ui-json-drawer"><summary>Inspect A2UI v1.0 JSON payload (' + activeMessages.length + ' messages)</summary>' +
     '<pre id="a2ui-json-pre">' + esc(JSON.stringify(activeMessages, null, 2)) + '</pre></details>';
   ask.hidden = false;
+  enhanceDomGitHubRefs(ask);
   if (BRIDGE) renderBridgePill(bridgeAgentStatus === 'standalone' ? 'ready' : bridgeAgentStatus);
 
   ask.querySelectorAll('button[data-answer]').forEach((b) => {
@@ -2056,6 +2294,7 @@ window.state = () => ({
   updateVoiceMeta();
   updatePlayButtons();
   tick();
+  enhanceAllRefs();
   syncStickyMedia();
 })();
 </script>

@@ -208,6 +208,11 @@
           "description": "Unique within the plan; the validator rejects duplicates."
         },
         "title": { "type": "string", "minLength": 1 },
+        "repo": {
+          "description": "Optional GitHub owner/repo slug (for example 'owner/project'). Auto-detected by build_narration.py when omitted so PR/Issue references in scenes and cards render as 'repo / PR #N' or 'repo / Issue #N' hyperlinks opening in _blank.",
+          "type": "string",
+          "minLength": 3
+        },
         "mermaid": {
           "type": "string",
           "minLength": 1,

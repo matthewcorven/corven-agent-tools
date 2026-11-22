@@ -501,6 +501,9 @@ class PackageTests(unittest.TestCase):
             'nw-closing-scene',
             'openingContext',
             'closingContext',
+            'linkifyGitHubRefs',
+            'enhanceDomGitHubRefs',
+            'target="_blank" rel="noopener noreferrer"',
             'briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat',
         ):
             self.assertIn(token, html, f"player.html missing expected UI hook: {token}")
