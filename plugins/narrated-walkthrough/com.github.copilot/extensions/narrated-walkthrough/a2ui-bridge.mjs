@@ -890,6 +890,9 @@ export async function startWalkthroughServer({
                 const ext = path.extname(assetPath).toLowerCase();
                 const mime = MIME_BY_EXT[ext] || "application/octet-stream";
                 const data = await readFile(assetPath);
+                const cacheHdr = (ext === ".wav" || ext === ".mp4" || ext === ".webm") && url.searchParams.has("v")
+                    ? "public, max-age=300"
+                    : "no-store";
                 // Support HTTP Range requests for smooth HTML5 <audio>/<video> seeking
                 const range = req.headers.range;
                 if (range && /^bytes=\d*-\d*$/.test(range)) {
@@ -907,7 +910,7 @@ export async function startWalkthroughServer({
                         "content-length": String(slice.length),
                         "content-range": `bytes ${start}-${end}/${data.length}`,
                         "accept-ranges": "bytes",
-                        "cache-control": "no-store",
+                        "cache-control": cacheHdr,
                     });
                     res.end(req.method === "HEAD" ? undefined : slice);
                     return;
@@ -916,7 +919,7 @@ export async function startWalkthroughServer({
                     "content-type": mime,
                     "content-length": String(data.length),
                     "accept-ranges": "bytes",
-                    "cache-control": "no-store",
+                    "cache-control": cacheHdr,
                 });
                 res.end(req.method === "HEAD" ? undefined : data);
                 return;

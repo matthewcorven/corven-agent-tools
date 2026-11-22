@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import base64
 import gzip
+import hashlib
 import json
 import math
 import pathlib
@@ -178,12 +179,19 @@ def _active_speech_bounds(
     samples: list[int],
     sample_rate: int,
     channels: int,
-    cushion_ms: float = 20.0,
-) -> tuple[int, int, float, float]:
-    """Locate active speech frame indices (start_frame, end_frame, active_seconds, rms_norm)."""
+    cushion_ms: float = 90.0,
+) -> tuple[int, int, float, float, float]:
+    """Locate soft-consonant-safe speech bounds AND true voiced speaking duration.
+
+    Returns ``(start_frame, end_frame, span_seconds, voiced_seconds, seg_rms)``.
+    Using a low edge threshold (1.5% of peak RMS) plus a 90 ms cushion preserves
+    quiet initial fricatives/plosives and trailing breath decay; measuring
+    ``voiced_seconds`` (excluding internal pauses >= 120 ms) prevents long
+    mid-clip pauses from hiding fast articulation speed.
+    """
     n_frames = len(samples) // channels
     if n_frames == 0:
-        return 0, 0, 0.0, 0.0
+        return 0, 0, 0.0, 0.0, 0.0
     win = max(1, int(sample_rate * 0.02))
     rms_blocks: list[float] = []
     for f0 in range(0, n_frames, win):
@@ -197,15 +205,39 @@ def _active_speech_bounds(
         rms_blocks.append(math.sqrt(acc / max(1, count)))
     peak_rms = max(rms_blocks) if rms_blocks else 0.0
     if peak_rms < 1e-4:
-        return 0, n_frames, n_frames / sample_rate, 0.0
-    thresh = max(0.008, peak_rms * 0.06)
-    active = [i for i, r in enumerate(rms_blocks) if r >= thresh]
-    if not active:
-        return 0, n_frames, n_frames / sample_rate, peak_rms
+        dur = n_frames / sample_rate
+        return 0, n_frames, dur, dur, 0.0
+
+    # Conservative edge detector keeps soft consonants & trailing syllables intact
+    edge_thresh = max(0.002, peak_rms * 0.015)
+    edge_active = [i for i, r in enumerate(rms_blocks) if r >= edge_thresh]
+    if not edge_active:
+        dur = n_frames / sample_rate
+        return 0, n_frames, dur, dur, peak_rms
+
     cushion = int(round(sample_rate * (cushion_ms / 1000.0)))
-    start_f = max(0, active[0] * win - cushion)
-    end_f = min(n_frames, (active[-1] + 1) * win + cushion)
-    active_sec = max(0.05, ((active[-1] - active[0] + 1) * win) / sample_rate)
+    start_f = max(0, edge_active[0] * win - cushion)
+    end_f = min(n_frames, (edge_active[-1] + 1) * win + cushion)
+    span_sec = max(0.05, ((edge_active[-1] - edge_active[0] + 1) * win) / sample_rate)
+
+    # Voiced articulation detector excludes internal silent pauses >= 120 ms (6 x 20ms blocks)
+    voiced_thresh = max(0.006, peak_rms * 0.05)
+    voiced_blocks = [1 if r >= voiced_thresh else 0 for r in rms_blocks[edge_active[0] : edge_active[-1] + 1]]
+    # Bridge brief consonant closures (< 120 ms = < 6 blocks) as continuous articulation
+    idx_b = 0
+    while idx_b < len(voiced_blocks):
+        if voiced_blocks[idx_b] == 0:
+            j = idx_b
+            while j < len(voiced_blocks) and voiced_blocks[j] == 0:
+                j += 1
+            if (j - idx_b) < 6 and idx_b > 0 and j < len(voiced_blocks):
+                for k in range(idx_b, j):
+                    voiced_blocks[k] = 1
+            idx_b = j
+        else:
+            idx_b += 1
+    voiced_sec = max(0.05, sum(voiced_blocks) * (win / sample_rate))
+
     # Active-segment RMS for loudness normalization
     acc = 0.0
     seg_count = 0
@@ -214,7 +246,53 @@ def _active_speech_bounds(
         acc += v * v
         seg_count += 1
     seg_rms = math.sqrt(acc / max(1, seg_count))
-    return start_f, end_f, active_sec, seg_rms
+    return start_f, end_f, span_sec, voiced_sec, seg_rms
+
+
+def _hann_fade(samples: list[float], sample_rate: int, channels: int, fade_ms: float = 35.0) -> None:
+    """Apply smooth raised-cosine (Hann) fade-in and fade-out to eliminate edge clicks."""
+    n_frames = len(samples) // channels
+    fade_f = min(n_frames // 2, max(1, int(round(sample_rate * (fade_ms / 1000.0)))))
+    for fi in range(fade_f):
+        scale = 0.5 * (1.0 - math.cos(math.pi * fi / float(fade_f)))
+        for c in range(channels):
+            samples[fi * channels + c] *= scale
+            samples[(n_frames - 1 - fi) * channels + c] *= scale
+
+
+def split_sentences(text: str) -> list[str]:
+    """Split narration text into individual sentences while preserving punctuation."""
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if p.strip()]
+    return parts if parts else ([text.strip()] if (text or "").strip() else [])
+
+
+def build_master_audio(scenes: list[dict], root: pathlib.Path) -> str | None:
+    """Compile all per-scene 16-bit PCM WAVs into a single seamless ``audio/master.wav``.
+
+    Using one continuous master WAV eliminates every browser audio-source switch,
+    buffer gap, and wall-clock race at scene boundaries.
+    """
+    wav_paths = [root / sc["audio"] for sc in scenes]
+    if not wav_paths or not all(p.exists() for p in wav_paths):
+        return None
+    sr0 = ch0 = None
+    merged: list[int] = []
+    for p in wav_paths:
+        try:
+            sr, ch, samples = _read_pcm16_wav(p)
+        except PlanError:
+            return None
+        if sr0 is None:
+            sr0, ch0 = sr, ch
+        elif sr != sr0 or ch != ch0:
+            return None
+        merged.extend(samples)
+    if sr0 is None or ch0 is None or not merged:
+        return None
+    master_path = root / "audio" / "master.wav"
+    master_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_pcm16_wav(master_path, sr0, ch0, merged)
+    return "audio/master.wav"
 
 
 def _atempo_chain(factor: float) -> str:
@@ -249,18 +327,18 @@ def balance_scene_pace(
             "pace balancing requires 'ffmpeg' on PATH for pitch-preserving atempo time-stretching"
         )
 
-    min_tempo = float(pace_cfg.get("min_tempo", 0.76))
-    max_tempo = float(pace_cfg.get("max_tempo", 1.25))
-    tolerance = float(pace_cfg.get("tolerance", 0.03))
-    lead_ms = float(pace_cfg.get("lead_ms", 100.0))
-    tail_ms = float(pace_cfg.get("tail_ms", 280.0))
+    min_tempo = float(pace_cfg.get("min_tempo", 0.80))
+    max_tempo = float(pace_cfg.get("max_tempo", 1.22))
+    tolerance = float(pace_cfg.get("tolerance", 0.02))
+    lead_ms = float(pace_cfg.get("lead_ms", 180.0))
+    tail_ms = float(pace_cfg.get("tail_ms", 420.0))
     target_dbfs = pace_cfg.get("target_dbfs", -20.0)
     target_dbfs = None if target_dbfs is None else float(target_dbfs)
 
     raw_dir = root / "audio" / ".raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Measure every scene from its lossless raw master
+    # 1. Measure every scene's true VOICED speaking rate from its lossless raw master
     measured: list[dict] = []
     for sc in scenes:
         wav = root / sc["audio"]
@@ -270,9 +348,9 @@ def balance_scene_pace(
         if sc["id"] in freshly_synthesized or not raw_master.exists():
             shutil.copy2(wav, raw_master)
         sr, ch, samples = _read_pcm16_wav(raw_master)
-        start_f, end_f, active_sec, seg_rms = _active_speech_bounds(samples, sr, ch)
+        start_f, end_f, span_sec, voiced_sec, seg_rms = _active_speech_bounds(samples, sr, ch)
         syl = estimate_syllables(sc["narration"])
-        raw_sps = syl / active_sec if active_sec > 0 else 0.0
+        raw_sps = syl / voiced_sec if voiced_sec > 0 else 0.0
         measured.append(
             {
                 "scene": sc,
@@ -283,7 +361,8 @@ def balance_scene_pace(
                 "samples": samples,
                 "start_f": start_f,
                 "end_f": end_f,
-                "active_sec": active_sec,
+                "span_sec": span_sec,
+                "voiced_sec": voiced_sec,
                 "raw_duration": len(samples) / (sr * ch),
                 "seg_rms": seg_rms,
                 "syllables": syl,
@@ -295,7 +374,7 @@ def balance_scene_pace(
     if pace_cfg.get("target_sps") is not None:
         target_sps = float(pace_cfg["target_sps"])
     else:
-        target_sps = statistics.median(valid_rates) if valid_rates else 6.2
+        target_sps = statistics.median(valid_rates) if valid_rates else 6.8
 
     report_scenes: list[dict] = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -340,22 +419,16 @@ def balance_scene_pace(
                     if abs(gain - 1.0) > 0.03:
                         active_samples = [s * gain for s in active_samples]
 
-            # Short 8ms micro-fade at active edges prevents any boundary click
-            fade_f = min(len(active_samples) // (2 * ch), max(1, int(sr * 0.008)))
-            for fi in range(fade_f):
-                scale = fi / float(fade_f)
-                for c in range(ch):
-                    active_samples[fi * ch + c] *= scale
-                    idx_end = (len(active_samples) // ch - 1 - fi) * ch + c
-                    active_samples[idx_end] *= scale
+            # Smooth 35ms raised-cosine (Hann) fade eliminates clicks while keeping soft consonants
+            _hann_fade(active_samples, sr, ch, fade_ms=35.0)
 
             lead_pad = [0] * (int(round(sr * (lead_ms / 1000.0))) * ch)
             tail_pad = [0] * (int(round(sr * (tail_ms / 1000.0))) * ch)
             final_samples = lead_pad + active_samples + tail_pad
             _write_pcm16_wav(m["wav"], sr, ch, final_samples)
 
-            _, _, new_active_sec, _ = _active_speech_bounds(final_samples, sr, ch)
-            balanced_sps = m["syllables"] / new_active_sec if new_active_sec > 0 else 0.0
+            _, _, _, new_voiced_sec, _ = _active_speech_bounds(final_samples, sr, ch)
+            balanced_sps = m["syllables"] / new_voiced_sec if new_voiced_sec > 0 else 0.0
             report_scenes.append(
                 {
                     "id": sc["id"],
@@ -508,6 +581,7 @@ def render(tl: dict) -> str:
     data = json.dumps(
         {
             "title": tl["title"],
+            "master_audio": tl.get("_master_audio_url"),
             "scenes": [
                 {
                     "id": s["id"],
@@ -742,8 +816,20 @@ def main() -> int:
         t0 += scene["duration"]
     tl["total_duration"] = round(t0, 3)
 
+    # Compile a single seamless master WAV when all scene clips exist on disk so
+    # playback never reloads <audio> sources or chops edges between scenes.
+    master_rel = build_master_audio(tl["scenes"], ROOT)
+    if master_rel:
+        tl["master_audio"] = master_rel
+        master_hash = hashlib.sha256((ROOT / master_rel).read_bytes()).hexdigest()[:8]
+        tl["_master_audio_url"] = f"{master_rel}?v={master_hash}"
+    else:
+        tl.pop("master_audio", None)
+        tl.pop("_master_audio_url", None)
+
     (ROOT / "slides.html").write_text(render(tl))
     resolved_mermaid = tl.pop("_mermaid_resolved", "")
+    tl.pop("_master_audio_url", None)
     plan_path.write_text(json.dumps(tl, indent=2, ensure_ascii=False) + "\n")
     manifest = {
         "plugin": "narrated-walkthrough",

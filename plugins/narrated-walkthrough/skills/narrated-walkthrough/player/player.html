@@ -1127,17 +1127,44 @@ function renderHud() {
   });
 }
 
+const HAS_MASTER_AUDIO = Boolean(DATA.master_audio);
+if (HAS_MASTER_AUDIO) {
+  player.src = DATA.master_audio;
+}
+
 function now() {
   if (useSystem) return sysOffset + (performance.now() - sysStart) / 1000;
+  if (HAS_MASTER_AUDIO) {
+    if (playing && !player.paused && Number.isFinite(player.currentTime)) {
+      wallBase = player.currentTime;
+      return player.currentTime;
+    }
+    return wallBase;
+  }
   if (!playing && pending === null) return wallBase;
+  if (playing && pending === null && sceneIdx >= 0 && Number.isFinite(player.currentTime)) {
+    const sc = DATA.scenes[sceneIdx];
+    if (sc) return Math.min(sc.start + sc.duration, sc.start + player.currentTime);
+  }
   return wallBase + (performance.now() - wallStart) / 1000;
 }
 
-// The timeline is authoritative; the audio element follows it. Scene offsets are
-// sums of measured clip durations, so each clip exactly fills its slot and the
-// mapping never drifts.
+// When master_audio is present, a single continuous <audio> stream is the
+// authoritative clock — zero src reloads, zero buffer gaps, zero chopped edges.
 function syncAudio(t) {
   if (useSystem) return;
+  if (HAS_MASTER_AUDIO) {
+    if (!player.src || player.src.indexOf(DATA.master_audio) < 0) {
+      pending = t;
+      player.src = DATA.master_audio;
+      return;
+    }
+    if (pending !== null) return;
+    if (!playing && Math.abs(player.currentTime - t) > 0.15) {
+      try { player.currentTime = t; } catch (e) {}
+    }
+    return;
+  }
   let i = 0;
   for (let k = 0; k < DATA.scenes.length; k++) if (t >= DATA.scenes[k].start) i = k;
   const sc = DATA.scenes[i];
@@ -1146,21 +1173,31 @@ function syncAudio(t) {
     sceneIdx = i; pending = t; player.src = sc.audio; return;
   }
   if (pending !== null) return;
-  if (Math.abs(player.currentTime - want) > 0.45) { pending = t; player.currentTime = want; }
+  if (Math.abs(player.currentTime - want) > 0.65) { player.currentTime = want; }
 }
 
 player.addEventListener('loadedmetadata', () => {
   if (pending === null) return;
   const t = pending; pending = null;
-  let i = 0;
-  for (let k = 0; k < DATA.scenes.length; k++) if (t >= DATA.scenes[k].start) i = k;
-  player.currentTime = Math.max(0, t - DATA.scenes[i].start);
+  if (HAS_MASTER_AUDIO) {
+    player.currentTime = Math.max(0, Math.min(DATA.total - 0.05, t));
+  } else {
+    let i = 0;
+    for (let k = 0; k < DATA.scenes.length; k++) if (t >= DATA.scenes[k].start) i = k;
+    player.currentTime = Math.max(0, t - DATA.scenes[i].start);
+  }
   wallBase = t; wallStart = performance.now();
   if (playing) player.play().catch(() => {});
   idx = -1; tick();
 });
 
 player.addEventListener('ended', () => {
+  if (HAS_MASTER_AUDIO) {
+    wallBase = DATA.total;
+    pause();
+    tick();
+    return;
+  }
   const next = DATA.scenes[sceneIdx + 1];
   if (next) seek(next.start); else pause();
 });
@@ -1171,7 +1208,18 @@ function seek(t) {
   if (useSystem) {
     sysOffset = t; sysStart = performance.now(); sysScene = -1;
     if (playing) speakFrom(t);
-  } else { pending = t; syncAudio(t); }
+  } else if (HAS_MASTER_AUDIO) {
+    if (player.readyState >= 1) {
+      pending = null;
+      player.currentTime = t;
+    } else {
+      pending = t;
+      syncAudio(t);
+    }
+  } else {
+    pending = t;
+    syncAudio(t);
+  }
   tick();
 }
 
@@ -1228,15 +1276,35 @@ function speakFrom(t) {
 
 function play() {
   if (playing) return;
+  if (wallBase >= DATA.total - 0.1) wallBase = 0;
   setFooterLiveChat(null);
   playing = true;
   updatePlayButtons();
   wallStart = performance.now();
-  if (useSystem) speakFrom(now());
-  else if (!player.src) { pending = wallBase; syncAudio(wallBase); }
-  else player.play().catch(() => {
-    useSystem = true; $('voicebtn').textContent = 'Use recorded audio'; updateVoiceMeta(); speakFrom(now());
-  });
+  if (useSystem) {
+    speakFrom(now());
+  } else if (HAS_MASTER_AUDIO) {
+    if (!player.src || player.src.indexOf(DATA.master_audio) < 0) {
+      pending = wallBase;
+      player.src = DATA.master_audio;
+    } else if (player.readyState >= 1) {
+      pending = null;
+      if (Math.abs(player.currentTime - wallBase) > 0.1) {
+        try { player.currentTime = wallBase; } catch (e) {}
+      }
+      player.play().catch(() => {
+        useSystem = true; $('voicebtn').textContent = 'Use recorded audio'; updateVoiceMeta(); speakFrom(now());
+      });
+    } else {
+      pending = wallBase;
+    }
+  } else if (!player.src) {
+    pending = wallBase; syncAudio(wallBase);
+  } else {
+    player.play().catch(() => {
+      useSystem = true; $('voicebtn').textContent = 'Use recorded audio'; updateVoiceMeta(); speakFrom(now());
+    });
+  }
   cancelAnimationFrame(raf);
   raf = requestAnimationFrame(tick);
 }

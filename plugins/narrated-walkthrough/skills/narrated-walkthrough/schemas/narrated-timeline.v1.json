@@ -62,10 +62,14 @@
           "minimum": 0,
           "description": "Optional sampling temperature forwarded to /v1/audio/speech (for example 0.0 for stable acoustic delivery)."
         },
+        "sentence_chunking": {
+          "type": "boolean",
+          "description": "When true, synthesize multi-sentence scenes one sentence at a time against the voice anchor and stitch with clean inter-sentence breath pauses to prevent neural TTS duration compression on long paragraphs."
+        },
         "pace": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Optional post-synthesis speaking-pace balancing. Normalizes active articulation rate (syllables/sec), loudness, and leading/trailing silence across scenes via pitch-preserving time-stretch before re-measuring final WAV durations so scene offsets and captions stay locked in exact sync.",
+          "description": "Optional post-synthesis speaking-pace balancing. Normalizes voiced articulation rate (syllables/sec excluding internal pauses), loudness, and generous soft-consonant margins via pitch-preserving time-stretch before re-measuring final WAV durations and compiling a seamless master.wav track.",
           "properties": {
             "enabled": { "type": "boolean" },
             "target_sps": { "type": "number", "exclusiveMinimum": 0 },
@@ -74,10 +78,16 @@
             "tolerance": { "type": "number", "minimum": 0 },
             "lead_ms": { "type": "number", "minimum": 0 },
             "tail_ms": { "type": "number", "minimum": 0 },
+            "inter_sentence_ms": { "type": "number", "minimum": 0 },
             "target_dbfs": { "type": "number" }
           }
         }
       }
+    },
+    "master_audio": {
+      "description": "DERIVED. Relative path to the single seamless concatenated master WAV compiled by the builder so playback never switches audio sources or chops syllables at scene edges.",
+      "type": "string",
+      "minLength": 1
     },
     "total_duration": {
       "description": "DERIVED. Written by the builder as the sum of scene durations. Never author this; a test asserts it equals the sum when present.",

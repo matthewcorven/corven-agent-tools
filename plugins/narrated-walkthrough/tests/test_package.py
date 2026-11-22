@@ -458,7 +458,7 @@ class PackageTests(unittest.TestCase):
         source = BUILDER.read_text()
         imports = re.findall(r"^(?:import|from)\s+([a-zA-Z0-9_.]+)", source, re.M)
         roots = {name.split(".")[0] for name in imports}
-        allowed = {"__future__", "argparse", "base64", "json", "math", "pathlib", "re", "statistics",
+        allowed = {"__future__", "argparse", "base64", "hashlib", "json", "math", "pathlib", "re", "statistics",
                    "subprocess", "sys", "tempfile", "urllib", "shutil", "struct", "gzip"}
         self.assertTrue(roots <= allowed, roots - allowed)
 
@@ -492,6 +492,7 @@ class PackageTests(unittest.TestCase):
             'hud-tabstrip',
             'loadTelemetry',
             'pauseForLiveChat',
+            'HAS_MASTER_AUDIO',
             'briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat',
         ):
             self.assertIn(token, html, f"player.html missing expected UI hook: {token}")
@@ -911,6 +912,12 @@ class PaceBalancingTests(unittest.TestCase):
             # Balanced rates reported cleanly in deck.json
             rates = [s["balanced_sps"] for s in manifest["pace"]["scenes"]]
             self.assertLess(max(rates) / min(rates), 1.08)
+            # Seamless concatenated master WAV compiled with exact cumulative duration
+            master_wav = tmp_path / "audio" / "master.wav"
+            self.assertTrue(master_wav.exists(), "audio/master.wav must be compiled for gapless playback")
+            self.assertAlmostEqual(bn.duration(master_wav), updated["total_duration"], delta=0.005)
+            self.assertEqual(updated.get("master_audio"), "audio/master.wav")
+            self.assertIn("audio/master.wav?v=", (tmp_path / "slides.html").read_text())
 
             # Second build is idempotent (reads from audio/.raw/, never double-stretches!)
             res2 = subprocess.run([sys.executable, str(BUILDER), "--plan", str(plan_file)], capture_output=True, text=True)
