@@ -61,11 +61,12 @@ test("resolveSafeAsset blocks path traversal and dotfiles", () => {
     assert.equal(resolveSafeAsset(root, "/audio/.raw/01.wav"), null);
 });
 
-test("injectBridgeBootstrap embeds window.__WALKTHROUGH_BRIDGE__ before </head>", () => {
-    const html = "<html><head><title>Deck</title></head><body>ok</body></html>";
+test("injectBridgeBootstrap embeds window.__WALKTHROUGH_BRIDGE__ safely even when inlined scripts contain </head>", () => {
+    const html = '<html><head><script>const s = "<head></head>";</script><title>Deck</title></head><body>ok</body></html>';
     const out = injectBridgeBootstrap(html, { token: "abc", actionUrl: "/a2ui/action" });
     assert.match(out, /window\.__WALKTHROUGH_BRIDGE__/);
-    assert.ok(out.indexOf("__WALKTHROUGH_BRIDGE__") < out.indexOf("</head>"));
+    assert.ok(out.includes('const s = "<head></head>";'), "must not corrupt string literals inside inlined scripts");
+    assert.ok(out.indexOf("__WALKTHROUGH_BRIDGE__") < out.indexOf("<title>Deck</title>"));
 });
 
 test("live loopback server validates CSRF, handles deterministic-only hooks without LLM, and wakes yielded session via session.send", async () => {

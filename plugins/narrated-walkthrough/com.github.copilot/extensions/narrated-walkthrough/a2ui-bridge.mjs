@@ -373,10 +373,19 @@ export async function dispatchA2uiCallback(rawPayload, runtime) {
 
 export function injectBridgeBootstrap(html, bridgeConfig) {
     const safeJson = JSON.stringify(bridgeConfig).replace(/<\//g, "<\\/");
-    const tag = `<script>window.__WALKTHROUGH_BRIDGE__ = ${safeJson};</script>\n`;
-    const idx = html.indexOf("</head>");
-    if (idx >= 0) {
-        return html.slice(0, idx) + tag + html.slice(idx);
+    const tag = `\n<script>window.__WALKTHROUGH_BRIDGE__ = ${safeJson};</script>\n`;
+    // Inject immediately after the opening <head> tag (never via indexOf("</head>"),
+    // because an inlined Mermaid/DOMPurify bundle inside <head> can contain literal
+    // "</head>" string literals that would be corrupted by a naive match).
+    const headMatch = /<head(?:\s[^>]*)?>/i.exec(html);
+    if (headMatch) {
+        const at = headMatch.index + headMatch[0].length;
+        return html.slice(0, at) + tag + html.slice(at);
+    }
+    const bodyMatch = /<body(?:\s[^>]*)?>/i.exec(html);
+    if (bodyMatch) {
+        const at = bodyMatch.index + bodyMatch[0].length;
+        return html.slice(0, at) + tag + html.slice(at);
     }
     return tag + html;
 }
