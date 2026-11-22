@@ -296,9 +296,181 @@ def _hann_fade(samples: list[float], sample_rate: int, channels: int, fade_ms: f
 
 
 def split_sentences(text: str) -> list[str]:
-    """Split narration text into individual sentences while preserving punctuation."""
-    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if p.strip()]
-    return parts if parts else ([text.strip()] if (text or "").strip() else [])
+    """Split narration text into individual sentences (avoiding mid-identifier splits like session.idle)."""
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"(])", raw) if p.strip()]
+    # Sub-split very long sentences (>30 words) at semicolons/em-dashes so TTS models never hit decode caps
+    out: list[str] = []
+    for p in parts:
+        if len(p.split()) > 30:
+            sub = [c.strip() for c in re.split(r"(?:;\s+|\s+[—–]\s+)", p) if c.strip()]
+            for i, c in enumerate(sub):
+                if i < len(sub) - 1 and not c.endswith((".", "!", "?")):
+                    c = c.rstrip(",;:") + "."
+                out.append(c)
+        else:
+            out.append(p)
+    return out if out else [raw]
+
+
+def normalize_for_speech(text: str) -> str:
+    """Normalize code/path punctuation so TTS models pronounce technical text cleanly without stalling."""
+    s = (text or "").strip()
+    if not s:
+        return s
+    # Plain prose with no code symbols stays untouched byte-for-byte
+    if not re.search(r"[@/`\\|{}[\]<>]|---|\.(?:mjs|js|ts|py|json|md|html|wav)\b", s):
+        return s
+    s = re.sub(r"\s*---\s*", " ", s)
+    s = re.sub(r"@([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:/([A-Za-z0-9_.-]+))?",
+               lambda m: " ".join(p for p in m.groups() if p), s)
+    s = re.sub(r"\b([A-Za-z0-9_-]+)\.(mjs|js|ts|py|json|md|html|wav)\b", r"\1 dot \2", s)
+    s = re.sub(r"\b([a-z][a-z0-9_-]*)\.([a-z][a-z0-9_-]*)\b", r"\1 \2", s)
+    s = re.sub(r"\b([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)(?:/([A-Za-z0-9_-]+))?",
+               lambda m: " ".join(p for p in m.groups() if p), s)
+    s = re.sub(r"[/\\|`]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _concat_pcm16_segments(wav_paths: list[pathlib.Path], out_path: pathlib.Path, gap_ms: float = 220.0) -> None:
+    """Join multiple mono/stereo PCM-16 WAV clips with smooth Hann fades and natural breath gaps."""
+    sr0 = ch0 = None
+    merged: list[int] = []
+    for idx, p in enumerate(wav_paths):
+        sr, ch, samps = _read_pcm16_wav(p)
+        if sr0 is None:
+            sr0, ch0 = sr, ch
+        elif sr != sr0 or ch != ch0:
+            raise PlanError(f"Mismatched WAV format joining {p.name}: {sr}Hz/{ch}ch != {sr0}Hz/{ch0}ch")
+        sf, ef, _, _, rms = _active_speech_bounds(samps, sr, ch)
+        # Keep silent test fixtures untouched; trim real speech edges cleanly
+        seg = list(samps[sf * ch : ef * ch]) if (rms > 0.004 and ef > sf) else list(samps)
+        if rms > 0.004 and seg:
+            _hann_fade(seg, sr, ch, fade_ms=25.0)
+        if idx > 0 and gap_ms > 0:
+            merged.extend([0] * (int(round(sr * (gap_ms / 1000.0))) * ch))
+        merged.extend(seg)
+    if sr0 is None or ch0 is None:
+        raise PlanError("No WAV segments to concatenate")
+    _write_pcm16_wav(out_path, sr0, ch0, merged)
+
+
+def synth_checked_sentence(
+    text: str,
+    out: pathlib.Path,
+    endpoint: str,
+    model: str,
+    voice: str,
+    *,
+    ref_audio_b64: str | None = None,
+    ref_text: str | None = None,
+    language: str | None = None,
+    temperature: float | None = None,
+    max_attempts: int = 3,
+) -> tuple[float, float]:
+    """Synthesize one sentence and retry if the model truncated or rambled.
+
+    Returns ``(voiced_sps, rms)`` of the accepted clip. Silent mock WAVs (rms <= 0.004)
+    bypass retries so unit tests remain deterministic and single-call.
+    """
+    spoken = normalize_for_speech(text)
+    syl = estimate_syllables(spoken)
+    best_bytes: bytes | None = None
+    best_dist = 1e9
+    best_stats = (0.0, 0.0)
+
+    for attempt in range(max_attempts):
+        temp = temperature
+        if attempt > 0:
+            # Mild temperature nudge on retry breaks deterministic truncation/ramble loops
+            base_t = 0.0 if temperature is None else float(temperature)
+            temp = round(min(0.45, base_t + 0.15 * attempt), 2)
+        synth(
+            spoken,
+            out,
+            endpoint,
+            model,
+            voice,
+            ref_audio_b64=ref_audio_b64,
+            ref_text=ref_text,
+            language=language,
+            temperature=temp,
+        )
+        raw_bytes = out.read_bytes()
+        try:
+            sr, ch, samps = _read_pcm16_wav(out)
+        except PlanError:
+            return (0.0, 0.0)
+        _, _, _, voiced_sec, rms = _active_speech_bounds(samps, sr, ch)
+        # Silent synthetic test fixture or very short phrase: accept on first try
+        if rms <= 0.004 or syl < 8:
+            return (syl / voiced_sec if voiced_sec > 0 else 0.0, rms)
+        sps = (syl / voiced_sec) if voiced_sec > 0 else 99.0
+        dist = abs(sps - 6.0)
+        if dist < best_dist:
+            best_dist = dist
+            best_bytes = raw_bytes
+            best_stats = (sps, rms)
+        if 2.4 <= sps <= 11.2:
+            return (sps, rms)
+        print(
+            f"    retry {attempt + 1}/{max_attempts - 1} (voiced {sps:.1f} syl/s out of 2.4..11.2 range)",
+            flush=True,
+        )
+
+    if best_bytes is not None:
+        out.write_bytes(best_bytes)
+    return best_stats
+
+
+def _process_segment_audio(
+    samps: list[int],
+    sr: int,
+    ch: int,
+    *,
+    tempo: float,
+    target_dbfs: float | None,
+    fade_ms: float,
+    ffmpeg: str,
+    tmp_path: pathlib.Path,
+    tag: str,
+) -> list[int]:
+    """Time-stretch (pitch-preserving), RMS-level, and smooth-fade one speech segment."""
+    if tempo != 1.0 and samps:
+        in_wav = tmp_path / f"{tag}-in.wav"
+        out_wav = tmp_path / f"{tag}-out.wav"
+        _write_pcm16_wav(in_wav, sr, ch, samps)
+        cmd = [
+            ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(in_wav),
+            "-filter:a", _atempo_chain(tempo),
+            "-ar", str(sr), "-ac", str(ch),
+            "-c:a", "pcm_s16le",
+            str(out_wav),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise PlanError(f"ffmpeg atempo failed on {tag}: {proc.stderr.strip()}")
+        _, _, active = _read_pcm16_wav(out_wav)
+    else:
+        active = list(samps)
+
+    if target_dbfs is not None and active:
+        acc = sum((s / 32768.0) ** 2 for s in active)
+        cur_rms = math.sqrt(acc / len(active))
+        peak = max(abs(s) for s in active) / 32768.0
+        if cur_rms > 1e-4 and peak > 1e-4:
+            want_rms = 10.0 ** (target_dbfs / 20.0)
+            max_safe_gain = (10.0 ** (-1.0 / 20.0)) / peak
+            gain = min(want_rms / cur_rms, max_safe_gain, 3.0)
+            if abs(gain - 1.0) > 0.03:
+                active = [s * gain for s in active]
+
+    _hann_fade(active, sr, ch, fade_ms=fade_ms)
+    return active
 
 
 def build_master_audio(scenes: list[dict], root: pathlib.Path) -> str | None:
@@ -372,9 +544,11 @@ def balance_scene_pace(
 
     raw_dir = root / "audio" / ".raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
+    sent_gap_ms = float(pace_cfg.get("sentence_gap_ms", 220.0))
 
-    # 1. Measure every scene's true VOICED speaking rate from its lossless raw master
+    # 1. Measure every scene's true VOICED speaking rate (and per-sentence raw chunks when present)
     measured: list[dict] = []
+    all_sentence_rates: list[float] = []
     for sc in scenes:
         wav = root / sc["audio"]
         if not wav.exists():
@@ -386,6 +560,26 @@ def balance_scene_pace(
         start_f, end_f, span_sec, voiced_sec, seg_rms = _active_speech_bounds(samples, sr, ch)
         syl = estimate_syllables(sc["narration"])
         raw_sps = syl / voiced_sec if voiced_sec > 0 else 0.0
+
+        # Check for cached raw per-sentence clips (produced by sentence-level synthesis)
+        sents = split_sentences(sc["narration"])
+        sent_entries: list[dict] = []
+        if len(sents) > 1:
+            sent_files = [raw_dir / f"{wav.stem}__s{i:02d}.wav" for i in range(len(sents))]
+            if all(p.exists() for p in sent_files):
+                for s_text, sp in zip(sents, sent_files):
+                    ssr, sch, ssamps = _read_pcm16_wav(sp)
+                    ssf, sef, _, svoiced, srms = _active_speech_bounds(ssamps, ssr, sch)
+                    ssyl = estimate_syllables(normalize_for_speech(s_text))
+                    ssps = ssyl / svoiced if svoiced > 0 else 0.0
+                    sent_entries.append({
+                        "sr": ssr, "ch": sch, "samples": ssamps,
+                        "start_f": ssf, "end_f": sef, "voiced_sec": svoiced,
+                        "rms": srms, "syllables": ssyl, "raw_sps": ssps,
+                    })
+                    if ssps > 0 and srms > 0.004:
+                        all_sentence_rates.append(ssps)
+
         measured.append(
             {
                 "scene": sc,
@@ -402,14 +596,15 @@ def balance_scene_pace(
                 "seg_rms": seg_rms,
                 "syllables": syl,
                 "raw_sps": raw_sps,
+                "sentences": sent_entries,
             }
         )
 
-    valid_rates = [m["raw_sps"] for m in measured if m["raw_sps"] > 0]
+    valid_rates = all_sentence_rates if all_sentence_rates else [m["raw_sps"] for m in measured if m["raw_sps"] > 0]
     if pace_cfg.get("target_sps") is not None:
         target_sps = float(pace_cfg["target_sps"])
     else:
-        target_sps = statistics.median(valid_rates) if valid_rates else 6.8
+        target_sps = statistics.median(valid_rates) if valid_rates else 6.2
 
     report_scenes: list[dict] = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -417,45 +612,39 @@ def balance_scene_pace(
         for m in measured:
             sc = m["scene"]
             sr, ch = m["sr"], m["ch"]
-            trimmed = m["samples"][m["start_f"] * ch : m["end_f"] * ch]
-            raw_tempo = (target_sps / m["raw_sps"]) if m["raw_sps"] > 0 else 1.0
-            tempo = max(min_tempo, min(max_tempo, raw_tempo))
-            if abs(tempo - 1.0) <= tolerance:
-                tempo = 1.0
-
-            if tempo != 1.0 and trimmed:
-                in_wav = tmp_path / f"{sc['id']}-in.wav"
-                out_wav = tmp_path / f"{sc['id']}-out.wav"
-                _write_pcm16_wav(in_wav, sr, ch, trimmed)
-                cmd = [
-                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                    "-i", str(in_wav),
-                    "-filter:a", _atempo_chain(tempo),
-                    "-ar", str(sr), "-ac", str(ch),
-                    "-c:a", "pcm_s16le",
-                    str(out_wav),
-                ]
-                proc = subprocess.run(cmd, capture_output=True, text=True)
-                if proc.returncode != 0:
-                    raise PlanError(f"ffmpeg atempo failed on {sc['id']}: {proc.stderr.strip()}")
-                sr, ch, active_samples = _read_pcm16_wav(out_wav)
+            if m["sentences"]:
+                # Per-sentence tempo + loudness balancing eliminates intra-scene speed swings too
+                joined: list[int] = []
+                tempos_used: list[float] = []
+                for si, se in enumerate(m["sentences"]):
+                    trimmed_s = se["samples"][se["start_f"] * se["ch"] : se["end_f"] * se["ch"]]
+                    raw_t = (target_sps / se["raw_sps"]) if se["raw_sps"] > 0 else 1.0
+                    t_s = max(min_tempo, min(max_tempo, raw_t))
+                    if abs(t_s - 1.0) <= tolerance:
+                        t_s = 1.0
+                    tempos_used.append(t_s)
+                    proc_s = _process_segment_audio(
+                        trimmed_s, se["sr"], se["ch"],
+                        tempo=t_s, target_dbfs=target_dbfs, fade_ms=25.0,
+                        ffmpeg=ffmpeg, tmp_path=tmp_path, tag=f"{sc['id']}-s{si:02d}",
+                    )
+                    if si > 0 and sent_gap_ms > 0:
+                        joined.extend([0] * (int(round(se["sr"] * (sent_gap_ms / 1000.0))) * se["ch"]))
+                    joined.extend(proc_s)
+                sr, ch = m["sentences"][0]["sr"], m["sentences"][0]["ch"]
+                active_samples = joined
+                tempo = statistics.mean(tempos_used) if tempos_used else 1.0
             else:
-                active_samples = list(trimmed)
-
-            # Peak-safe RMS loudness leveling so adjacent scenes stay volume-balanced too
-            if target_dbfs is not None and active_samples:
-                acc = sum((s / 32768.0) ** 2 for s in active_samples)
-                cur_rms = math.sqrt(acc / len(active_samples))
-                peak = max(abs(s) for s in active_samples) / 32768.0
-                if cur_rms > 1e-4 and peak > 1e-4:
-                    want_rms = 10.0 ** (target_dbfs / 20.0)
-                    max_safe_gain = (10.0 ** (-1.0 / 20.0)) / peak  # never exceed -1.0 dBFS peak
-                    gain = min(want_rms / cur_rms, max_safe_gain, 3.0)
-                    if abs(gain - 1.0) > 0.03:
-                        active_samples = [s * gain for s in active_samples]
-
-            # Smooth 35ms raised-cosine (Hann) fade eliminates clicks while keeping soft consonants
-            _hann_fade(active_samples, sr, ch, fade_ms=35.0)
+                trimmed = m["samples"][m["start_f"] * ch : m["end_f"] * ch]
+                raw_tempo = (target_sps / m["raw_sps"]) if m["raw_sps"] > 0 else 1.0
+                tempo = max(min_tempo, min(max_tempo, raw_tempo))
+                if abs(tempo - 1.0) <= tolerance:
+                    tempo = 1.0
+                active_samples = _process_segment_audio(
+                    trimmed, sr, ch,
+                    tempo=tempo, target_dbfs=target_dbfs, fade_ms=35.0,
+                    ffmpeg=ffmpeg, tmp_path=tmp_path, tag=sc["id"],
+                )
 
             lead_pad = [0] * (int(round(sr * (lead_ms / 1000.0))) * ch)
             tail_pad = [0] * (int(round(sr * (tail_ms / 1000.0))) * ch)
@@ -824,6 +1013,62 @@ def main() -> int:
         anchor_b64: str | None = None
         anchor_text: str | None = None
         freshly_synthesized: set[str] = set()
+        raw_dir = ROOT / "audio" / ".raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+
+        def _synth_scene_clips(sc_obj: dict, wav_out: pathlib.Path, *, establish_anchor: bool) -> None:
+            nonlocal anchor_b64, anchor_text
+            sents = split_sentences(sc_obj["narration"])
+            if len(sents) <= 1:
+                ref_b = None if establish_anchor else (anchor_b64 if anchor_id else ext_ref_b64)
+                ref_t = None if establish_anchor else (anchor_text if anchor_id else ext_ref_text)
+                synth_checked_sentence(
+                    sc_obj["narration"],
+                    wav_out,
+                    tts["endpoint"],
+                    tts["model"],
+                    tts["voice"],
+                    ref_audio_b64=ref_b,
+                    ref_text=ref_t,
+                    language=tts.get("language"),
+                    temperature=tts.get("temperature"),
+                )
+                # Remove any stale multi-sentence chunks from prior builds
+                for stale_chunk in raw_dir.glob(f"{wav_out.stem}__s*.wav"):
+                    stale_chunk.unlink(missing_ok=True)
+                if establish_anchor:
+                    anchor_b64 = base64.b64encode(wav_out.read_bytes()).decode("ascii")
+                    anchor_text = normalize_for_speech(sc_obj["narration"])
+                return
+
+            # Multi-sentence scene: synthesize each sentence cleanly (~3-6s) and lock
+            # every sentence across every scene to the short Sentence-1 speaker anchor
+            # so autoregressive TTS models never hit decode caps or drift in timbre.
+            for stale_chunk in raw_dir.glob(f"{wav_out.stem}__s*.wav"):
+                stale_chunk.unlink(missing_ok=True)
+            seg_paths: list[pathlib.Path] = []
+            for si, sent_txt in enumerate(sents):
+                seg_wav = raw_dir / f"{wav_out.stem}__s{si:02d}.wav"
+                is_first_anchor = establish_anchor and si == 0
+                ref_b = None if is_first_anchor else (anchor_b64 if anchor_id else ext_ref_b64)
+                ref_t = None if is_first_anchor else (anchor_text if anchor_id else ext_ref_text)
+                synth_checked_sentence(
+                    sent_txt,
+                    seg_wav,
+                    tts["endpoint"],
+                    tts["model"],
+                    tts["voice"],
+                    ref_audio_b64=ref_b,
+                    ref_text=ref_t,
+                    language=tts.get("language"),
+                    temperature=tts.get("temperature"),
+                )
+                if is_first_anchor:
+                    anchor_b64 = base64.b64encode(seg_wav.read_bytes()).decode("ascii")
+                    anchor_text = normalize_for_speech(sent_txt)
+                seg_paths.append(seg_wav)
+            _concat_pcm16_segments(seg_paths, wav_out, gap_ms=220.0)
+
         for scene in ordered_scenes:
             is_anchor = bool(anchor_id and scene["id"] == anchor_id)
             wav = ROOT / scene["audio"]
@@ -833,41 +1078,28 @@ def main() -> int:
             if is_anchor:
                 if need_synth:
                     print(f"  synth {scene['id']} (anchor) ...", flush=True)
-                    synth(
-                        scene["narration"],
-                        wav,
-                        tts["endpoint"],
-                        tts["model"],
-                        tts["voice"],
-                        language=tts.get("language"),
-                        temperature=tts.get("temperature"),
-                    )
+                    _synth_scene_clips(scene, wav, establish_anchor=True)
                     freshly_synthesized.add(scene["id"])
                 if not wav.exists():
                     raise PlanError(
                         f"anchor scene '{anchor_id}' has no audio at {wav}; run without --only first"
                     )
-                anchor_b64 = base64.b64encode(wav.read_bytes()).decode("ascii")
-                anchor_text = scene["narration"]
+                if anchor_b64 is None:
+                    # Prefer the short sentence-0 anchor clip when cached from an earlier full build
+                    s0_clip = raw_dir / f"{wav.stem}__s00.wav"
+                    if s0_clip.exists():
+                        anchor_b64 = base64.b64encode(s0_clip.read_bytes()).decode("ascii")
+                        anchor_text = normalize_for_speech(split_sentences(scene["narration"])[0])
+                    else:
+                        anchor_b64 = base64.b64encode(wav.read_bytes()).decode("ascii")
+                        anchor_text = normalize_for_speech(scene["narration"])
                 if targeted:
                     scene["duration"] = round(duration(wav), 3)
             elif targeted:
                 if need_synth:
-                    ref_b64 = anchor_b64 if anchor_id else ext_ref_b64
-                    ref_txt = anchor_text if anchor_id else ext_ref_text
                     suffix = f" (anchored to {anchor_id})" if anchor_id else ""
                     print(f"  synth {scene['id']}{suffix} ...", flush=True)
-                    synth(
-                        scene["narration"],
-                        wav,
-                        tts["endpoint"],
-                        tts["model"],
-                        tts["voice"],
-                        ref_audio_b64=ref_b64,
-                        ref_text=ref_txt,
-                        language=tts.get("language"),
-                        temperature=tts.get("temperature"),
-                    )
+                    _synth_scene_clips(scene, wav, establish_anchor=False)
                     freshly_synthesized.add(scene["id"])
                 scene["duration"] = round(duration(wav), 3)
 

@@ -675,6 +675,16 @@ class PackageTests(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_multi_sentence_anchor_uses_short_sentence_one_and_normalizes_code_tokens(self):
+        self.assertEqual(bn.normalize_for_speech("First scene."), "First scene.")
+        spoken = bn.normalize_for_speech("Posts to POST /a2ui/action via extension.mjs and @github/copilot-sdk/extension.")
+        self.assertNotIn("/", spoken)
+        self.assertNotIn("@", spoken)
+        self.assertIn("extension dot mjs", spoken)
+        sents = bn.split_sentences("First sentence about session.idle behavior. Second sentence confirms sync.")
+        self.assertEqual(len(sents), 2)
+        self.assertIn("session.idle", sents[0])
+
     def test_cli_validate_runs(self):
         result = subprocess.run(
             [sys.executable, str(BUILDER), "--validate", "--plan", str(GOLDEN / "timeline.json")],

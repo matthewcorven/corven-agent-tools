@@ -35,10 +35,14 @@ def _slugify(text: str, fallback: str) -> str:
 def _clean_plain(md: str) -> str:
     """Strip Markdown formatting and unsafe punctuation for crisp spoken narration."""
     text = re.sub(r"```.*?```", " ", md, flags=re.S)
+    text = re.sub(r"^\s*[-*_]{3,}\s*$", " ", text, flags=re.M)
+    text = re.sub(r"^\s*\|.*$", " ", text, flags=re.M)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"[*_>#]+", " ", text)
     text = re.sub(r"^\s*[-+]\s+", "", text, flags=re.M)
+    # Remove noisy parenthetical implementation lists that break spoken cadence
+    text = re.sub(r"\s*\([^)]{50,}\)", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -47,12 +51,22 @@ def _sentences(text: str, limit: int = 2) -> list[str]:
     clean = _clean_plain(text)
     if not clean:
         return []
-    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", clean) if p.strip()]
+    # Split only on real sentence endings (never mid-filename like extension.mjs or session.idle)
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"(])", clean) if p.strip()]
     picked: list[str] = []
     for p in parts:
-        # Keep spoken captions crisp and readable
-        if len(p) > 220:
-            p = p[:217].rsplit(" ", 1)[0].rstrip(",;:") + "."
+        p = re.sub(r"\s+([,;:.!?])", r"\1", p).strip()
+        if len(p) < 12:
+            continue
+        # If a sentence is still long, trim cleanly at a clause boundary instead of mid-word/preposition
+        if len(p) > 260:
+            clauses = re.split(r"(?<=[;,])\s+", p)
+            acc = ""
+            for cl in clauses:
+                if acc and len(acc) + len(cl) + 1 > 240:
+                    break
+                acc = (acc + " " + cl).strip() if acc else cl
+            p = acc.rstrip(",;:")
         if not p.endswith((".", "!", "?")):
             p += "."
         picked.append(p)
