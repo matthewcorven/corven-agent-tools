@@ -1,0 +1,32 @@
+{
+  "video_id": "52JX83rGPLc",
+  "title": "ELITE Agentic Engineers Are LEAVING THE LOOP... Here\u2019s why",
+  "url": "https://www.youtube.com/watch?v=52JX83rGPLc",
+  "upstream_commit": "576f5ea880f965091be26320065dd732ea483e50",
+  "started_at_utc": "2026-11-11T01:47:03.985317+00:00",
+  "stages": {
+    "media": {
+      "returncode": 1,
+      "seconds": 1.742,
+      "status": "failed",
+      "diagnostic": "ERROR: unable to download video data: HTTP Error 403: Forbidden\n"
+    },
+    "frames": {
+      "status": "blocked",
+      "reason": "Full local media unavailable; upstream frame extractor requires a local video. No storyboard substitution in this evaluation."
+    },
+    "media_alternative": {
+      "returncode": 1,
+      "status": "failed",
+      "seconds": 1.806,
+      "requested_format": "18 (ordinary public muxed rendition; no cookies, alternate identity, proxy or challenge bypass)",
+      "diagnostic": "ERROR: unable to download video data: HTTP Error 403: Forbidden\n"
+    },
+    "transcript": {
+      "status": "blocked",
+      "reason": "Local media unavailable after two public-format HTTP403 failures; no ASR attempted."
+    }
+  },
+  "retention": "Raw media, full captions/transcripts, and unselected frames are temporary inputs, not retained deliverables.",
+  "secret_use": "No API key, browser cookies or credential files used. yt-dlp configuration and cache disabled; retries disabled."
+}

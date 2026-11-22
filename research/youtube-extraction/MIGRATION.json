@@ -1,0 +1,656 @@
+{
+  "schema_version": 1,
+  "status": "unfinished",
+  "moved_at_utc": "2026-11-11T02:01:03.424501+00:00",
+  "source_repository": "matthewcorven/corven-agents",
+  "destination_repository": "matthewcorven/corven-agent-tools",
+  "destination_item": "research/youtube-extraction",
+  "source_research_removed": true,
+  "files": [
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/README.md",
+      "destination_path": "artifacts/README.md",
+      "bytes": 656,
+      "sha256": "fc11f4ef8f6e42eae559cd6b25bca10f7877f60fddfab843d64e1235541ae679"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/01-GRlcm3wmOqs/frames/01-0256.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/01-GRlcm3wmOqs/frames/01-0256.png",
+      "bytes": 40887,
+      "sha256": "6354c2c0e0aa715206b30697faf96fa49e9306d572ad46bfe63035be3c07e1c3"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/01-GRlcm3wmOqs/frames/02-0384.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/01-GRlcm3wmOqs/frames/02-0384.png",
+      "bytes": 36168,
+      "sha256": "377fe05f9f94f56a8b07462b16f4276bfcbf21b8c5e191e7b943f20f1720fc00"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/01-GRlcm3wmOqs/frames/03-0601.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/01-GRlcm3wmOqs/frames/03-0601.png",
+      "bytes": 43161,
+      "sha256": "8c4befac9f66644afbecfe99ccd6c4cfca7ed8260dbb926ba0ca98d51637db77"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/01-GRlcm3wmOqs/notes.md",
+      "destination_path": "artifacts/indydevdan/2026-11-10/01-GRlcm3wmOqs/notes.md",
+      "bytes": 7228,
+      "sha256": "66fb33a7d13cce39efcb7b3d06434c06ba78bed274a58074257a27dc0ee34dfa"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/01-GRlcm3wmOqs/source.json",
+      "destination_path": "artifacts/indydevdan/2026-11-10/01-GRlcm3wmOqs/source.json",
+      "bytes": 3729,
+      "sha256": "a81dc56be72dfbfbda709325bfe47f57a5f9f35bba8b4e54fdec401fd35d911e"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/02-1v7ldJiyH-Y/frames/01-0540.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/02-1v7ldJiyH-Y/frames/01-0540.png",
+      "bytes": 380823,
+      "sha256": "cbf2476c59ee4c322b7a4d1ba0e2fcd71a6eaaff314718b37849e38e0e2f37d2"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/02-1v7ldJiyH-Y/frames/02-0731.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/02-1v7ldJiyH-Y/frames/02-0731.png",
+      "bytes": 320300,
+      "sha256": "b66aedd93d9ebf2e76163f96d797962d2ab34cce42c962a2ede061763ddfe68c"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/02-1v7ldJiyH-Y/frames/03-1043.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/02-1v7ldJiyH-Y/frames/03-1043.png",
+      "bytes": 348680,
+      "sha256": "25281e8d4173c197c9f96812473b567df4638284525a6059fb3177ad51bb3445"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/02-1v7ldJiyH-Y/notes.md",
+      "destination_path": "artifacts/indydevdan/2026-11-10/02-1v7ldJiyH-Y/notes.md",
+      "bytes": 7485,
+      "sha256": "b657e47f59da4de5dcec8cada0b7ab3a638677ffa7b7587db41d289e677a4e63"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/02-1v7ldJiyH-Y/source.json",
+      "destination_path": "artifacts/indydevdan/2026-11-10/02-1v7ldJiyH-Y/source.json",
+      "bytes": 3624,
+      "sha256": "a8d16b3f9548a6d170cef9f52608913e1a83f16cc53d8ca75a033f92d4ab266e"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/03-52JX83rGPLc/frames/01-02m30s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/03-52JX83rGPLc/frames/01-02m30s.png",
+      "bytes": 192430,
+      "sha256": "21ef9ada26a9603d0fc2eb0ba4b5818402aa40a638930096dcab3681d03db1b4"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/03-52JX83rGPLc/frames/02-09m22s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/03-52JX83rGPLc/frames/02-09m22s.png",
+      "bytes": 483167,
+      "sha256": "0ad26de8b811bcb0300f02bdea6bd1c18d9605447812ef0479862e87d14adb36"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/03-52JX83rGPLc/frames/03-13m25s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/03-52JX83rGPLc/frames/03-13m25s.png",
+      "bytes": 447065,
+      "sha256": "edf06c99ef1c364832f7c39fd13a58c31ed35051d625e090d97006f9f1bd78c3"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/03-52JX83rGPLc/notes.md",
+      "destination_path": "artifacts/indydevdan/2026-11-10/03-52JX83rGPLc/notes.md",
+      "bytes": 7030,
+      "sha256": "e35f5565ce989cd1583e4a6f3e8c6c54cbc8fa95a23d19342573c5891bda3311"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/03-52JX83rGPLc/source.json",
+      "destination_path": "artifacts/indydevdan/2026-11-10/03-52JX83rGPLc/source.json",
+      "bytes": 2974,
+      "sha256": "f1ff3676c79767922afcd8ca6ecf49c54a7f9a582517ce6448d42a1afccae2e5"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/04-OLqP8jxJ0Wc/frames/01-05m26s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/04-OLqP8jxJ0Wc/frames/01-05m26s.png",
+      "bytes": 49887,
+      "sha256": "186c9f6dfa2e5e4525cc5bd53e343a3ed882573270fe7d7c1479c4134d9ee86e"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/04-OLqP8jxJ0Wc/frames/02-08m53s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/04-OLqP8jxJ0Wc/frames/02-08m53s.png",
+      "bytes": 41018,
+      "sha256": "ff76fa7c9f50139910d5c2a30459cd3e7172c8a2516f4166f40bbd2147b92eed"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/04-OLqP8jxJ0Wc/frames/03-10m22s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/04-OLqP8jxJ0Wc/frames/03-10m22s.png",
+      "bytes": 32286,
+      "sha256": "059d467de2fe66172f228a1df3b89a2a2bb87845269ff402cfe5ff0807362711"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/04-OLqP8jxJ0Wc/notes.md",
+      "destination_path": "artifacts/indydevdan/2026-11-10/04-OLqP8jxJ0Wc/notes.md",
+      "bytes": 7785,
+      "sha256": "9298dcecf9a5163393a7313ae2fae651c2ff2856b6d136cf8fca47d986a131c4"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/04-OLqP8jxJ0Wc/source.json",
+      "destination_path": "artifacts/indydevdan/2026-11-10/04-OLqP8jxJ0Wc/source.json",
+      "bytes": 3239,
+      "sha256": "13929a99340393e9b686b8beea9a20561eaa3d0f01528e4f65da6bb38ef8e832"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/05-DNDYYHsypZg/frames/01-02m59s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/05-DNDYYHsypZg/frames/01-02m59s.png",
+      "bytes": 60972,
+      "sha256": "ee8805d3421de905072d0e2be00f2e8c302eba45aba76f26c5683fefa8192f33"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/05-DNDYYHsypZg/frames/02-08m56s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/05-DNDYYHsypZg/frames/02-08m56s.png",
+      "bytes": 43525,
+      "sha256": "5218293e5b8771e0da9b35b656b7cc017d26ee28645b7b0d8f4ab2df5f2340f6"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/05-DNDYYHsypZg/frames/03-22m01s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/05-DNDYYHsypZg/frames/03-22m01s.png",
+      "bytes": 41687,
+      "sha256": "b571e63b2f93498661f30ec11957f4e5c34290b44f7985de20a0b14eace27398"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/05-DNDYYHsypZg/notes.md",
+      "destination_path": "artifacts/indydevdan/2026-11-10/05-DNDYYHsypZg/notes.md",
+      "bytes": 6643,
+      "sha256": "9fe6e6d0e331cb0b7e51671c10611f451c8b93d8e812f1a1bd851bcdca282ab4"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/05-DNDYYHsypZg/source.json",
+      "destination_path": "artifacts/indydevdan/2026-11-10/05-DNDYYHsypZg/source.json",
+      "bytes": 5309,
+      "sha256": "cf6a893777bf6844b1c086a2b0d3bacc379d5c7b32c334b7696cee9d9dff9112"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/06-8BD6w5wELRo/frames/01-01m29s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/06-8BD6w5wELRo/frames/01-01m29s.png",
+      "bytes": 58917,
+      "sha256": "211bf8d0977d40d6caab1ccccd9c7854b87306d5e20aa86bcf1c36ad642b616b"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/06-8BD6w5wELRo/frames/02-06m27s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/06-8BD6w5wELRo/frames/02-06m27s.png",
+      "bytes": 49488,
+      "sha256": "5d389960a109e95c8fd270cf9c068e7127ba5c86bf1011198439d95e8ac7f9ef"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/06-8BD6w5wELRo/frames/03-13m14s.png",
+      "destination_path": "artifacts/indydevdan/2026-11-10/06-8BD6w5wELRo/frames/03-13m14s.png",
+      "bytes": 52509,
+      "sha256": "e48c5c3380c7179a04cca052ea8164f1c73db8c49d9ced226197ce29fbf85058"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/06-8BD6w5wELRo/notes.md",
+      "destination_path": "artifacts/indydevdan/2026-11-10/06-8BD6w5wELRo/notes.md",
+      "bytes": 7119,
+      "sha256": "732201b4e5d2321a52b6a95d17982dfd5dd99cb4b3bf978050e9c703f9650474"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/06-8BD6w5wELRo/source.json",
+      "destination_path": "artifacts/indydevdan/2026-11-10/06-8BD6w5wELRo/source.json",
+      "bytes": 5348,
+      "sha256": "6a23a4579d0490fe7904413c073595a4c42ee68b6a1a4395fe1bece1584a4672"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/README.md",
+      "destination_path": "artifacts/indydevdan/2026-11-10/README.md",
+      "bytes": 5440,
+      "sha256": "e7bf42237fd4b132d0978634a7256fda1cdfbb7e1fae855a965e5a389190777f"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/manifest.json",
+      "destination_path": "artifacts/indydevdan/2026-11-10/manifest.json",
+      "bytes": 11572,
+      "sha256": "bff73503db5121ba14ceb8687fd628fe8d14d729ac85770781184bc253134d8a"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/indydevdan/2026-11-10/selection.json",
+      "destination_path": "artifacts/indydevdan/2026-11-10/selection.json",
+      "bytes": 2401,
+      "sha256": "b097044f9a87e436a72965988bfa73a16543f0c5256ba891aa4e2b040299c46a"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/README.md",
+      "destination_path": "artifacts/youtube/README.md",
+      "bytes": 2290,
+      "sha256": "40a2373a74580f6e957a16ded503a417f29aad6aed03e2746cb0fd261c213f63"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/README.md",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/README.md",
+      "bytes": 10658,
+      "sha256": "4345fc6984584c795c227267333fdc08cae2b201e4353ce89b2fb74816286d25"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/cleanup.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/cleanup.json",
+      "bytes": 781,
+      "sha256": "bc28048196bc4a7b4d11139063eac68c00f793a9fd72bc1b3373ee6529d6c2ac"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/collection.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/collection.json",
+      "bytes": 2729,
+      "sha256": "31fd060b33f8a4a6064a3af0b5fac45f204d8925e5f1ec0aa6730173fead80ba"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/environment.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/environment.json",
+      "bytes": 1237,
+      "sha256": "58e9430d010a445d79ac356adcaedb8430f33a2d80a603d54f574d0676cdf00f"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/manifest.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/manifest.json",
+      "bytes": 7754,
+      "sha256": "428ce2e8ae90ce7d8d9dda52570b1f84c1826c54945e1aa644285df3f48aaf3f"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/model.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/model.json",
+      "bytes": 434,
+      "sha256": "84674b9bab51031103f50e4100a241024c5bd2ebd4b20528205d559ba12892dd"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/timing-experiment.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/timing-experiment.json",
+      "bytes": 2911,
+      "sha256": "e6332e2011baaa8a2fd3db05188dce3f75dc89e6e57a3e73a30ef63078257cfb"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/evidence.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/evidence.json",
+      "bytes": 14756,
+      "sha256": "0a7b6af699b754d7c010fc09b32b2a953fc64aaa15afe81eb7c6a10139a75273"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/frames/01-0145-definition.jpg",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/frames/01-0145-definition.jpg",
+      "bytes": 123687,
+      "sha256": "483b9031e5d2fc5523e1e9b6eb44544d6d5b815ac83dbc3e1d5c8fce18aaa80b"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/frames/02-0538-generated-pages.jpg",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/frames/02-0538-generated-pages.jpg",
+      "bytes": 153052,
+      "sha256": "740cdf0fc27e2c1b2e5ee7e15766d4a50305620fb87d43f912beb16dd332e659"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/frames/03-0735-tool-controls.jpg",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/frames/03-0735-tool-controls.jpg",
+      "bytes": 105393,
+      "sha256": "9b907d991b686c9bc4dfb131228ccc1fc3a8c674735f992eb9e0d3db1745ed7c"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/frames/04-0793-harness-layers.jpg",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/frames/04-0793-harness-layers.jpg",
+      "bytes": 122626,
+      "sha256": "25426a95763dd66f0bbf1b653158254866062667e2cc94d06b86362473ba2409"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/frames/05-1058-scheduled-pages.jpg",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/frames/05-1058-scheduled-pages.jpg",
+      "bytes": 156387,
+      "sha256": "8291a3dac62e85cbfe1a60e1d5cf8410738228a417c90b32a52d2a9053afac02"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/notes.md",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/notes.md",
+      "bytes": 8485,
+      "sha256": "00f70aa9020e0f4d4cb1b3adfba8581d4c2ee24dac77a26dbb369483ae5ae933"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/run.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/run.json",
+      "bytes": 3435,
+      "sha256": "f0b42cf45168182d3db1f334a442c8dcf172e25a084dd1149d4cf8a17fdf65e7"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/scene-catalog.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/1v7ldJiyH-Y/scene-catalog.json",
+      "bytes": 6429,
+      "sha256": "3fbb8d527c4ac0edee63987942d49a51b2c2576d62f878fa0f30abbb084b33f0"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/52JX83rGPLc/evidence.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/52JX83rGPLc/evidence.json",
+      "bytes": 485,
+      "sha256": "c40a3bed50b228308b615e008560085f3730d7127a3d3b940a0223eef7f8ca23"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/52JX83rGPLc/notes.md",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/52JX83rGPLc/notes.md",
+      "bytes": 1594,
+      "sha256": "89204199943c86a9d6ec2d002f0ae723a7e00b9edb50826ff930bac63753543c"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/52JX83rGPLc/run.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/52JX83rGPLc/run.json",
+      "bytes": 1417,
+      "sha256": "f76a9d40ac2856e699e2a054c5400dbb5c110e4bb3c7a400df4c2643c71c7bb1"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/8BD6w5wELRo/evidence.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/8BD6w5wELRo/evidence.json",
+      "bytes": 485,
+      "sha256": "fafbb59f3dbb1532e5571c29a2712cc212c4f1e0be1e2f7de519be37be794db7"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/8BD6w5wELRo/notes.md",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/8BD6w5wELRo/notes.md",
+      "bytes": 1594,
+      "sha256": "f781eeefde58925452410c6ec80ad112ff7dbf0598d585723f40e4e1396e47c8"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/8BD6w5wELRo/run.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/8BD6w5wELRo/run.json",
+      "bytes": 1415,
+      "sha256": "4955d135621d732c80ae5dac0076c2bac770e6dfff6a6d8ce59c8b2fc61a9332"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/DNDYYHsypZg/evidence.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/DNDYYHsypZg/evidence.json",
+      "bytes": 485,
+      "sha256": "8f47054928836a166626b3501beda94519eb29a6c3813b9137e7da452e68abec"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/DNDYYHsypZg/notes.md",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/DNDYYHsypZg/notes.md",
+      "bytes": 1595,
+      "sha256": "c04eb7985aa5156113a0222bf03f9123302d142c15010d67d2ed27ab9c9b2975"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/DNDYYHsypZg/run.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/DNDYYHsypZg/run.json",
+      "bytes": 1415,
+      "sha256": "130efb0890e129c13401baa0121990992e60d8d7ed80b824efd21bce021975c2"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/evidence.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/evidence.json",
+      "bytes": 13601,
+      "sha256": "8ee7b32d4e76aa6a226d1a3101c8224847f827f5de06b6821e37bb17875616ac"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/frames/01-0270-initialization.jpg",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/frames/01-0270-initialization.jpg",
+      "bytes": 100022,
+      "sha256": "bf1885e9e0406ad7943e394efc7f743e17db1e8bf11059622972749cb4c7c4ff"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/frames/02-0400-configuration.jpg",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/frames/02-0400-configuration.jpg",
+      "bytes": 105912,
+      "sha256": "a378c2bc1534dbd35d843c5f61bbca56b7d0d133c616139c7a6aa32a316349da"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/frames/03-0585-tool-summaries.jpg",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/frames/03-0585-tool-summaries.jpg",
+      "bytes": 127393,
+      "sha256": "0e08a81f2f9328108ea19dc4cdb81b4788f843cd10ab2f83830ed8098e90912f"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/frames/04-0695-delegation-results.jpg",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/frames/04-0695-delegation-results.jpg",
+      "bytes": 191094,
+      "sha256": "7897ef732d65d0b786a60e993a3629e971810f5b3dc76fc131f6a10ec6f00310"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/frames/05-0765-access-parity.jpg",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/frames/05-0765-access-parity.jpg",
+      "bytes": 98319,
+      "sha256": "597ff4c8e90a70e740ee24b5a63338b896a38b64886534a1c592dd7ca7aede71"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/notes.md",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/notes.md",
+      "bytes": 11018,
+      "sha256": "c9db910c35d88c5d58c083d9d8a6850fc3d0c338e0cc84057f0280caf719d5b7"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/run.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/run.json",
+      "bytes": 4430,
+      "sha256": "6af076d824475365c7f991c49912c7ae96c4c72b9961501a97b656414df44fb0"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/scene-catalog.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/GRlcm3wmOqs/scene-catalog.json",
+      "bytes": 7003,
+      "sha256": "c4e00ac46beb700cba083c7da28b2e7eb27c3a716bea88ec07d3e7557a7b9e1d"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/OLqP8jxJ0Wc/evidence.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/OLqP8jxJ0Wc/evidence.json",
+      "bytes": 485,
+      "sha256": "66f198d173aebe13907406781d430848d1c7554f7f2df34d841dedaa7dbbc60e"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/OLqP8jxJ0Wc/notes.md",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/OLqP8jxJ0Wc/notes.md",
+      "bytes": 1593,
+      "sha256": "9ec75308f97595face41f23cc0a3ea7ead0165af580e1918e0a6eadbfea8d6bb"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/indydevdan/runs/2026-11-10-paldom/videos/OLqP8jxJ0Wc/run.json",
+      "destination_path": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/videos/OLqP8jxJ0Wc/run.json",
+      "bytes": 1412,
+      "sha256": "59b3507b853f54cfd13ebbc5a3bee1b972054ee03207ab9ecb7b2da63f5fb237"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/LICENSE",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/LICENSE",
+      "bytes": 1063,
+      "sha256": "b7c3bef392d0aa0ee13c13c3ef9ffbafd07412fe2607d508bfa060015bec8a8e"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/PROVENANCE.json",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/PROVENANCE.json",
+      "bytes": 2274,
+      "sha256": "fb3a923a0d92c59ce7bd056482bbd44547f7c004fad3cfce585553f7e385a2e9"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/README.md",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/README.md",
+      "bytes": 5140,
+      "sha256": "b2336d7bc369bd8f3060af4ef4f86f2c0fe52a32cb7f5aa1fefcc69748b10dd8"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-keyframes/SKILL.md",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-keyframes/SKILL.md",
+      "bytes": 4627,
+      "sha256": "97e80f826b2d784541bf01eec2d398ecd066a144d9310dbde856afa993ed5fd8"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-keyframes/references/frame-selection.md",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-keyframes/references/frame-selection.md",
+      "bytes": 5259,
+      "sha256": "b9e13831d782dc1f0bb10abb0040620d23cb96f44f726ba93743742160728cd3"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-keyframes/scripts/extract_frames.py",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-keyframes/scripts/extract_frames.py",
+      "bytes": 27190,
+      "sha256": "6059547e218862a94be1e73e64a26c6c68b6d1689985f4a996a0b8246c5dcb6c"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-notes/SKILL.md",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-notes/SKILL.md",
+      "bytes": 6560,
+      "sha256": "db9e00d8eadd686af4ce35a124318a2ecce395057f9d1d2146f9188cd56ea68f"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-notes/assets/note-template.md",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-notes/assets/note-template.md",
+      "bytes": 2268,
+      "sha256": "a0b29e240e013866df8e86d9e4a8fe51a8c55568ceea220fa6e4b4c89efbded9"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-notes/references/genre-and-escape-hatches.md",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-notes/references/genre-and-escape-hatches.md",
+      "bytes": 4046,
+      "sha256": "888aacfea41ed69123631e9c13b0cc7ed2a18535cd639ae29abe5524a57c6cce"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-transcribe/SKILL.md",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-transcribe/SKILL.md",
+      "bytes": 5472,
+      "sha256": "322d6acaafe0873948564af059f4529b6c296dfa5aebc42114a821d5c4903de9"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-transcribe/references/caption-ladder.md",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-transcribe/references/caption-ladder.md",
+      "bytes": 8814,
+      "sha256": "68d644d2fbe2576f693b6e696b90788783ac415b21c836467a40f4044478bcc5"
+    },
+    {
+      "source_kind": "source-worktree",
+      "source_path": "research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-transcribe/scripts/fetch_transcript.py",
+      "destination_path": "artifacts/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50/skills/video-transcribe/scripts/fetch_transcript.py",
+      "bytes": 34169,
+      "sha256": "dd9ea2b3b4a64616c04c527f15aa2f8f9cf5bd4c42ccf2ce2a549a2051625ca4"
+    },
+    {
+      "source_kind": "session-artifact",
+      "source_path": "multimodal-video-tooling.md",
+      "destination_path": "tooling-landscape.md",
+      "bytes": 19791,
+      "sha256": "eab6d7d2b2c125ad170a2e78fe3809e2e5d9a0e976aa55976192152868227622"
+    },
+    {
+      "source_kind": "session-artifact",
+      "source_path": "youtube-api-verification-result.json",
+      "destination_path": "provenance/youtube-api-verification.json",
+      "bytes": 2316,
+      "sha256": "0664281bfd28701c5ddcf6201bff67b7bb023b87df5f70a9189fc871bd255c18"
+    },
+    {
+      "source_kind": "session-artifact",
+      "source_path": "paldom-working-location.json",
+      "destination_path": "archive/processing-state.json",
+      "bytes": 354,
+      "sha256": "0e7dd02afbf991a3bbd8634cedfea72b9b5818ee554e4f0fda94cebd3a2806f0"
+    },
+    {
+      "source_kind": "session-artifact",
+      "source_path": "run-paldom-evaluation.py",
+      "destination_path": "archive/session-scripts/run-paldom-evaluation.py.txt",
+      "bytes": 9725,
+      "sha256": "070321f0d56ff90c89195949ada7b2fedb216ce1c2ed90a4b60d52cc7185ac75"
+    },
+    {
+      "source_kind": "session-artifact",
+      "source_path": "verify-paldom-results.py",
+      "destination_path": "archive/session-scripts/verify-paldom-results.py.txt",
+      "bytes": 6071,
+      "sha256": "1ab477e8a1750eff4f9e93eadd6e1d4e4bd56db42fae986357a8b3eaa65240a6"
+    },
+    {
+      "source_kind": "session-artifact",
+      "source_path": "verify-video-research.py",
+      "destination_path": "archive/session-scripts/verify-video-research.py.txt",
+      "bytes": 5747,
+      "sha256": "ddf532c62ab06ce352b7ecc9a86cc3c9adf0da2c980aa1938d1686c20385ee43"
+    },
+    {
+      "source_kind": "session-artifact",
+      "source_path": "youtube-key-prompt.py",
+      "destination_path": "archive/session-scripts/youtube-key-prompt.py.txt",
+      "bytes": 5082,
+      "sha256": "97590943984020ddf3b4cb3e7c399c36526a85c4463f6c83b6fcae9e2b1f2747"
+    }
+  ],
+  "unchanged_scope": "Original artifacts preserve their byte content and internal relative layout; archived session Python helpers use .py.txt to avoid accidental execution of machine-specific paths.",
+  "excluded_runtime_history": [
+    "Session published-updates/ attachment snapshots",
+    "Session transcript-images/ renderer cache"
+  ],
+  "exclusion_reason": "Runtime-owned historical conversation assets are not canonical research source files and remain available to the existing conversation.",
+  "raw_media_and_full_transcripts": "Already deleted during the evaluation; not recovered or recreated.",
+  "commit_push_or_plugin_install": false
+}

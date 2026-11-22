@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "video_id": "DNDYYHsypZg",
+  "url": "https://www.youtube.com/watch?v=DNDYYHsypZg",
+  "status": "blocked",
+  "evidence_basis": "No new local media, ASR, or scene extraction available.",
+  "visual_review_status": "not_applicable",
+  "selected_frames": [],
+  "limitation": "Both ordinary public media-format attempts returned HTTP403; do not treat baseline artifacts as new evidence.",
+  "published_at_utc": "2026-10-12T13:00:15Z",
+  "duration_seconds": null
+}

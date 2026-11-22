@@ -1,0 +1,96 @@
+{
+  "video_id": "1v7ldJiyH-Y",
+  "title": "Tiny Software Factories: Agentic Engineering DONE WRONG",
+  "url": "https://www.youtube.com/watch?v=1v7ldJiyH-Y",
+  "upstream_commit": "576f5ea880f965091be26320065dd732ea483e50",
+  "started_at_utc": "2026-11-11T01:46:09.307421+00:00",
+  "stages": {
+    "media": {
+      "returncode": 0,
+      "seconds": 7.381,
+      "status": "success",
+      "bytes": 73114460,
+      "sha256_of_transient_media": "b907378938fb3d2d420cc9fcaa795a1f890d599dbf3b841370feaf9edb86cbb1"
+    },
+    "captions": {
+      "status": "not_attempted",
+      "reason": "Pilot received HTTP 429 from captions; used local ASR without repeated endpoint requests."
+    },
+    "transcript": {
+      "returncode": 0,
+      "seconds": 17.416,
+      "status": "success",
+      "backend": "whisper.cpp",
+      "model": "small.en",
+      "kind": "asr",
+      "track": null,
+      "quality": {
+        "status": "pass",
+        "reasons": [],
+        "metrics": {
+          "effective_chars": 14582,
+          "segments": 38,
+          "chars_per_minute": 784.039,
+          "repetition_ratio": 0.331,
+          "timed_coverage_ratio": 1.0,
+          "max_segment_gap_ms": 0
+        }
+      },
+      "segment_count": 38,
+      "sha256_of_transient_transcript": "c5960dc91354ad901ece21d931d5d5ea1b28edf52c22d1e2a3dfaccb10a720d0",
+      "metadata": {
+        "source": "local-file",
+        "video_id": null,
+        "title": "source",
+        "channel": null,
+        "url": null,
+        "duration_s": 1115.914,
+        "upload_date": null,
+        "language": "en",
+        "chapters": [],
+        "transcript_source": "asr",
+        "caption_track": null,
+        "transcript_quality": "pass"
+      }
+    },
+    "frames": {
+      "returncode": 0,
+      "seconds": 29.853,
+      "status": "success",
+      "duration_s": 1115.914,
+      "strategy": "scene",
+      "scene_threshold": 0.06473,
+      "calibration_confidence": 1.0,
+      "frames_extracted": 88,
+      "frames_kept": 32,
+      "frame_budget": 60,
+      "ocr": true,
+      "shot_count": 32,
+      "shots_with_speech": 32,
+      "shots_with_ocr": 32,
+      "sha256_of_transient_timeline": "b8b1b0c7120ebf35bac7ffa93c1801d1b07396b0709248df4a99b29d09eb06e6",
+      "diagnostic": "[coverage] dedup left 1 stretch(es) over 120s unobserved; added 1 sampled frame(s)\n"
+    }
+  },
+  "retention": "Raw media, full captions/transcripts, and unselected frames are temporary inputs, not retained deliverables.",
+  "secret_use": "No API key, browser cookies or credential files used. yt-dlp configuration and cache disabled; retries disabled.",
+  "evaluation": {
+    "asr_segment_duration_median_seconds": 30.0,
+    "asr_segment_duration_max_seconds": 30.0,
+    "asr_segment_count": 38,
+    "coarse_timing_warning": "Upstream whisper.cpp invocation emits long, near-30s segments; many short shots inherit the same complete speech segment. Coverage is not word-level alignment.",
+    "original_candidate_count": 32,
+    "gap_fill_samples": 1,
+    "short_shot_intervals_under_two_seconds": 2,
+    "visual_review": "Pixel payload unavailable to the assistant; OCR/source-context review only.",
+    "asr_out_of_media_bounds": [
+      {
+        "index": 37,
+        "start_ms": 1110000,
+        "end_ms": 1140000
+      }
+    ],
+    "max_asr_end_overrun_seconds": 24.086,
+    "quality_gate_false_assurance": "Upstream pass does not reject the observed out-of-duration ASR interval."
+  }
+}

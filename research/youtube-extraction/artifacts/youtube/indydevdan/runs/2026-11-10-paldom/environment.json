@@ -1,0 +1,25 @@
+{
+  "platform": "Darwin",
+  "architecture": "arm64",
+  "python": "3.15.2",
+  "versions": {
+    "ffmpeg": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+    "yt-dlp": "2026.07.04",
+    "tesseract": "tesseract 5.5.4",
+    "whisper.cpp": "whisper.cpp 1.9.5"
+  },
+  "new_dependencies_installed": [
+    "tesseract 5.5.4 and its Homebrew dependencies",
+    "whisper.cpp 1.9.5 and its Homebrew dependencies"
+  ],
+  "upstream_modified": false,
+  "frame_budget_per_video": 60,
+  "model": "whisper.cpp small.en (local Metal-capable backend)",
+  "safety_overrides": [
+    "yt-dlp --ignore-config --no-cache-dir --no-geo-bypass --retries 0 --fragment-retries 0",
+    "No browser cookies, API credentials, external ASR/vision services, or global skill installation; written synthesis uses the existing assistant session",
+    "First caption HTTP 429 prompted local ASR for remaining videos rather than repeated caption requests"
+  ],
+  "image_delivery_probe": "view tool reports success but provides no usable pixel payload to this model; full visual review remains unavailable",
+  "output_scope": "Original summaries, bounded illustrative frames, stage/coverage/provenance metadata; full media/transcripts remain temporary"
+}

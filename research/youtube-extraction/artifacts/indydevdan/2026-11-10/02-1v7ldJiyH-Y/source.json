@@ -1,0 +1,54 @@
+{
+  "video_id": "1v7ldJiyH-Y",
+  "title": "Tiny Software Factories: Agentic Engineering DONE WRONG",
+  "url": "https://www.youtube.com/watch?v=1v7ldJiyH-Y",
+  "published_at": "2026-11-02T14:00:24Z",
+  "upload_date": "20261102",
+  "duration_seconds": 1116,
+  "channel": "IndyDevDan",
+  "channel_id": "UC_x36zCEGilGpB1m-V4gmjg",
+  "metadata_method": "Public yt-dlp --ignore-config --skip-download --dump-single-json; parsed in memory; published_at from timestamp 1793628024.",
+  "captions_status": "Public English automatic JSON3 captions successfully fetched and analyzed in memory across the video; repeated adjacent text segments suppressed; no transcript or subtitles retained in this packet.",
+  "captions_language": "en-orig",
+  "captions_automatic": true,
+  "manual_captions_available": false,
+  "selection_position": 2,
+  "selection_source": "https://www.youtube.com/@indydevdan/videos",
+  "retrieved_on": "2026-11-10",
+  "frame_capture_method": "ffmpeg input-side -ss with the public format User-Agent, direct HTTPS video format 136, one PNG per seek, no audio/video file retained. Requests initially returned HTTP 403 without that User-Agent; unauthenticated public requests succeeded with it. Earlier storyboard candidates were discarded.",
+  "frame_timestamp_method": "Requested input-seek time in seconds; decoder rounds to a video frame.",
+  "frame_inspection_method": "Local PNG decoding and macOS Vision OCR confirmed factory/pages/language, tool-settings and cron interface labels. The image-view tool returned success without usable pixels, so no complete visual inspection is claimed. No credential-label warning was detected; that check is not a complete sensitive-content guarantee.",
+  "frames": [
+    {
+      "file": "frames/01-0540.png",
+      "timestamp_seconds": 540,
+      "timestamp_approximate": false,
+      "width": 1280,
+      "height": 720,
+      "caption": "Factory interface with pages and Python, TypeScript and Rust labels. These generated teaching pages illustrate editable artifacts, not the factory's final specialized purpose."
+    },
+    {
+      "file": "frames/02-0731.png",
+      "timestamp_seconds": 731,
+      "timestamp_approximate": false,
+      "width": 1280,
+      "height": 720,
+      "caption": "Tool/settings view during the coding-capability configuration example. The narrated ability to disable coding tools illustrates configurable capabilities and belongs with the presenter's warning about uncontrolled self-modification."
+    },
+    {
+      "file": "frames/03-1043.png",
+      "timestamp_seconds": 1043,
+      "timestamp_approximate": false,
+      "width": 1280,
+      "height": 720,
+      "caption": "Cron context and programming-language page labels during the recurring update demonstration. It illustrates scheduled rather than solely manual work; a still cannot prove continued operation with the browser closed."
+    }
+  ],
+  "limitations": [
+    "Automatic captions can misrecognize technical language and the spoken schedule wording is inconsistent.",
+    "The accessible caption track ends mid-transition near the end of this upload; no subsequent course content is assumed.",
+    "Image content was inspected through local OCR rather than complete visual review.",
+    "Durability, scaling benefits, permission safety and long-running behavior were not independently tested."
+  ],
+  "copyright_transcript_limitation": "Original research commentary and three illustrative stills only; rights remain with their respective holders. Full copyrighted transcripts, subtitles, audio/video downloads, copied descriptions and signed media URLs are not included."
+}

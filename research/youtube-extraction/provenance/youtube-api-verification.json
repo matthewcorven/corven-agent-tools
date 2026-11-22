@@ -1,0 +1,61 @@
+{
+  "status": "verified",
+  "verified_at_utc": "2026-11-11T00:39:06.350575+00:00",
+  "method": "YouTube Data API v3; key entered with no echo and used only in process memory via HTTPS request headers.",
+  "channel": {
+    "id": "UC_x36zCEGilGpB1m-V4gmjg",
+    "title": "IndyDevDan"
+  },
+  "videos": [
+    {
+      "video_id": "GRlcm3wmOqs",
+      "title": "ZERO to RUNNING Software Factory In 16 Minutes (LIQUID Software)",
+      "url": "https://www.youtube.com/watch?v=GRlcm3wmOqs",
+      "published_at": "2026-11-09T14:00:16Z",
+      "duration_iso8601": "PT16M35S",
+      "privacy_status": "public"
+    },
+    {
+      "video_id": "1v7ldJiyH-Y",
+      "title": "Tiny Software Factories: Agentic Engineering DONE WRONG",
+      "url": "https://www.youtube.com/watch?v=1v7ldJiyH-Y",
+      "published_at": "2026-11-02T14:00:24Z",
+      "duration_iso8601": "PT18M36S",
+      "privacy_status": "public"
+    },
+    {
+      "video_id": "52JX83rGPLc",
+      "title": "ELITE Agentic Engineers Are LEAVING THE LOOP... Here\u2019s why",
+      "url": "https://www.youtube.com/watch?v=52JX83rGPLc",
+      "published_at": "2026-10-26T13:00:05Z",
+      "duration_iso8601": "PT25M46S",
+      "privacy_status": "public"
+    },
+    {
+      "video_id": "OLqP8jxJ0Wc",
+      "title": "My Jev Pi Durable Agent CURATES News: HYPE, FACT, or SIGNAL",
+      "url": "https://www.youtube.com/watch?v=OLqP8jxJ0Wc",
+      "published_at": "2026-10-19T13:00:05Z",
+      "duration_iso8601": "PT22M34S",
+      "privacy_status": "public"
+    },
+    {
+      "video_id": "DNDYYHsypZg",
+      "title": "Pi Durable PROACTIVE Agents: Jev Triggers My ON-CALL Pi Agent",
+      "url": "https://www.youtube.com/watch?v=DNDYYHsypZg",
+      "published_at": "2026-10-12T13:00:15Z",
+      "duration_iso8601": "PT35M16S",
+      "privacy_status": "public"
+    },
+    {
+      "video_id": "8BD6w5wELRo",
+      "title": "OpenRouter State Of Models: Jev, Open-Weights, and Tokenomics",
+      "url": "https://www.youtube.com/watch?v=8BD6w5wELRo",
+      "published_at": "2026-10-05T13:00:15Z",
+      "duration_iso8601": "PT26M9S",
+      "privacy_status": "public"
+    }
+  ],
+  "scope": "Read-only verification of the six videos already selected from the channel Videos tab. This is not a fresh upload-order check or caption authorization.",
+  "credential_stored": false
+}

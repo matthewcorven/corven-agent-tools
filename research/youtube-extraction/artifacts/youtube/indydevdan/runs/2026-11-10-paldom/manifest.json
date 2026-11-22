@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "verified_at_utc": "2026-11-11T01:56:41.110227+00:00",
+  "videos": [
+    {
+      "video_id": "GRlcm3wmOqs",
+      "status": "processed",
+      "retained_frames": 5,
+      "notes": "videos/GRlcm3wmOqs/notes.md"
+    },
+    {
+      "video_id": "1v7ldJiyH-Y",
+      "status": "processed",
+      "retained_frames": 5,
+      "notes": "videos/1v7ldJiyH-Y/notes.md"
+    },
+    {
+      "video_id": "52JX83rGPLc",
+      "status": "blocked",
+      "retained_frames": 0,
+      "notes": "videos/52JX83rGPLc/notes.md"
+    },
+    {
+      "video_id": "OLqP8jxJ0Wc",
+      "status": "blocked",
+      "retained_frames": 0,
+      "notes": "videos/OLqP8jxJ0Wc/notes.md"
+    },
+    {
+      "video_id": "DNDYYHsypZg",
+      "status": "blocked",
+      "retained_frames": 0,
+      "notes": "videos/DNDYYHsypZg/notes.md"
+    },
+    {
+      "video_id": "8BD6w5wELRo",
+      "status": "blocked",
+      "retained_frames": 0,
+      "notes": "videos/8BD6w5wELRo/notes.md"
+    }
+  ],
+  "retained_image_count": 10,
+  "upstream_files_verified_unchanged": 11,
+  "checks": [
+    "selected six unchanged",
+    "explicit 2 processed / 4 blocked outcomes",
+    "upstream SHA256s unchanged",
+    "actual image decoding and dimensions",
+    "selected timestamps in bounds",
+    "local Markdown links",
+    "no full transcript or media deliverables",
+    "retained-file checksums"
+  ],
+  "limitations": [
+    "Full pixel review remains unavailable; image/semantic claims limited to OCR/context evidence.",
+    "Main-run ASR uses coarse 30-second chunks; upstream quality pass is not accuracy proof.",
+    "Four inputs remain inaccessible over the two tested public formats."
+  ],
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 10658,
+      "sha256": "4345fc6984584c795c227267333fdc08cae2b201e4353ce89b2fb74816286d25"
+    },
+    {
+      "path": "cleanup.json",
+      "bytes": 781,
+      "sha256": "bc28048196bc4a7b4d11139063eac68c00f793a9fd72bc1b3373ee6529d6c2ac"
+    },
+    {
+      "path": "collection.json",
+      "bytes": 2729,
+      "sha256": "31fd060b33f8a4a6064a3af0b5fac45f204d8925e5f1ec0aa6730173fead80ba"
+    },
+    {
+      "path": "environment.json",
+      "bytes": 1237,
+      "sha256": "58e9430d010a445d79ac356adcaedb8430f33a2d80a603d54f574d0676cdf00f"
+    },
+    {
+      "path": "model.json",
+      "bytes": 434,
+      "sha256": "84674b9bab51031103f50e4100a241024c5bd2ebd4b20528205d559ba12892dd"
+    },
+    {
+      "path": "timing-experiment.json",
+      "bytes": 2911,
+      "sha256": "e6332e2011baaa8a2fd3db05188dce3f75dc89e6e57a3e73a30ef63078257cfb"
+    },
+    {
+      "path": "videos/1v7ldJiyH-Y/evidence.json",
+      "bytes": 14756,
+      "sha256": "0a7b6af699b754d7c010fc09b32b2a953fc64aaa15afe81eb7c6a10139a75273"
+    },
+    {
+      "path": "videos/1v7ldJiyH-Y/frames/01-0145-definition.jpg",
+      "bytes": 123687,
+      "sha256": "483b9031e5d2fc5523e1e9b6eb44544d6d5b815ac83dbc3e1d5c8fce18aaa80b"
+    },
+    {
+      "path": "videos/1v7ldJiyH-Y/frames/02-0538-generated-pages.jpg",
+      "bytes": 153052,
+      "sha256": "740cdf0fc27e2c1b2e5ee7e15766d4a50305620fb87d43f912beb16dd332e659"
+    },
+    {
+      "path": "videos/1v7ldJiyH-Y/frames/03-0735-tool-controls.jpg",
+      "bytes": 105393,
+      "sha256": "9b907d991b686c9bc4dfb131228ccc1fc3a8c674735f992eb9e0d3db1745ed7c"
+    },
+    {
+      "path": "videos/1v7ldJiyH-Y/frames/04-0793-harness-layers.jpg",
+      "bytes": 122626,
+      "sha256": "25426a95763dd66f0bbf1b653158254866062667e2cc94d06b86362473ba2409"
+    },
+    {
+      "path": "videos/1v7ldJiyH-Y/frames/05-1058-scheduled-pages.jpg",
+      "bytes": 156387,
+      "sha256": "8291a3dac62e85cbfe1a60e1d5cf8410738228a417c90b32a52d2a9053afac02"
+    },
+    {
+      "path": "videos/1v7ldJiyH-Y/notes.md",
+      "bytes": 8485,
+      "sha256": "00f70aa9020e0f4d4cb1b3adfba8581d4c2ee24dac77a26dbb369483ae5ae933"
+    },
+    {
+      "path": "videos/1v7ldJiyH-Y/run.json",
+      "bytes": 3435,
+      "sha256": "f0b42cf45168182d3db1f334a442c8dcf172e25a084dd1149d4cf8a17fdf65e7"
+    },
+    {
+      "path": "videos/1v7ldJiyH-Y/scene-catalog.json",
+      "bytes": 6429,
+      "sha256": "3fbb8d527c4ac0edee63987942d49a51b2c2576d62f878fa0f30abbb084b33f0"
+    },
+    {
+      "path": "videos/52JX83rGPLc/evidence.json",
+      "bytes": 485,
+      "sha256": "c40a3bed50b228308b615e008560085f3730d7127a3d3b940a0223eef7f8ca23"
+    },
+    {
+      "path": "videos/52JX83rGPLc/notes.md",
+      "bytes": 1594,
+      "sha256": "89204199943c86a9d6ec2d002f0ae723a7e00b9edb50826ff930bac63753543c"
+    },
+    {
+      "path": "videos/52JX83rGPLc/run.json",
+      "bytes": 1417,
+      "sha256": "f76a9d40ac2856e699e2a054c5400dbb5c110e4bb3c7a400df4c2643c71c7bb1"
+    },
+    {
+      "path": "videos/8BD6w5wELRo/evidence.json",
+      "bytes": 485,
+      "sha256": "fafbb59f3dbb1532e5571c29a2712cc212c4f1e0be1e2f7de519be37be794db7"
+    },
+    {
+      "path": "videos/8BD6w5wELRo/notes.md",
+      "bytes": 1594,
+      "sha256": "f781eeefde58925452410c6ec80ad112ff7dbf0598d585723f40e4e1396e47c8"
+    },
+    {
+      "path": "videos/8BD6w5wELRo/run.json",
+      "bytes": 1415,
+      "sha256": "4955d135621d732c80ae5dac0076c2bac770e6dfff6a6d8ce59c8b2fc61a9332"
+    },
+    {
+      "path": "videos/DNDYYHsypZg/evidence.json",
+      "bytes": 485,
+      "sha256": "8f47054928836a166626b3501beda94519eb29a6c3813b9137e7da452e68abec"
+    },
+    {
+      "path": "videos/DNDYYHsypZg/notes.md",
+      "bytes": 1595,
+      "sha256": "c04eb7985aa5156113a0222bf03f9123302d142c15010d67d2ed27ab9c9b2975"
+    },
+    {
+      "path": "videos/DNDYYHsypZg/run.json",
+      "bytes": 1415,
+      "sha256": "130efb0890e129c13401baa0121990992e60d8d7ed80b824efd21bce021975c2"
+    },
+    {
+      "path": "videos/GRlcm3wmOqs/evidence.json",
+      "bytes": 13601,
+      "sha256": "8ee7b32d4e76aa6a226d1a3101c8224847f827f5de06b6821e37bb17875616ac"
+    },
+    {
+      "path": "videos/GRlcm3wmOqs/frames/01-0270-initialization.jpg",
+      "bytes": 100022,
+      "sha256": "bf1885e9e0406ad7943e394efc7f743e17db1e8bf11059622972749cb4c7c4ff"
+    },
+    {
+      "path": "videos/GRlcm3wmOqs/frames/02-0400-configuration.jpg",
+      "bytes": 105912,
+      "sha256": "a378c2bc1534dbd35d843c5f61bbca56b7d0d133c616139c7a6aa32a316349da"
+    },
+    {
+      "path": "videos/GRlcm3wmOqs/frames/03-0585-tool-summaries.jpg",
+      "bytes": 127393,
+      "sha256": "0e08a81f2f9328108ea19dc4cdb81b4788f843cd10ab2f83830ed8098e90912f"
+    },
+    {
+      "path": "videos/GRlcm3wmOqs/frames/04-0695-delegation-results.jpg",
+      "bytes": 191094,
+      "sha256": "7897ef732d65d0b786a60e993a3629e971810f5b3dc76fc131f6a10ec6f00310"
+    },
+    {
+      "path": "videos/GRlcm3wmOqs/frames/05-0765-access-parity.jpg",
+      "bytes": 98319,
+      "sha256": "597ff4c8e90a70e740ee24b5a63338b896a38b64886534a1c592dd7ca7aede71"
+    },
+    {
+      "path": "videos/GRlcm3wmOqs/notes.md",
+      "bytes": 11018,
+      "sha256": "c9db910c35d88c5d58c083d9d8a6850fc3d0c338e0cc84057f0280caf719d5b7"
+    },
+    {
+      "path": "videos/GRlcm3wmOqs/run.json",
+      "bytes": 4430,
+      "sha256": "6af076d824475365c7f991c49912c7ae96c4c72b9961501a97b656414df44fb0"
+    },
+    {
+      "path": "videos/GRlcm3wmOqs/scene-catalog.json",
+      "bytes": 7003,
+      "sha256": "c4e00ac46beb700cba083c7da28b2e7eb27c3a716bea88ec07d3e7557a7b9e1d"
+    },
+    {
+      "path": "videos/OLqP8jxJ0Wc/evidence.json",
+      "bytes": 485,
+      "sha256": "66f198d173aebe13907406781d430848d1c7554f7f2df34d841dedaa7dbbc60e"
+    },
+    {
+      "path": "videos/OLqP8jxJ0Wc/notes.md",
+      "bytes": 1593,
+      "sha256": "9ec75308f97595face41f23cc0a3ea7ead0165af580e1918e0a6eadbfea8d6bb"
+    },
+    {
+      "path": "videos/OLqP8jxJ0Wc/run.json",
+      "bytes": 1412,
+      "sha256": "59b3507b853f54cfd13ebbc5a3bee1b972054ee03207ab9ecb7b2da63f5fb237"
+    }
+  ]
+}

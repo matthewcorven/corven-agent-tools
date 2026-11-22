@@ -1,0 +1,52 @@
+{
+  "video_id": "OLqP8jxJ0Wc",
+  "title": "My Jev Pi Durable Agent CURATES News: HYPE, FACT, or SIGNAL",
+  "url": "https://www.youtube.com/watch?v=OLqP8jxJ0Wc",
+  "published_at": "2026-10-19T13:00:05Z",
+  "upload_date": "20261019",
+  "duration_seconds": 1354,
+  "channel": "IndyDevDan",
+  "channel_id": "UC_x36zCEGilGpB1m-V4gmjg",
+  "metadata_method": "Public YouTube metadata via yt-dlp --ignore-config --skip-download --dump-single-json; fetched 2026-11-10 UTC.",
+  "captions_status": "available; English automatic captions fetched and analyzed across the full duration; no transcript/subtitles retained in this packet; recognition errors possible",
+  "captions_language": "en-orig",
+  "captions_automatic": true,
+  "copyright_note": "Original research commentary and three illustrative stills only. Full copyrighted transcripts, subtitles, audiovisual downloads and descriptions are not reproduced.",
+  "frame_verification": "PNG decoding plus local macOS Vision OCR of diagram headings and time-matched captions. Fine text is mostly unreadable. Image-view tool returned success without an accessible pixel payload; full visual review remains unverified.",
+  "frame_access_notes": "Direct H.264 extraction failed, including HTTP 403 with the public metadata-provided User-Agent. Public storyboard fallback succeeded. Only selected diagram tiles were retained; no full sheets, audiovisual files, or signed URLs retained.",
+  "frames": [
+    {
+      "file": "frames/01-05m26s.png",
+      "timestamp_seconds": 326.15,
+      "caption": "The hype/facts/signal concept slide anchors the distinction between excitement, truth, and usefulness; interpretation comes from the adjacent spoken explanation.",
+      "capture_method": "Public YouTube storyboard sb0 tile; native resolution retained.",
+      "width": 320,
+      "height": 180,
+      "storyboard_tile_index": 33,
+      "storyboard_fps": 0.10118168389955687,
+      "timestamp_accuracy": "Approximate index divided by reported storyboard sampling rate; not a frame-accurate timestamp."
+    },
+    {
+      "file": "frames/02-08m53s.png",
+      "timestamp_seconds": 533.69,
+      "caption": "The layered-system slide accompanies the explanation of persistent storage, a durable agent, API, and multiple clients; tiny labels require the linked original.",
+      "capture_method": "Public YouTube storyboard sb0 tile; native resolution retained.",
+      "width": 320,
+      "height": 180,
+      "storyboard_tile_index": 54,
+      "storyboard_fps": 0.10118168389955687,
+      "timestamp_accuracy": "Approximate index divided by reported storyboard sampling rate; not a frame-accurate timestamp."
+    },
+    {
+      "file": "frames/03-10m22s.png",
+      "timestamp_seconds": 622.64,
+      "caption": "The news-sweep pipeline slide connects the architecture to gathering, filtering, deduplicating, and ranking candidates before presentation.",
+      "capture_method": "Public YouTube storyboard sb0 tile; native resolution retained.",
+      "width": 320,
+      "height": 180,
+      "storyboard_tile_index": 63,
+      "storyboard_fps": 0.10118168389955687,
+      "timestamp_accuracy": "Approximate index divided by reported storyboard sampling rate; not a frame-accurate timestamp."
+    }
+  ]
+}

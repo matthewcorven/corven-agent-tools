@@ -1,0 +1,11 @@
+{
+  "verified_at_utc": "2026-11-11T02:03:02.952339+00:00",
+  "moved_files_verified": 91,
+  "historical_manifest_hashes_verified": 68,
+  "upstream_files_verified": 11,
+  "local_document_links_verified": 92,
+  "original_research_and_authored_session_files_removed": true,
+  "unrelated_tracked_dirty_files_unchanged": 10,
+  "status": "unfinished",
+  "scope": "Link checks cover authored research documents; byte-preserved upstream documentation remains a selected source snapshot, not a complete upstream docs checkout."
+}

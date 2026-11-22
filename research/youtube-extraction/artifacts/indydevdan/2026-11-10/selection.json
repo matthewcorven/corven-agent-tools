@@ -1,0 +1,56 @@
+{
+  "retrieved_at_utc": "2026-11-10T22:39:45.746606+00:00",
+  "channel": "IndyDevDan",
+  "channel_id": "UC_x36zCEGilGpB1m-V4gmjg",
+  "source_url": "https://www.youtube.com/@indydevdan/videos",
+  "selection": "First six public uploads in the Videos tab newest-first order; Shorts and Live tabs not included.",
+  "method": "Public YouTube extraction with yt-dlp --ignore-config --flat-playlist; first seven entries checked.",
+  "requested_api_key_status": "GOOGLE_API_YOUTUBE_API_KEY unavailable in session; no credential files read and no API key used.",
+  "selected_videos": [
+    {
+      "id": "GRlcm3wmOqs",
+      "title": "ZERO to RUNNING Software Factory In 16 Minutes (LIQUID Software)",
+      "duration": 995,
+      "url": "https://www.youtube.com/watch?v=GRlcm3wmOqs"
+    },
+    {
+      "id": "1v7ldJiyH-Y",
+      "title": "Tiny Software Factories: Agentic Engineering DONE WRONG",
+      "duration": 1116,
+      "url": "https://www.youtube.com/watch?v=1v7ldJiyH-Y"
+    },
+    {
+      "id": "52JX83rGPLc",
+      "title": "ELITE Agentic Engineers Are LEAVING THE LOOP... Here\u2019s why",
+      "duration": 1546,
+      "url": "https://www.youtube.com/watch?v=52JX83rGPLc"
+    },
+    {
+      "id": "OLqP8jxJ0Wc",
+      "title": "My Jev Pi Durable Agent CURATES News: HYPE, FACT, or SIGNAL",
+      "duration": 1354,
+      "url": "https://www.youtube.com/watch?v=OLqP8jxJ0Wc"
+    },
+    {
+      "id": "DNDYYHsypZg",
+      "title": "Pi Durable PROACTIVE Agents: Jev Triggers My ON-CALL Pi Agent",
+      "duration": 2116,
+      "url": "https://www.youtube.com/watch?v=DNDYYHsypZg"
+    },
+    {
+      "id": "8BD6w5wELRo",
+      "title": "OpenRouter State Of Models: Jev, Open-Weights, and Tokenomics",
+      "duration": 1569,
+      "url": "https://www.youtube.com/watch?v=8BD6w5wELRo"
+    }
+  ],
+  "first_excluded_video": {
+    "id": "_U-O5lYhJ7Q",
+    "title": "10 Levels of Jev For Agentic Engineers",
+    "duration": 2118,
+    "url": "https://www.youtube.com/watch?v=_U-O5lYhJ7Q"
+  },
+  "transcript_policy": "Full copyrighted transcripts are not reproduced. Research summaries and limited illustrative stills only.",
+  "api_caption_download_reference": "https://developers.google.com/youtube/data/reference/rest/v3/captions/download",
+  "api_caption_download_limitation": "Official caption download requires OAuth authorization and permission to edit the video; an API key alone is insufficient."
+}

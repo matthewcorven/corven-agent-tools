@@ -1,0 +1,64 @@
+{
+  "repository": "https://github.com/Paldom/video-to-skill",
+  "commit": "576f5ea880f965091be26320065dd732ea483e50",
+  "license": "MIT",
+  "selection": "Extraction scripts plus their instructions, references, template and license; no hooks or global skill installation.",
+  "archive_sha256": "448c580539f9504a9746a395206439d7c4fec6b9cceb07fe027bf2411e4b180c",
+  "files": [
+    {
+      "path": "LICENSE",
+      "bytes": 1063,
+      "sha256": "b7c3bef392d0aa0ee13c13c3ef9ffbafd07412fe2607d508bfa060015bec8a8e"
+    },
+    {
+      "path": "README.md",
+      "bytes": 5140,
+      "sha256": "b2336d7bc369bd8f3060af4ef4f86f2c0fe52a32cb7f5aa1fefcc69748b10dd8"
+    },
+    {
+      "path": "skills/video-notes/SKILL.md",
+      "bytes": 6560,
+      "sha256": "db9e00d8eadd686af4ce35a124318a2ecce395057f9d1d2146f9188cd56ea68f"
+    },
+    {
+      "path": "skills/video-notes/assets/note-template.md",
+      "bytes": 2268,
+      "sha256": "a0b29e240e013866df8e86d9e4a8fe51a8c55568ceea220fa6e4b4c89efbded9"
+    },
+    {
+      "path": "skills/video-notes/references/genre-and-escape-hatches.md",
+      "bytes": 4046,
+      "sha256": "888aacfea41ed69123631e9c13b0cc7ed2a18535cd639ae29abe5524a57c6cce"
+    },
+    {
+      "path": "skills/video-keyframes/SKILL.md",
+      "bytes": 4627,
+      "sha256": "97e80f826b2d784541bf01eec2d398ecd066a144d9310dbde856afa993ed5fd8"
+    },
+    {
+      "path": "skills/video-keyframes/scripts/extract_frames.py",
+      "bytes": 27190,
+      "sha256": "6059547e218862a94be1e73e64a26c6c68b6d1689985f4a996a0b8246c5dcb6c"
+    },
+    {
+      "path": "skills/video-keyframes/references/frame-selection.md",
+      "bytes": 5259,
+      "sha256": "b9e13831d782dc1f0bb10abb0040620d23cb96f44f726ba93743742160728cd3"
+    },
+    {
+      "path": "skills/video-transcribe/SKILL.md",
+      "bytes": 5472,
+      "sha256": "322d6acaafe0873948564af059f4529b6c296dfa5aebc42114a821d5c4903de9"
+    },
+    {
+      "path": "skills/video-transcribe/scripts/fetch_transcript.py",
+      "bytes": 34169,
+      "sha256": "dd9ea2b3b4a64616c04c527f15aa2f8f9cf5bd4c42ccf2ce2a549a2051625ca4"
+    },
+    {
+      "path": "skills/video-transcribe/references/caption-ladder.md",
+      "bytes": 8814,
+      "sha256": "68d644d2fbe2576f693b6e696b90788783ac415b21c836467a40f4044478bcc5"
+    }
+  ]
+}
