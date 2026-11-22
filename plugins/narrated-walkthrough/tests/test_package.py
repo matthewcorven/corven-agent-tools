@@ -487,6 +487,8 @@ class PackageTests(unittest.TestCase):
             '__WALKTHROUGH_BRIDGE__',
             'sendBridgeCallback',
             'connectBridgeEvents',
+            'data-color-mode="dark"',
+            'detectDarkMode',
         ):
             self.assertIn(token, html, f"player.html missing expected UI hook: {token}")
 
