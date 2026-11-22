@@ -26,7 +26,7 @@
     {
       "name": "copilot-byok-metadata",
       "source": "plugins/copilot-byok-metadata",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "description": "copilot-byok-metadata MCP server + thin skill: read GitHub Copilot app BYOK models, fetch context-window and reasoning-effort metadata from provider sources of truth (OpenRouter, local oMLX), and apply it to the app config",
       "keywords": [
         "copilot",
@@ -86,7 +86,7 @@
     },
     {
       "name": "squad-model-resolver",
-      "version": "1.0.0",
+      "version": "0.1.1",
       "description": "squad-model-resolver MCP server + thin skill: deterministic model ID resolution, layer precedence, and post-spawn verification for Squad agent spawns",
       "keywords": [
         "squad",
