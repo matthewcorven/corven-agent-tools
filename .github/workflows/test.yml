@@ -20,6 +20,8 @@ jobs:
         run: python3 -m unittest discover -s plugins/playwright-report-retrieval/tests -v
       - name: Run visual-proposal package contract tests
         run: python3 -m unittest discover -s plugins/visual-proposal/tests -v
+      - name: Run narrated-walkthrough package contract tests
+        run: python3 -m unittest discover -s plugins/narrated-walkthrough/tests -v
 
   visual-proposal:
     runs-on: ubuntu-latest

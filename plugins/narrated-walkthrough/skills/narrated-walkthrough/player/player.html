@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>__TITLE__</title>
+__MERMAID__
+<style>
+  :root { --ink:#1b1b1f; --dim:#6b6b76; --line:#e3e3ea; --accent:#3d6fd0; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         color:var(--ink); background:#fafafc; }
+  header { display:flex; align-items:center; gap:14px; padding:14px 22px;
+           border-bottom:1px solid var(--line); background:#fff; position:sticky; top:0; z-index:5; }
+  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.01em; }
+  header .meta { font-size:12px; color:var(--dim); margin-left:auto; }
+  main { max-width:1080px; margin:0 auto; padding:26px 22px 140px; }
+  .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:22px; }
+  button { font:inherit; font-size:14px; padding:9px 16px; border-radius:9px; cursor:pointer;
+           border:1px solid var(--line); background:#fff; color:var(--ink); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button:disabled { opacity:.45; cursor:default; }
+  .track { flex:1 1 320px; height:6px; background:#e9e9f0; border-radius:3px; overflow:hidden; min-width:200px; }
+  .track > i { display:block; height:100%; width:0; background:var(--accent); transition:width .2s linear; }
+  .clock { font-variant-numeric:tabular-nums; font-size:13px; color:var(--dim); min-width:96px; text-align:right; }
+  .slide { background:#fff; border:1px solid var(--line); border-radius:14px; padding:26px 28px;
+           margin-bottom:20px; opacity:.34; transition:opacity .35s, box-shadow .35s, transform .35s; }
+  .slide.active { opacity:1; box-shadow:0 10px 30px rgba(30,40,80,.10); transform:translateY(-1px); }
+  .slide h2 { font-size:19px; margin:0 0 4px; font-weight:650; }
+  .slide .n { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:.09em; }
+  .diagram { margin:16px 0 4px; display:flex; justify-content:center; }
+  .diagram svg { max-width:100%; height:auto; }
+  footer { position:fixed; bottom:0; left:0; right:0; background:rgba(255,255,255,.97);
+           border-top:1px solid var(--line); padding:14px 22px; backdrop-filter:blur(8px); }
+  .cap { max-width:1080px; margin:0 auto; font-size:17px; line-height:1.5; min-height:52px;
+         display:flex; align-items:center; }
+  .cap span { opacity:0; transform:translateY(4px); transition:opacity .22s, transform .22s; }
+  .cap span.on { opacity:1; transform:none; }
+  .hint { max-width:1080px; margin:6px auto 0; font-size:12px; color:var(--dim); }
+  .ask { background:#fffdf6; border:1px solid #e8d9a8; border-radius:14px; padding:22px 26px; margin-bottom:20px; }
+  .ask h3 { margin:0 0 4px; font-size:17px; font-weight:650; }
+  .ask p { margin:0 0 14px; font-size:14px; color:#5c5c68; }
+  .ask .opts { display:flex; gap:10px; flex-wrap:wrap; }
+  .ask .opts button { border:1px solid #e0d3a8; background:#fff; }
+  .ask .opts button:hover { border-color:var(--accent); }
+  .ask .opts button.copied { border-color:#3d9a5b; color:#3d9a5b; }
+  .ask .tip { margin:14px 0 0; font-size:13px; color:#6b6b76; }
+  .ask .tip b { color:var(--ink); }
+</style>
+</head>
+<body>
+<header>
+  <h1>__TITLE__</h1>
+  <div class="meta">narration: <b>__MODEL__</b> &middot; voice <b>__VOICE__</b></div>
+</header>
+
+<main>
+  <div class="bar">
+    <button id="play" class="primary">&#9654; Play</button>
+    <button id="pause">&#10074;&#10074; Pause</button>
+    <button id="restart">&#8634; Restart</button>
+    <button id="voicebtn" title="Speak with the system voice if the audio cannot play">Use system voice</button>
+    <div class="track"><i id="fill"></i></div>
+    <div class="clock" id="clock">0:00 / 0:00</div>
+  </div>
+  <div id="slides"></div>
+  <section class="ask" id="ask" hidden></section>
+</main>
+
+<footer>
+  <div class="cap"><span id="cap"></span></div>
+  <div class="hint">Space = play/pause &middot; &#8592;/&#8594; = previous/next scene &middot; audio is pre-generated, so playback is exact</div>
+</footer>
+
+<script>
+const DATA = __DATA__;
+mermaid.initialize({ startOnLoad: false, theme: 'base', securityLevel: 'loose',
+  themeVariables: { fontFamily: '-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',
+                    fontSize: '15px', primaryColor:'#fff', primaryBorderColor:'#c9c9d4',
+                    lineColor:'#8a8a99' } });
+
+const $ = (id) => document.getElementById(id);
+const fmt = (s) => Math.floor(s/60) + ':' + String(Math.floor(s%60)).padStart(2,'0');
+
+const player = new Audio();
+player.preload = 'auto';
+let sceneIdx = -1, idx = -1, raf = 0, playing = false;
+let useSystem = false, sysStart = 0, sysOffset = 0, sysScene = -1;
+let pending = null;
+let wallStart = 0, wallBase = 0;
+
+async function build() {
+  const host = $('slides');
+  for (let i = 0; i < DATA.scenes.length; i++) {
+    const s = DATA.scenes[i];
+    const el = document.createElement('section');
+    el.className = 'slide'; el.id = 's-' + s.id;
+    el.innerHTML = '<div class="n">Scene ' + (i+1) + ' of ' + DATA.scenes.length +
+                   ' &middot; ' + fmt(s.start) + '</div><h2>' + s.title + '</h2>' +
+                   '<div class="diagram" id="d-' + s.id + '"></div>';
+    host.appendChild(el);
+    try {
+      const { svg } = await mermaid.render('m-' + s.id, s.mermaid);
+      $('d-' + s.id).innerHTML = svg;
+    } catch (e) {
+      $('d-' + s.id).textContent = 'diagram failed: ' + e.message;
+    }
+  }
+}
+
+function now() {
+  if (useSystem) return sysOffset + (performance.now() - sysStart) / 1000;
+  if (!playing && pending === null) return wallBase;
+  return wallBase + (performance.now() - wallStart) / 1000;
+}
+
+// The timeline is authoritative; the audio element follows it. Scene offsets are
+// sums of measured clip durations, so each clip exactly fills its slot and the
+// mapping never drifts.
+function syncAudio(t) {
+  if (useSystem) return;
+  let i = 0;
+  for (let k = 0; k < DATA.scenes.length; k++) if (t >= DATA.scenes[k].start) i = k;
+  const sc = DATA.scenes[i];
+  const want = Math.max(0, t - sc.start);
+  if (i !== sceneIdx || !player.src || player.src.indexOf(sc.audio) < 0) {
+    sceneIdx = i; pending = t; player.src = sc.audio; return;
+  }
+  if (pending !== null) return;
+  if (Math.abs(player.currentTime - want) > 0.45) { pending = t; player.currentTime = want; }
+}
+
+player.addEventListener('loadedmetadata', () => {
+  if (pending === null) return;
+  const t = pending; pending = null;
+  let i = 0;
+  for (let k = 0; k < DATA.scenes.length; k++) if (t >= DATA.scenes[k].start) i = k;
+  player.currentTime = Math.max(0, t - DATA.scenes[i].start);
+  wallBase = t; wallStart = performance.now();
+  if (playing) player.play().catch(() => {});
+  idx = -1; tick();
+});
+
+player.addEventListener('ended', () => {
+  const next = DATA.scenes[sceneIdx + 1];
+  if (next) seek(next.start); else pause();
+});
+
+function seek(t) {
+  t = Math.max(0, Math.min(DATA.total - 0.05, t));
+  wallBase = t; wallStart = performance.now(); idx = -1;
+  if (useSystem) {
+    sysOffset = t; sysStart = performance.now(); sysScene = -1;
+    if (playing) speakFrom(t);
+  } else { pending = t; syncAudio(t); }
+  tick();
+}
+
+function tick() {
+  const t = now();
+  if (!useSystem && pending === null) syncAudio(t);
+  $('fill').style.width = Math.min(100, 100 * t / DATA.total) + '%';
+  $('clock').textContent = fmt(t) + ' / ' + fmt(DATA.total);
+
+  let si = 0;
+  for (let i = 0; i < DATA.scenes.length; i++) if (t >= DATA.scenes[i].start) si = i;
+  if (si !== idx) {
+    idx = si;
+    document.querySelectorAll('.slide').forEach((n) => n.classList.remove('active'));
+    const el = $('s-' + DATA.scenes[si].id);
+    if (el) {
+      el.classList.add('active');
+      if (playing) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  const cue = DATA.cues.find((c) => t >= c.t && t < c.end);
+  const cap = $('cap');
+  const text = cue ? cue.text : '';
+  if (cap.dataset.t !== text) {
+    cap.classList.remove('on');
+    setTimeout(() => { cap.textContent = text; cap.classList.add('on'); }, 90);
+    cap.dataset.t = text;
+  }
+  if (playing) raf = requestAnimationFrame(tick);
+}
+
+function speakFrom(t) {
+  let i = 0;
+  for (let k = 0; k < DATA.scenes.length; k++) if (t >= DATA.scenes[k].start) i = k;
+  const sc = DATA.scenes[i];
+  sysScene = i;
+  const u = new SpeechSynthesisUtterance(sc.narration);
+  u.rate = 1.02;
+  u.onend = () => {
+    const next = DATA.scenes[sysScene + 1];
+    if (next && playing) { sysOffset = next.start; sysStart = performance.now(); speakFrom(next.start); }
+    else if (!next) pause();
+  };
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+  sysOffset = t; sysStart = performance.now();
+}
+
+function play() {
+  if (playing) return;
+  playing = true;
+  $('play').disabled = true;
+  wallStart = performance.now();
+  if (useSystem) speakFrom(now());
+  else if (!player.src) { pending = wallBase; syncAudio(wallBase); }
+  else player.play().catch(() => {
+    useSystem = true; $('voicebtn').textContent = 'Use recorded audio'; speakFrom(now());
+  });
+  cancelAnimationFrame(raf);
+  raf = requestAnimationFrame(tick);
+}
+
+function pause() {
+  if (!playing && pending === null) return;
+  wallBase = now();
+  playing = false;
+  $('play').disabled = false;
+  cancelAnimationFrame(raf);
+  if (useSystem) { speechSynthesis.cancel(); sysOffset = wallBase; }
+  else player.pause();
+}
+
+function restart() {
+  pause();
+  wallBase = 0; sysOffset = 0; sysScene = -1; pending = null;
+  sceneIdx = -1; idx = -1;
+  if (player.src) player.currentTime = 0;
+  $('fill').style.width = '0%';
+  tick();
+  play();
+}
+
+$('play').onclick = play;
+$('pause').onclick = pause;
+$('restart').onclick = restart;
+$('voicebtn').onclick = () => {
+  const wasPlaying = playing;
+  const at = now();
+  pause();
+  useSystem = !useSystem;
+  $('voicebtn').textContent = useSystem ? 'Use recorded audio' : 'Use system voice';
+  sysOffset = at; sysScene = -1; sceneIdx = -1;
+  if (wasPlaying) play();
+};
+
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); playing ? pause() : play(); }
+  if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') {
+    e.preventDefault();
+    const t = now();
+    let i = 0;
+    for (let k = 0; k < DATA.scenes.length; k++) if (t >= DATA.scenes[k].start) i = k;
+    const j = Math.max(0, Math.min(DATA.scenes.length - 1, i + (e.code === 'ArrowRight' ? 1 : -1)));
+    seek(DATA.scenes[j].start);
+  }
+});
+
+// When the walkthrough ends on open choices, make the invitation explicit and
+// give a one-click way to put the answer back in the chat.
+function renderAsk() {
+  const d = DATA.disposition;
+  if (!d) return;
+  const ask = $('ask');
+  ask.innerHTML =
+    '<h3>' + d.prompt + '</h3>' +
+    '<p>' + d.note + '</p>' +
+    '<div class="opts">' +
+    d.options.map((o) => '<button data-answer="' + o + '">' + o + '</button>').join('') +
+    '</div>' +
+    '<p class="tip">Pick one to copy the phrase, then paste it in the chat. <b>Or just say it however you like</b> &mdash; typing or the microphone both work, and no answer is a valid answer.</p>';
+  ask.hidden = false;
+  ask.querySelectorAll('button[data-answer]').forEach((b) => {
+    b.onclick = async () => {
+      const text = b.dataset.answer;
+      try { await navigator.clipboard.writeText(text); } catch (e) {}
+      b.classList.add('copied');
+      b.textContent = 'copied — paste in chat';
+      setTimeout(() => { b.classList.remove('copied'); b.textContent = text; }, 2200);
+    };
+  });
+}
+
+window.seek = seek;
+window.state = () => ({
+  t: now(), playing, useSystem, scene: (document.querySelector('.slide.active') || {}).id,
+  caption: $('cap').textContent, askShown: !$('ask').hidden
+});
+
+build();
+renderAsk();
+tick();
+</script>
+</body>
+</html>

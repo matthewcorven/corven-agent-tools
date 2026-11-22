@@ -1,0 +1,61 @@
+{
+  "title": "Golden example — a three scene walkthrough",
+  "mermaid_source": "../../assets/mermaid.min.js.gz",
+  "tts": {
+    "endpoint": "http://127.0.0.1:18001/v1/audio/speech",
+    "model": "Ming-3.0-tts-tiny-4bit",
+    "voice": "default"
+  },
+  "scenes": [
+    {
+      "id": "01-question",
+      "title": "One question, one clock",
+      "mermaid": "flowchart LR\n    Q[\"A question\"] --> A[\"Evidence\"] --> D[\"A decision\"]\n    style Q fill:#fff4e5,stroke:#e8a33d\n    style D fill:#e8f6ec,stroke:#3d9a5b",
+      "captions": [
+        "Three scenes is enough to show the shape.",
+        "Everything you see is positioned on one clock, and that clock is measured, not guessed."
+      ],
+      "narration": "Three scenes is enough to show the shape. Everything you see is positioned on one clock, and that clock is measured, not guessed.",
+      "duration": 7.84,
+      "audio": "audio/01-question.wav",
+      "start": 0.0
+    },
+    {
+      "id": "02-clock",
+      "title": "The clock is derived from the audio",
+      "mermaid": "flowchart TB\n    C[\"Clip lengths\"] --> S[\"Scene starts\"]\n    S --> P[\"Playback position\"]\n    P --> V[\"Visuals and captions\"]\n    style C fill:#eef4ff,stroke:#5b8def\n    style V fill:#e8f6ec,stroke:#3d9a5b",
+      "captions": [
+        "Each clip is measured, then the scene starts are summed from those measurements.",
+        "So a clip always fills its slot exactly, and jumping anywhere lands in the right place."
+      ],
+      "narration": "Each clip is measured, then the scene starts are summed from those measurements. So a clip always fills its slot exactly, and jumping anywhere lands in the right place.",
+      "duration": 9.84,
+      "audio": "audio/02-clock.wav",
+      "start": 7.84
+    },
+    {
+      "id": "03-invite",
+      "title": "It ends by asking",
+      "mermaid": "flowchart TD\n    Q[\"What next?\"] --> A[\"Keep it\"]\n    Q --> B[\"Change it\"]\n    Q --> C[\"Park it\"]\n    style Q fill:#eef4ff,stroke:#5b8def\n    style A fill:#e8f6ec,stroke:#3d9a5b\n    style C fill:#f4f4f4,stroke:#bbb",
+      "captions": [
+        "When something is still open, the walkthrough says so and asks.",
+        "Tell me which of the three you want, in the chat. Type it, or use the microphone."
+      ],
+      "narration": "When something is still open, the walkthrough says so and asks. Tell me which of the three you want, in the chat. Type it, or use the microphone.",
+      "duration": 9.04,
+      "audio": "audio/03-invite.wav",
+      "start": 17.68
+    }
+  ],
+  "disposition": {
+    "kind": "choices_and_unknowns",
+    "prompt": "What should happen to this example?",
+    "options": [
+      "Keep it as the reference",
+      "Change the voice and rebuild",
+      "Park it"
+    ],
+    "note": "Any answer works, including none. Type it in the chat, or use the microphone."
+  },
+  "total_duration": 26.72
+}
