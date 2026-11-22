@@ -501,9 +501,11 @@ class PackageTests(unittest.TestCase):
         ext_entry = ext_dir / "extension.mjs"
         bridge_mod = ext_dir / "a2ui-bridge.mjs"
         telemetry_mod = ext_dir / "live-telemetry.mjs"
+        det_actions_mod = ext_dir / "deterministic-actions.mjs"
         self.assertTrue(ext_entry.is_file(), "extension.mjs must ship with the plugin")
         self.assertTrue(bridge_mod.is_file(), "a2ui-bridge.mjs must ship with the plugin")
         self.assertTrue(telemetry_mod.is_file(), "live-telemetry.mjs must ship with the plugin")
+        self.assertTrue(det_actions_mod.is_file(), "deterministic-actions.mjs must ship with the plugin")
         ext_src = ext_entry.read_text(encoding="utf-8")
         bridge_src = bridge_mod.read_text(encoding="utf-8")
         self.assertIn('id: "narrated-walkthrough"', ext_src)

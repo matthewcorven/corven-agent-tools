@@ -12,6 +12,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { DETERMINISTIC_COMPUTE_ACTIONS, executeDeterministicAction } from "./deterministic-actions.mjs";
 import { collectLiveTelemetry } from "./live-telemetry.mjs";
 
 export const MAX_BODY_BYTES = 16 * 1024;
@@ -267,6 +268,57 @@ export async function dispatchA2uiCallback(rawPayload, runtime) {
                     oversight: runtime.state.oversight,
                     lastSceneId: runtime.state.lastSceneId,
                 },
+            },
+        };
+    }
+
+    // 1b. Deterministic compute actions (triage_bottleneck, unblock_issue, assign_next_item)
+    // run authoritative live CLI/DAG analysis in Node with 0 LLM tokens FIRST and render
+    // the verified result directly into A-HUD; an AI turn is only triggered if the Architect
+    // explicitly sends the verified dossier via `dispatch_verified_dossier`.
+    if (DETERMINISTIC_COMPUTE_ACTIONS.has(n.action.name) && !n.action.context?.forceAgentTurn) {
+        const computed = await executeDeterministicAction(n, {
+            repoPath: runtime.state.repoPath,
+            ...(runtime.telemetryRunner ? { run: runtime.telemetryRunner } : {}),
+        });
+        const receipt = {
+            callbackId,
+            timestamp,
+            action: n.action.name,
+            label: n.label,
+            node: n.node || null,
+            ...computed,
+        };
+        runtime.state.lastDeterministicResult = receipt;
+        if (runtime.deckDir) {
+            try {
+                await appendFile(
+                    path.join(runtime.deckDir, ".canvas-actions.jsonl"),
+                    `${JSON.stringify({ callbackId, timestamp, kind: "deterministic_compute_result", action: n.action.name, ok: computed.ok, llmTokensUsed: 0, summary: computed.summary || computed.error })}\n`,
+                    "utf8",
+                );
+            } catch {}
+        }
+        runtime.broadcast("deterministic_result", receipt);
+        runtime.broadcast("callback_ack", {
+            callbackId,
+            action: n.action.name,
+            label: n.label,
+            dispatchedToAgent: false,
+            status: computed.ok ? "computed_deterministically" : "deterministic_error",
+            displayPrompt: computed.summary || computed.error,
+            timestamp,
+        });
+        return {
+            status: computed.ok ? 200 : 500,
+            body: {
+                ok: computed.ok,
+                callbackId,
+                dispatchedToAgent: false,
+                llmTokensUsed: 0,
+                status: computed.ok ? "computed_deterministically" : "deterministic_error",
+                result: receipt,
+                ...(computed.ok ? {} : { error: computed.error }),
             },
         };
     }
@@ -610,6 +662,7 @@ export async function startWalkthroughServer({
         telemetryCache: null,
         telemetryCachedAt: 0,
         telemetryFingerprint: "",
+        lastDeterministicResult: null,
     };
 
     async function getTelemetry({ force = false } = {}) {
@@ -652,6 +705,7 @@ export async function startWalkthroughServer({
         clients,
         state,
         session,
+        telemetryRunner,
         getTelemetry,
         get deckDir() {
             return state.deckDir;
@@ -695,6 +749,7 @@ export async function startWalkthroughServer({
                     agentStatus: state.agentStatus,
                     oversight: state.oversight,
                     liveA2ui: state.liveA2ui,
+                    lastDeterministicResult: state.lastDeterministicResult,
                 });
                 const keepalive = setInterval(() => {
                     try {

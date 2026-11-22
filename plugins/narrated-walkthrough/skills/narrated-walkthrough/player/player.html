@@ -274,6 +274,28 @@ __MERMAID__
   .node-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:auto; padding-top:2px; }
   .node-btn { font-size:12px; padding:5px 10px; border-radius:7px; }
   .node-btn.copied { border-color:var(--ok-border); color:var(--ok-ink); background:var(--ok-bg); }
+  .node-rules-btn { font-size:11px; padding:3px 7px; border-radius:6px; color:var(--dim); }
+  .node-rules-box { margin-top:6px; padding:8px 10px; border-radius:8px; background:var(--code-bg);
+                    color:var(--code-ink); border:1px solid var(--line); font-size:11px; line-height:1.45;
+                    font-family:var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
+  .det-result { margin-top:14px; padding:14px 16px; border-radius:12px; background:var(--surface-sub);
+                border:1px solid var(--accent-soft-border); }
+  .det-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;
+              margin-bottom:8px; }
+  .det-title { font-size:14px; font-weight:700; color:var(--ink); }
+  .det-badges { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .det-summary { font-size:13px; color:var(--ink); margin:0 0 8px; }
+  .det-formula { font-size:11px; padding:6px 10px; border-radius:8px; background:var(--code-bg);
+                 color:var(--code-ink); border:1px solid var(--line); margin-bottom:10px;
+                 font-family:var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
+  .det-list { margin:0 0 10px; padding-left:18px; font-size:12px; color:var(--dim); }
+  .det-list li { margin:2px 0; }
+  .det-list b { color:var(--ink); }
+  .det-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .det-raw { margin-top:10px; }
+  .det-raw summary { font-size:11px; color:var(--dim); cursor:pointer; font-weight:600; }
+  .det-raw pre { margin:6px 0 0; padding:10px; border-radius:8px; background:var(--code-bg);
+                 color:var(--code-ink); border:1px solid var(--line); font-size:11px; overflow:auto; max-height:220px; }
   .hint.is-live-chat { color:var(--accent-soft-ink); font-weight:600; }
   .hud-artifacts { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; padding-top:10px;
                    border-top:1px solid var(--line); }
@@ -468,6 +490,8 @@ let bridgeSource = null;
 let discoveredPacks = [];
 let liveTelemetry = null;
 let telemetryLoading = false;
+let lastDetResult = null;
+let expandedRulesNodeId = null;
 let liveChatTarget = null;
 const DEFAULT_FOOTER_HINT = 'Space = play/pause · ←/→ = previous/next scene · briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat';
 const BRIDGE = (typeof window.__WALKTHROUGH_BRIDGE__ === 'object' && window.__WALKTHROUGH_BRIDGE__) ? window.__WALKTHROUGH_BRIDGE__ : null;
@@ -593,7 +617,21 @@ function connectBridgeEvents() {
         liveA2uiOverride = msg.liveA2ui;
         renderAsk();
       }
+      if (msg.lastDeterministicResult) {
+        lastDetResult = msg.lastDeterministicResult;
+        renderHud();
+      }
       renderBridgePill(msg.agentStatus || 'ready');
+    } catch (e) {}
+  });
+  bridgeSource.addEventListener('deterministic_result', (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg && msg.callbackId) {
+        lastDetResult = msg;
+        renderHud();
+        syncStickyMedia();
+      }
     } catch (e) {}
   });
   bridgeSource.addEventListener('callback_ack', (ev) => {
@@ -754,6 +792,49 @@ if (window.matchMedia) {
   if (mq.addEventListener) mq.addEventListener('change', onMq);
 }
 
+function renderDetResultHtml() {
+  if (!lastDetResult) return '';
+  const r = lastDetResult;
+  const d = r.data || {};
+  const bullets = [];
+  if (r.kind === 'unblock_issue') {
+    (d.directBlockers || []).forEach((b) => {
+      bullets.push('<li><b>Blocker #' + esc(b.number) + '</b> (' + esc(b.readyNow ? 'READY NOW' : ('blocked by ' + (b.blockedBy || []).map((n) => '#' + n).join(', '))) + '): ' + esc(b.title) + '</li>');
+    });
+    if ((d.actionableRootLeaves || []).length) {
+      bullets.push('<li><b>Actionable root leaf(s):</b> ' + d.actionableRootLeaves.map((l) => '#' + esc(l.number) + ' — ' + esc(l.title)).join('; ') + '</li>');
+    }
+  } else if (r.kind === 'triage_bottleneck') {
+    const c = d.counts || {};
+    bullets.push('<li><b>Verdict:</b> ' + esc(d.recommendation) + '</li>');
+    bullets.push('<li><b>Split:</b> ' + esc(c.actionableNow) + ' actionable now · ' + esc(c.prodGated) + ' prod-gated (' + esc(c.prodGatedPercent) + '%) · ' + esc(c.blocked) + ' upstream-blocked</li>');
+    if ((d.rootUnblockerLeaves || []).length) {
+      bullets.push('<li><b>Critical-path root unblocker(s):</b> ' + d.rootUnblockerLeaves.map((l) => '#' + esc(l.number) + ' (unlocks ' + l.unlocks.map((n) => '#' + n).join(', ') + ')').join('; ') + '</li>');
+    }
+  } else if (r.kind === 'assign_next_item') {
+    bullets.push('<li><b>Verified ready:</b> ' + (d.verifiedReady ? 'YES (0 blockers, 0 conflicting open PRs)' : 'NO') + '</li>');
+  }
+  const formula = d.formulaMatched || '';
+  return '<div class="det-result" id="det-result" role="region" aria-label="Deterministic execution result">' +
+    '<div class="det-head">' +
+      '<span class="det-title">' + esc(r.title || ('Deterministic Result · ' + r.action)) + '</span>' +
+      '<div class="det-badges">' +
+        '<span class="prov-chip live">0 LLM tokens &middot; Deterministic Node</span>' +
+        '<span class="prov-chip">' + esc(r.callbackId) + ' &middot; ' + esc(formatClockTime(r.measuredAt || r.timestamp)) + '</span>' +
+      '</div>' +
+    '</div>' +
+    '<p class="det-summary">' + esc(r.summary || r.error || '') + '</p>' +
+    (formula ? '<div class="det-formula">Rule matched: ' + esc(formula) + '</div>' : '') +
+    (bullets.length ? '<ul class="det-list">' + bullets.join('') + '</ul>' : '') +
+    '<div class="det-actions">' +
+      (r.ok && r.handoffPrompt ? '<button type="button" class="node-btn primary" id="det-send-agent-btn">Send verified dossier to Agent</button>' : '') +
+      '<button type="button" class="node-btn" id="det-dismiss-btn">Dismiss</button>' +
+    '</div>' +
+    '<details class="det-raw"><summary>Inspect raw deterministic receipt JSON (' + esc((r.sources || []).join(', ')) + ')</summary>' +
+    '<pre>' + esc(JSON.stringify(r, null, 2)) + '</pre></details>' +
+  '</div>';
+}
+
 function renderHud() {
   const h = DATA.hud || {};
   const host = $('hud');
@@ -849,6 +930,19 @@ function renderHud() {
               '<button type="button" class="node-btn" data-node-quick="' + esc(n.id) + '" data-quick-idx="' + qi + '">' + esc(qa.label) + '</button>'
             ).join('')
           : '';
+        const rulesOpen = expandedRulesNodeId === n.id && n.rule_provenance;
+        const rulesBox = rulesOpen
+          ? '<div class="node-rules-box" id="rules-' + esc(n.id) + '">' +
+              '<div><b>Roster:</b> ' + esc(n.rule_provenance.rosterSource) + '</div>' +
+              '<div><b>Queue:</b> ' + esc(n.rule_provenance.queueSource) + '</div>' +
+              '<div><b>Inputs:</b> ready=' + esc(n.rule_provenance.inputs.readyCount) +
+                ' · blocked=' + esc(n.rule_provenance.inputs.blockedCount) +
+                ' · total=' + esc(n.rule_provenance.inputs.totalQueue) +
+                ' · openPrs=' + esc(n.rule_provenance.inputs.openPrCount) + '</div>' +
+              '<div><b>Rule:</b> ' + esc(n.rule_provenance.matchedRule) + '</div>' +
+              '<div><b>Derived actions:</b> ' + esc((n.rule_provenance.derivedButtons || []).map((b) => b.label + ' [' + b.action + ']').join(', ') || 'none') + '</div>' +
+            '</div>'
+          : '';
         return '<div class="node-card ' + esc(n.level || '') + ' ' + stCls + '" data-node-id="' + esc(n.id) + '">' +
           '<div class="node-head"><span class="node-name">' + esc(n.name) + '</span>' +
           '<span class="node-role">' + esc(n.role) + '</span></div>' +
@@ -857,9 +951,12 @@ function renderHud() {
           '<div class="node-actions">' +
             '<button type="button" class="node-btn" data-chat-node="' + esc(n.id) + '">Chat with ' + esc(n.name) + '</button>' +
             quickBtns +
+            (n.rule_provenance ? '<button type="button" class="node-rules-btn" data-node-rules="' + esc(n.id) + '" aria-expanded="' + (rulesOpen ? 'true' : 'false') + '">' + (rulesOpen ? 'Hide rules' : 'Rules') + '</button>' : '') +
           '</div>' +
+          rulesBox +
         '</div>';
       }).join('') + '</div>' : '') +
+      renderDetResultHtml() +
       (hudOversight === 'full' && artifacts.length ? '<div class="hud-artifacts">' + artifacts.map((a) => {
         const href = safeUrl(a.url);
         return href
@@ -942,12 +1039,49 @@ function renderHud() {
       setTimeout(() => b.classList.remove('copied'), 1800);
     };
   });
+  host.querySelectorAll('button[data-node-rules]').forEach((b) => {
+    b.onclick = () => {
+      const nid = b.dataset.nodeRules;
+      expandedRulesNodeId = expandedRulesNodeId === nid ? null : nid;
+      renderHud();
+      syncStickyMedia();
+    };
+  });
+  const detDismiss = $('det-dismiss-btn');
+  if (detDismiss) {
+    detDismiss.onclick = () => { lastDetResult = null; renderHud(); syncStickyMedia(); };
+  }
+  const detSend = $('det-send-agent-btn');
+  if (detSend && lastDetResult && BRIDGE) {
+    detSend.onclick = async () => {
+      const r = lastDetResult;
+      pauseForLiveChat(r.title || r.action);
+      detSend.disabled = true;
+      try {
+        await sendBridgeCallback({
+          label: 'Dispatch verified dossier: ' + (r.title || r.action),
+          node: r.node || undefined,
+          userNote: r.handoffPrompt,
+          action: {
+            name: 'dispatch_verified_dossier',
+            surfaceId: 'architect-hud',
+            sourceComponentId: 'det-send-agent-btn',
+            context: { deterministicCallbackId: r.callbackId, kind: r.kind, summary: r.summary, data: r.data },
+          },
+        });
+        $('hud-status').textContent = 'Sent verified deterministic dossier (' + r.callbackId + ') to Copilot agent.';
+      } catch (err) {
+        $('hud-status').textContent = 'Dispatch failed: ' + err.message;
+      } finally {
+        detSend.disabled = false;
+      }
+    };
+  }
   host.querySelectorAll('button[data-node-quick]').forEach((b) => {
     b.onclick = async () => {
       const node = allNodes.find((n) => n.id === b.dataset.nodeQuick);
       const qa = node && Array.isArray(node.quick_actions) ? node.quick_actions[Number(b.dataset.quickIdx)] : null;
       if (!node || !qa) return;
-      pauseForLiveChat(node.name + ' · ' + qa.label);
       const payload = {
         label: node.name + ': ' + qa.label,
         node,
@@ -963,12 +1097,23 @@ function renderHud() {
       if (BRIDGE) {
         b.disabled = true;
         try {
-          await sendBridgeCallback(payload);
-          b.classList.add('copied');
-          $('hud-status').textContent = 'Sent "' + qa.label + '" for ' + node.name + ' to Copilot agent.';
-          setTimeout(() => b.classList.remove('copied'), 2200);
+          const res = await sendBridgeCallback(payload);
+          if (res.result) {
+            lastDetResult = res.result;
+            renderHud();
+            syncStickyMedia();
+          } else {
+            pauseForLiveChat(node.name + ' · ' + qa.label);
+          }
+          const st = $('hud-status');
+          if (st) {
+            st.textContent = res.dispatchedToAgent
+              ? 'Sent "' + qa.label + '" for ' + node.name + ' to Copilot agent.'
+              : 'Computed deterministically (0 LLM tokens) for ' + node.name + ': ' + qa.label;
+          }
         } catch (err) {
-          $('hud-status').textContent = 'Bridge callback failed: ' + err.message;
+          const st = $('hud-status');
+          if (st) st.textContent = 'Bridge callback failed: ' + err.message;
         } finally {
           b.disabled = false;
         }

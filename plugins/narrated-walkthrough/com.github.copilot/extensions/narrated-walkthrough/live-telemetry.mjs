@@ -225,6 +225,25 @@ export function deriveNodeStateAndActions(
         summaryParts.push(`Open PRs: ${openPrs.map((p) => `#${p.number}`).join(", ")}`);
     }
 
+    const ruleProvenance = {
+        rosterSource: ".squad/team.md",
+        queueSource: "issue-work-queue (--mode status) + gh issue list",
+        inputs: { readyCount, blockedCount, totalQueue, openPrCount: prCount },
+        thresholds: {
+            readyBottleneck: BOTTLENECK_READY_THRESHOLD,
+            blockedBottleneck: BOTTLENECK_BLOCKED_THRESHOLD,
+            totalBottleneck: BOTTLENECK_TOTAL_THRESHOLD,
+        },
+        matchedRule: state === "bottleneck"
+            ? `ready (${readyCount}) >= ${BOTTLENECK_READY_THRESHOLD} || blocked (${blockedCount}) >= ${BOTTLENECK_BLOCKED_THRESHOLD} || total (${totalQueue}) >= ${BOTTLENECK_TOTAL_THRESHOLD} => state="bottleneck"`
+            : (state === "waiting_merge"
+                ? `openPrs (${prCount}) > 0 => state="waiting_merge"`
+                : (state === "idle"
+                    ? `ready (0) === 0 && openPrs (0) === 0 => state="idle"`
+                    : `1 <= ready (${readyCount}) < ${BOTTLENECK_READY_THRESHOLD} => state="active"`)),
+        derivedButtons: quickActions.map((qa) => ({ label: qa.label, action: qa.action })),
+    };
+
     return {
         id: member.id,
         name: member.name,
@@ -238,6 +257,7 @@ export function deriveNodeStateAndActions(
         summary: summaryParts.join(" · "),
         chat_prompt: `Chat with ${member.name} (${member.role}) — live queue: ${readyCount} ready, ${blockedCount} blocked${topReady[0] ? `; top ready #${topReady[0].number}` : ""}.`,
         quick_actions: quickActions,
+        rule_provenance: ruleProvenance,
     };
 }
 
