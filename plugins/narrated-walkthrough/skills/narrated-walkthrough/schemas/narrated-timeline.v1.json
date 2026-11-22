@@ -92,6 +92,65 @@
           "type": "string"
         }
       }
+    },
+    "hud": {
+      "description": "Optional Architect HUD surface providing oversight-depth controls, high-level stats and trends, hierarchical agent-node chat handoffs (lead, specialist, or video walkthrough agent), and linked in-repo artifacts.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "oversight_default": { "type": "string", "minLength": 1 },
+        "stats": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "value"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1 },
+              "value": { "type": "string", "minLength": 1 },
+              "trend": { "type": "string" },
+              "tone": { "type": "string" }
+            }
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "name", "role", "summary"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "name": { "type": "string", "minLength": 1 },
+              "role": { "type": "string", "minLength": 1 },
+              "level": { "type": "string" },
+              "parent": { "type": "string" },
+              "summary": { "type": "string", "minLength": 1 },
+              "chat_prompt": { "type": "string" }
+            }
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "url"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1 },
+              "url": { "type": "string", "minLength": 1 },
+              "kind": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "a2ui": {
+      "description": "Optional A2UI v1.0 declarative UI message stream (createSurface, updateComponents, updateDataModel) rendered in the action surface and inspectable as raw JSON.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "object" }
     }
   },
   "$defs": {

@@ -1,8 +1,8 @@
 # PR Review Walkthrough
 
-Use this recipe when a user asks for a **spoken, visual pull request review**
-that walks through what changed, what was checked, what CI actually proved, and
-ends on an explicit merge/review verdict.
+Use this recipe when presenting a **spoken, visual pull request review** to the
+Architect: continuity, momentum, already-completed validation, an interactive
+Architect HUD, and A2UI v1.0 action choices.
 
 It composes the existing `corven-agent-tools` plugins rather than replacing any
 of them:
@@ -13,39 +13,33 @@ of them:
 | 2. Real code review | Direct diff + LSP consumer check (new public APIs, security, invariants) | Concrete findings (blocking vs. non-blocking) and what stayed untouched |
 | 3. Retrieved CI proof | `playwright-report-retrieval` (`fetch_report`, `list_failed_tests`) + `gh pr checks` | Actual parsed test counts, artifact IDs, expiry dates, CI budget — never a badge alone |
 | 4. Artifact run dir | `e2e-artifacts` (`artifacts.py run --phase planning --spec pr-<N>-review-walkthrough`) | Collision-free outside-Git directory under `<repo>-artifacts/` |
-| 5. Synchronized deck | `narrated-walkthrough` (`build_narration.py`, `anchor_scene` + `temperature: 0.0`) | Consistent-voice WAV clips, derived clock, offline inlined Mermaid, captions, `#ask` panel |
-| 6. Browser check | Browser canvas / Playwright (`window.state()`, `window.seek(t)`) | Verified SVG rendering, boundary crossing, `askShown: true` |
+| 5. Synchronized deck | `narrated-walkthrough` (`build_narration.py`, `anchor_scene` + `temperature: 0.0`) | Consistent-voice WAV clips, derived clock, offline inlined Mermaid, Architect HUD, A2UI v1.0 choices, sticky minimal media controls |
+| 6. Browser check | Browser canvas / Playwright (`window.state()`, `window.seek(t)`) | Verified SVG rendering, sticky-header compact/uncompress scroll toggle, boundary crossing, `hudShown` & `askShown` |
 
-## Recommended 6-Scene Arc
+## Architect-Assist Tone & Framing
 
-Keep one claim per scene (~12–20 s each; ~90–110 s total):
+Do **not** frame a review like a ticket queue ("What is your verdict on pull
+request N?"). Frame it as an executive **Architect-assist** briefing:
 
-1. **Verdict & footprint** *(scoreboard)* — Net file/line change, CI pass summary, upfront recommendation (Approve & merge vs. Request changes).
-2. **What changed** *(before/after)* — The structural move, not a file-by-file changelog.
-3. **Key mechanism / guard** *(sequence)* — The most important new invariant, contract, or safety check and how it fails closed.
-4. **Risk, scope & findings** *(contrast / scoreboard)* — Blocking defects (if any), non-blocking notes, and what stayed deliberately untouched.
-5. **Verified CI evidence** *(scoreboard)* — Retrieved Playwright/unit test totals, budget numbers, and zero-failure confirmation.
-6. **Your verdict** *(top-down decision)* — Explicit spoken + visual invitation matching the `disposition` block.
+1. **Lead with continuity, momentum, and already-completed validation:**
+   explain what epic/workstream the PR continues, whether we are ahead or behind,
+   and what is already validated against concrete checks and test suites.
+2. **Surface the combined Architect HUD (`hud`):** expose high-level stats &
+   trends, oversight depth (`Executive` / `Lead & Nodes` / `Full Trace`), direct
+   `"Chat with <agent>"` handoffs for the Lead agent, individual specialist
+   nodes, and the optional **walkthrough video agent**, plus linked in-repo
+   conversation artifacts.
+3. **Deliver choices as A2UI v1.0 JSON (`a2ui`):** emit valid A2UI v1.0
+   messages (`createSurface` + `updateComponents` mapped to the consuming repo's
+   common UI building blocks) both inside the player's action surface and in the
+   accompanying chat reply.
 
-## Mandatory Disposition Contract (PR Verdict)
+## Sticky-Header Media Continuity
 
-A pull request review always ends on a human decision, so `disposition` is
-required and must match across all three surfaces (final scene narration, slide
-`#ask` panel, and accompanying chat reply):
-
-```json
-"disposition": {
-  "kind": "pr_verdict",
-  "prompt": "What is your verdict on pull request #353?",
-  "options": [
-    "Approve and merge PR #353",
-    "Post review comment only (keep open)",
-    "Inspect specific files or findings first",
-    "Park it for now"
-  ],
-  "note": "Any answer works, including requesting specific edits or no answer at all. Type it in the chat, or use the microphone."
-}
-```
+When the Architect scrolls down past the uncompressed media bar into slides or
+the HUD, the sticky header automatically reveals a minimal Play/Pause toggle and
+compact progress bar; scrolling back near the top hides the minimal controls and
+returns the uncompressed bar cleanly in place.
 
 ## Voice & Hygiene Rules
 
@@ -58,4 +52,4 @@ required and must match across all three surfaces (final scene narration, slide
 - **Hard guardrail — review does not authorize:** a PR review walkthrough
   explains and recommends. Never merge, approve, dismiss reviews, or post
   GitHub comments automatically as part of building the walkthrough; wait for
-  the human's explicit verdict.
+  the human's explicit decision.

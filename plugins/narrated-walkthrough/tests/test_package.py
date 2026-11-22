@@ -463,7 +463,48 @@ class PackageTests(unittest.TestCase):
         self.assertIn("change-learn", text)
         self.assertIn("playwright-report-retrieval", text)
         self.assertIn("anchor_scene", text)
+        self.assertIn("A2UI", text)
         self.assertIn("Never merge", text)
+
+    def test_player_ships_sticky_compact_controls_hud_and_a2ui_surface(self):
+        html = (SKILL / "player" / "player.html").read_text(encoding="utf-8")
+        for token in (
+            'id="mini-media"',
+            'id="mini-play"',
+            'id="mini-fill"',
+            'syncStickyMedia',
+            'stickyCompact:',
+            'id="hud"',
+            'renderHud',
+            'a2ui-json-drawer',
+            'system voice fallback',
+        ):
+            self.assertIn(token, html, f"player.html missing expected UI hook: {token}")
+
+    def test_hud_and_a2ui_fields_conform_to_closed_schema(self):
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        tl = {
+            "title": "HUD + A2UI test",
+            "scenes": [
+                {
+                    "id": "s1", "title": "S1", "mermaid": "flowchart LR\n    A",
+                    "narration": "Tell me where to steer next.", "captions": ["Tell me where to steer next."],
+                    "audio": "audio/s1.wav", "duration": 4.0,
+                }
+            ],
+            "hud": {
+                "summary": "Ahead on rollout.",
+                "oversight_default": "lead",
+                "stats": [{"label": "CI", "value": "9/9", "trend": "green", "tone": "ok"}],
+                "nodes": [{"id": "lead", "name": "Eric", "role": "Lead", "level": "lead", "summary": "Review owner"}],
+                "artifacts": [{"label": "PR #353", "url": "https://github.com/matthewcorven/venom-dog-sports/pull/353"}],
+            },
+            "a2ui": [
+                {"version": "v1.0", "createSurface": {"surfaceId": "s", "catalogId": "urn:test:v1"}},
+                {"version": "v1.0", "updateComponents": {"surfaceId": "s", "components": [{"id": "root", "component": "Column", "children": []}]}},
+            ],
+        }
+        self.assertEqual(_shape_errors(tl, schema), [])
 
     def test_cli_validate_runs(self):
         result = subprocess.run(

@@ -5,65 +5,151 @@
 <title>__TITLE__</title>
 __MERMAID__
 <style>
-  :root { --ink:#1b1b1f; --dim:#6b6b76; --line:#e3e3ea; --accent:#3d6fd0; }
+  :root { --ink:#1b1b1f; --dim:#6b6b76; --line:#e3e3ea; --accent:#3d6fd0;
+          --ok-bg:#e8f6ec; --ok-ink:#216e3a; --warn-bg:#fff4e5; --warn-ink:#9a5b08;
+          --surface:#ffffff; --bg:#fafafc; }
   * { box-sizing: border-box; }
   body { margin:0; font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-         color:var(--ink); background:#fafafc; }
-  header { display:flex; align-items:center; gap:14px; padding:14px 22px;
-           border-bottom:1px solid var(--line); background:#fff; position:sticky; top:0; z-index:5; }
-  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.01em; }
-  header .meta { font-size:12px; color:var(--dim); margin-left:auto; }
-  main { max-width:1080px; margin:0 auto; padding:26px 22px 140px; }
-  .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:22px; }
-  button { font:inherit; font-size:14px; padding:9px 16px; border-radius:9px; cursor:pointer;
+         color:var(--ink); background:var(--bg); }
+  header { display:flex; align-items:center; gap:14px; padding:12px 22px;
+           border-bottom:1px solid var(--line); background:rgba(255,255,255,.97);
+           backdrop-filter:blur(8px); position:sticky; top:0; z-index:10;
+           transition:box-shadow .2s ease; }
+  header.is-compact { box-shadow:0 4px 16px rgba(0,0,0,.07); }
+  header h1 { font-size:15px; margin:0; font-weight:650; letter-spacing:.01em; white-space:nowrap;
+              overflow:hidden; text-overflow:ellipsis; }
+  .mini-media { display:flex; align-items:center; gap:10px; flex:1 1 260px; max-width:440px;
+                margin-left:8px; opacity:0; transform:translateY(-3px);
+                transition:opacity .18s ease, transform .18s ease; }
+  header.is-compact .mini-media { opacity:1; transform:none; }
+  .mini-media[hidden] { display:none; }
+  .mini-btn { font:inherit; font-size:12px; padding:5px 12px; border-radius:999px;
+              background:var(--accent); border:1px solid var(--accent); color:#fff;
+              font-weight:600; cursor:pointer; white-space:nowrap; }
+  .mini-track { flex:1 1 120px; height:6px; background:#e6e8f0; border-radius:999px;
+                overflow:hidden; cursor:pointer; min-width:90px; }
+  .mini-track > i { display:block; height:100%; width:100%; background:var(--accent);
+                    transform-origin:left center; transform:scaleX(0); transition:transform .18s linear; }
+  .mini-clock { font-variant-numeric:tabular-nums; font-size:12px; color:var(--dim);
+                white-space:nowrap; min-width:74px; text-align:right; }
+  header .meta { font-size:12px; color:var(--dim); margin-left:auto; white-space:nowrap; }
+  header .meta.is-fallback { color:var(--warn-ink); font-weight:600; }
+  main { max-width:1080px; margin:0 auto; padding:24px 22px 148px; }
+  .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:20px;
+         padding:12px 16px; background:var(--surface); border:1px solid var(--line);
+         border-radius:12px; }
+  button { font:inherit; font-size:14px; padding:8px 15px; border-radius:9px; cursor:pointer;
            border:1px solid var(--line); background:#fff; color:var(--ink); }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
   button:disabled { opacity:.45; cursor:default; }
-  .track { flex:1 1 320px; height:6px; background:#e9e9f0; border-radius:3px; overflow:hidden; min-width:200px; }
-  .track > i { display:block; height:100%; width:0; background:var(--accent); transition:width .2s linear; }
-  .clock { font-variant-numeric:tabular-nums; font-size:13px; color:var(--dim); min-width:96px; text-align:right; }
-  .slide { background:#fff; border:1px solid var(--line); border-radius:14px; padding:26px 28px;
+  .track { flex:1 1 300px; height:7px; background:#e9e9f0; border-radius:4px; overflow:hidden;
+           min-width:180px; cursor:pointer; }
+  .track > i { display:block; height:100%; width:100%; background:var(--accent);
+               transform-origin:left center; transform:scaleX(0); transition:transform .2s linear; }
+  .clock { font-variant-numeric:tabular-nums; font-size:12px; color:var(--dim); min-width:96px; text-align:right; }
+
+  /* Architect HUD (stats, trends, oversight depth, hierarchical agent nodes) */
+  .hud { background:var(--surface); border:1px solid var(--line); border-radius:14px;
+         padding:18px 22px; margin-bottom:20px; }
+  .hud[hidden] { display:none; }
+  .hud-top { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+             margin-bottom:12px; }
+  .hud-title { font-size:12px; text-transform:uppercase; letter-spacing:.09em; color:var(--dim);
+               font-weight:700; }
+  .hud-summary { font-size:14px; color:var(--ink); margin:0 0 14px; }
+  .oversight { display:inline-flex; gap:4px; background:#f2f3f8; padding:3px; border-radius:9px; }
+  .oversight button { border:none; background:transparent; font-size:12px; padding:5px 10px;
+                      border-radius:7px; color:var(--dim); font-weight:600; }
+  .oversight button.on { background:#fff; color:var(--ink); box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .hud-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px;
+               margin-bottom:14px; }
+  .stat-card { border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:#fcfcfd; }
+  .stat-label { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); }
+  .stat-val { font-size:22px; font-weight:700; margin:2px 0; }
+  .stat-trend { display:inline-block; font-size:11px; padding:2px 7px; border-radius:999px; font-weight:600;
+                background:#eef1f7; color:var(--dim); }
+  .stat-trend.ok { background:var(--ok-bg); color:var(--ok-ink); }
+  .stat-trend.warn { background:var(--warn-bg); color:var(--warn-ink); }
+  .hud-nodes { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px;
+               margin-top:10px; }
+  .node-card { border:1px solid var(--line); border-radius:10px; padding:11px 13px; background:#fff;
+               display:flex; flex-direction:column; gap:6px; }
+  .node-card.lead { border-color:#b8cdf5; background:#f8faff; }
+  .node-card.video { border-color:#c8e6d0; background:#f7fcf8; }
+  .node-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .node-name { font-weight:650; font-size:14px; }
+  .node-role { font-size:11px; padding:2px 7px; border-radius:999px; background:#eef1f7; color:var(--dim);
+               font-weight:600; }
+  .node-desc { font-size:13px; color:var(--dim); margin:0; }
+  .node-btn { align-self:flex-start; font-size:12px; padding:5px 10px; border-radius:7px; }
+  .node-btn.copied { border-color:#3d9a5b; color:#216e3a; }
+  .hud-artifacts { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; padding-top:10px;
+                   border-top:1px solid var(--line); }
+  .hud-link { font-size:12px; padding:4px 9px; border-radius:999px; border:1px solid var(--line);
+              color:var(--accent); text-decoration:none; background:#fff; }
+  .hud-link:hover { border-color:var(--accent); }
+  .hud-status { font-size:12px; color:var(--ok-ink); margin-top:8px; min-height:18px; }
+
+  .slide { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:26px 28px;
            margin-bottom:20px; opacity:.34; transition:opacity .35s, box-shadow .35s, transform .35s; }
-  .slide.active { opacity:1; box-shadow:0 10px 30px rgba(30,40,80,.10); transform:translateY(-1px); }
-  .slide h2 { font-size:19px; margin:0 0 4px; font-weight:650; }
+  .slide.active { opacity:1; box-shadow:0 10px 28px rgba(0,0,0,.08); transform:translateY(-1px); }
+  .slide h2 { font-size:22px; margin:0 0 4px; font-weight:650; }
   .slide .n { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:.09em; }
   .diagram { margin:16px 0 4px; display:flex; justify-content:center; }
   .diagram svg { max-width:100%; height:auto; }
   footer { position:fixed; bottom:0; left:0; right:0; background:rgba(255,255,255,.97);
-           border-top:1px solid var(--line); padding:14px 22px; backdrop-filter:blur(8px); }
+           border-top:1px solid var(--line); padding:14px 22px; backdrop-filter:blur(8px); z-index:9; }
   .cap { max-width:1080px; margin:0 auto; font-size:17px; line-height:1.5; min-height:52px;
          display:flex; align-items:center; }
   .cap span { opacity:0; transform:translateY(4px); transition:opacity .22s, transform .22s; }
   .cap span.on { opacity:1; transform:none; }
   .hint { max-width:1080px; margin:6px auto 0; font-size:12px; color:var(--dim); }
+
+  /* A2UI v1.0 / Disposition Choice Surface */
   .ask { background:#fffdf6; border:1px solid #e8d9a8; border-radius:14px; padding:22px 26px; margin-bottom:20px; }
-  .ask h3 { margin:0 0 4px; font-size:17px; font-weight:650; }
+  .ask-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
+              margin-bottom:6px; }
+  .ask h3 { margin:0; font-size:17px; font-weight:650; }
+  .a2ui-badge { font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+                padding:3px 8px; border-radius:999px; background:#eef4ff; color:var(--accent);
+                border:1px solid #c9dafc; }
   .ask p { margin:0 0 14px; font-size:14px; color:#5c5c68; }
   .ask .opts { display:flex; gap:10px; flex-wrap:wrap; }
   .ask .opts button { border:1px solid #e0d3a8; background:#fff; }
+  .ask .opts button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
   .ask .opts button:hover { border-color:var(--accent); }
-  .ask .opts button.copied { border-color:#3d9a5b; color:#3d9a5b; }
+  .ask .opts button.copied { border-color:#3d9a5b; color:#3d9a5b; background:#fff; }
   .ask .tip { margin:14px 0 0; font-size:13px; color:#6b6b76; }
   .ask .tip b { color:var(--ink); }
+  .a2ui-raw { margin-top:14px; border-top:1px solid #efe4be; padding-top:10px; }
+  .a2ui-raw summary { font-size:12px; color:var(--dim); cursor:pointer; font-weight:600; }
+  .a2ui-raw pre { margin:8px 0 0; padding:12px; background:#1c1e26; color:#e6edf3; border-radius:10px;
+                  font-size:12px; line-height:1.45; overflow:auto; max-height:260px; }
 </style>
 </head>
 <body>
-<header>
+<header id="sticky-header">
   <h1>__TITLE__</h1>
-  <div class="meta">narration: <b>__MODEL__</b> &middot; voice <b>__VOICE__</b></div>
+  <div class="mini-media" id="mini-media" aria-label="Compact media controls" hidden>
+    <button id="mini-play" class="mini-btn" type="button" aria-label="Play or pause">&#9654; Play</button>
+    <div class="mini-track" id="mini-track" role="progressbar" aria-label="Playback progress"><i id="mini-fill"></i></div>
+    <span class="mini-clock" id="mini-clock">0:00 / 0:00</span>
+  </div>
+  <div class="meta" id="voice-meta">narration: <b>__MODEL__</b> &middot; voice <b>__VOICE__</b></div>
 </header>
 
 <main>
-  <div class="bar">
-    <button id="play" class="primary">&#9654; Play</button>
-    <button id="pause">&#10074;&#10074; Pause</button>
-    <button id="restart">&#8634; Restart</button>
-    <button id="voicebtn" title="Speak with the system voice if the audio cannot play">Use system voice</button>
-    <div class="track"><i id="fill"></i></div>
+  <div class="bar" id="full-bar">
+    <button id="play" class="primary" type="button">&#9654; Play</button>
+    <button id="pause" type="button">&#10074;&#10074; Pause</button>
+    <button id="restart" type="button">&#8634; Restart</button>
+    <button id="voicebtn" type="button" title="Speak with the system voice if the audio cannot play">Use system voice</button>
+    <div class="track" id="full-track"><i id="fill"></i></div>
     <div class="clock" id="clock">0:00 / 0:00</div>
   </div>
+  <section class="hud" id="hud" aria-label="Architect oversight HUD" hidden></section>
   <div id="slides"></div>
-  <section class="ask" id="ask" hidden></section>
+  <section class="ask" id="ask" aria-label="A2UI action surface" hidden></section>
 </main>
 
 <footer>
@@ -80,6 +166,14 @@ mermaid.initialize({ startOnLoad: false, theme: 'base', securityLevel: 'loose',
 
 const $ = (id) => document.getElementById(id);
 const fmt = (s) => Math.floor(s/60) + ':' + String(Math.floor(s%60)).padStart(2,'0');
+const esc = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const safeUrl = (u) => {
+  if (typeof u !== 'string' || !u.trim()) return null;
+  try {
+    const parsed = new URL(u);
+    return ['https:', 'http:', 'file:'].includes(parsed.protocol) ? parsed.href : null;
+  } catch { return null; }
+};
 
 const player = new Audio();
 player.preload = 'auto';
@@ -87,6 +181,43 @@ let sceneIdx = -1, idx = -1, raf = 0, playing = false;
 let useSystem = false, sysStart = 0, sysOffset = 0, sysScene = -1;
 let pending = null;
 let wallStart = 0, wallBase = 0;
+let hudOversight = (DATA.hud && DATA.hud.oversight_default) || 'lead';
+let lastA2uiAction = null;
+const recordedMetaHtml = $('voice-meta').innerHTML;
+
+function updateVoiceMeta() {
+  const meta = $('voice-meta');
+  if (useSystem) {
+    meta.classList.add('is-fallback');
+    meta.innerHTML = 'audio: <b>system voice fallback</b>';
+  } else {
+    meta.classList.remove('is-fallback');
+    meta.innerHTML = recordedMetaHtml;
+  }
+}
+
+function updatePlayButtons() {
+  $('play').disabled = playing;
+  const mp = $('mini-play');
+  if (mp) mp.innerHTML = playing ? '&#10074;&#10074; Pause' : '&#9654; Play';
+}
+
+function syncStickyMedia() {
+  const header = $('sticky-header');
+  const fullBar = $('full-bar');
+  const mini = $('mini-media');
+  if (!header || !fullBar || !mini) return;
+  const compact = fullBar.getBoundingClientRect().bottom <= header.getBoundingClientRect().bottom + 4;
+  header.classList.toggle('is-compact', compact);
+  mini.hidden = !compact;
+}
+
+if (typeof IntersectionObserver === 'function') {
+  const io = new IntersectionObserver(() => syncStickyMedia(), { threshold: [0, 0.25, 1] });
+  io.observe($('full-bar'));
+}
+window.addEventListener('scroll', syncStickyMedia, { passive: true });
+window.addEventListener('resize', syncStickyMedia, { passive: true });
 
 async function build() {
   const host = $('slides');
@@ -95,7 +226,7 @@ async function build() {
     const el = document.createElement('section');
     el.className = 'slide'; el.id = 's-' + s.id;
     el.innerHTML = '<div class="n">Scene ' + (i+1) + ' of ' + DATA.scenes.length +
-                   ' &middot; ' + fmt(s.start) + '</div><h2>' + s.title + '</h2>' +
+                   ' &middot; ' + fmt(s.start) + '</div><h2>' + esc(s.title) + '</h2>' +
                    '<div class="diagram" id="d-' + s.id + '"></div>';
     host.appendChild(el);
     try {
@@ -105,6 +236,68 @@ async function build() {
       $('d-' + s.id).textContent = 'diagram failed: ' + e.message;
     }
   }
+}
+
+function renderHud() {
+  const h = DATA.hud;
+  const host = $('hud');
+  if (!h || !host) return;
+  const stats = h.stats || [];
+  const allNodes = h.nodes || [];
+  const visibleNodes = hudOversight === 'executive'
+    ? allNodes.filter((n) => n.level === 'lead' || n.level === 'video')
+    : allNodes;
+  const artifacts = h.artifacts || [];
+
+  host.innerHTML =
+    '<div class="hud-top">' +
+      '<span class="hud-title">Architect HUD &middot; Oversight &amp; Agent Routing</span>' +
+      '<div class="oversight" role="tablist" aria-label="Oversight depth">' +
+        ['executive', 'lead', 'full'].map((lvl) =>
+          '<button type="button" data-oversight="' + lvl + '" class="' + (hudOversight === lvl ? 'on' : '') + '">' +
+          (lvl === 'executive' ? 'Executive' : lvl === 'lead' ? 'Lead & Nodes' : 'Full Trace') + '</button>'
+        ).join('') +
+      '</div>' +
+    '</div>' +
+    (h.summary ? '<p class="hud-summary">' + esc(h.summary) + '</p>' : '') +
+    (stats.length ? '<div class="hud-stats">' + stats.map((st) =>
+      '<div class="stat-card"><div class="stat-label">' + esc(st.label) + '</div>' +
+      '<div class="stat-val">' + esc(st.value) + '</div>' +
+      (st.trend ? '<span class="stat-trend ' + esc(st.tone || '') + '">' + esc(st.trend) + '</span>' : '') +
+      '</div>'
+    ).join('') + '</div>' : '') +
+    (visibleNodes.length ? '<div class="hud-nodes">' + visibleNodes.map((n) =>
+      '<div class="node-card ' + esc(n.level || '') + '" data-node-id="' + esc(n.id) + '">' +
+        '<div class="node-head"><span class="node-name">' + esc(n.name) + '</span>' +
+        '<span class="node-role">' + esc(n.role) + '</span></div>' +
+        '<p class="node-desc">' + esc(n.summary) + '</p>' +
+        '<button type="button" class="node-btn" data-chat-node="' + esc(n.id) + '">Chat with ' + esc(n.name) + '</button>' +
+      '</div>'
+    ).join('') + '</div>' : '') +
+    (hudOversight === 'full' && artifacts.length ? '<div class="hud-artifacts">' + artifacts.map((a) => {
+      const href = safeUrl(a.url);
+      return href
+        ? '<a class="hud-link" href="' + esc(href) + '" target="_blank" rel="noopener noreferrer">' + esc(a.label) + '</a>'
+        : '<span class="hud-link">' + esc(a.label) + '</span>';
+    }).join('') + '</div>' : '') +
+    '<div class="hud-status" id="hud-status" role="status"></div>';
+
+  host.hidden = false;
+  host.querySelectorAll('button[data-oversight]').forEach((b) => {
+    b.onclick = () => { hudOversight = b.dataset.oversight; renderHud(); syncStickyMedia(); };
+  });
+  host.querySelectorAll('button[data-chat-node]').forEach((b) => {
+    b.onclick = async () => {
+      const node = allNodes.find((n) => n.id === b.dataset.chatNode);
+      if (!node) return;
+      const prompt = node.chat_prompt || ('Speak with ' + node.name + ' (' + node.role + ') regarding ' + DATA.title);
+      try { await navigator.clipboard.writeText(prompt); } catch (e) {}
+      window.dispatchEvent(new CustomEvent('narrated-walkthrough:chat-agent', { detail: { node, prompt } }));
+      b.classList.add('copied');
+      $('hud-status').textContent = 'Pinned handoff to ' + node.name + ' (' + node.role + ') — ready to paste or continue in chat.';
+      setTimeout(() => b.classList.remove('copied'), 1800);
+    };
+  });
 }
 
 function now() {
@@ -158,8 +351,12 @@ function seek(t) {
 function tick() {
   const t = now();
   if (!useSystem && pending === null) syncAudio(t);
-  $('fill').style.width = Math.min(100, 100 * t / DATA.total) + '%';
-  $('clock').textContent = fmt(t) + ' / ' + fmt(DATA.total);
+  const ratio = Math.max(0, Math.min(1, DATA.total > 0 ? t / DATA.total : 0));
+  const clk = fmt(t) + ' / ' + fmt(DATA.total);
+  $('fill').style.transform = 'scaleX(' + ratio.toFixed(4) + ')';
+  $('clock').textContent = clk;
+  if ($('mini-fill')) $('mini-fill').style.transform = 'scaleX(' + ratio.toFixed(4) + ')';
+  if ($('mini-clock')) $('mini-clock').textContent = clk;
 
   let si = 0;
   for (let i = 0; i < DATA.scenes.length; i++) if (t >= DATA.scenes[i].start) si = i;
@@ -181,6 +378,7 @@ function tick() {
     setTimeout(() => { cap.textContent = text; cap.classList.add('on'); }, 90);
     cap.dataset.t = text;
   }
+  syncStickyMedia();
   if (playing) raf = requestAnimationFrame(tick);
 }
 
@@ -204,12 +402,12 @@ function speakFrom(t) {
 function play() {
   if (playing) return;
   playing = true;
-  $('play').disabled = true;
+  updatePlayButtons();
   wallStart = performance.now();
   if (useSystem) speakFrom(now());
   else if (!player.src) { pending = wallBase; syncAudio(wallBase); }
   else player.play().catch(() => {
-    useSystem = true; $('voicebtn').textContent = 'Use recorded audio'; speakFrom(now());
+    useSystem = true; $('voicebtn').textContent = 'Use recorded audio'; updateVoiceMeta(); speakFrom(now());
   });
   cancelAnimationFrame(raf);
   raf = requestAnimationFrame(tick);
@@ -219,7 +417,7 @@ function pause() {
   if (!playing && pending === null) return;
   wallBase = now();
   playing = false;
-  $('play').disabled = false;
+  updatePlayButtons();
   cancelAnimationFrame(raf);
   if (useSystem) { speechSynthesis.cancel(); sysOffset = wallBase; }
   else player.pause();
@@ -230,7 +428,8 @@ function restart() {
   wallBase = 0; sysOffset = 0; sysScene = -1; pending = null;
   sceneIdx = -1; idx = -1;
   if (player.src) player.currentTime = 0;
-  $('fill').style.width = '0%';
+  $('fill').style.transform = 'scaleX(0)';
+  if ($('mini-fill')) $('mini-fill').style.transform = 'scaleX(0)';
   tick();
   play();
 }
@@ -238,17 +437,31 @@ function restart() {
 $('play').onclick = play;
 $('pause').onclick = pause;
 $('restart').onclick = restart;
+$('mini-play').onclick = () => { playing ? pause() : play(); };
+function bindTrackSeek(trackEl) {
+  if (!trackEl) return;
+  trackEl.addEventListener('click', (e) => {
+    const r = trackEl.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
+    seek(frac * DATA.total);
+  });
+}
+bindTrackSeek($('full-track'));
+bindTrackSeek($('mini-track'));
+
 $('voicebtn').onclick = () => {
   const wasPlaying = playing;
   const at = now();
   pause();
   useSystem = !useSystem;
   $('voicebtn').textContent = useSystem ? 'Use recorded audio' : 'Use system voice';
+  updateVoiceMeta();
   sysOffset = at; sysScene = -1; sceneIdx = -1;
   if (wasPlaying) play();
 };
 
 document.addEventListener('keydown', (e) => {
+  if (e.target && e.target.closest && e.target.closest('button, input, textarea, select, a, summary')) return;
   if (e.code === 'Space') { e.preventDefault(); playing ? pause() : play(); }
   if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') {
     e.preventDefault();
@@ -260,24 +473,72 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// When the walkthrough ends on open choices, make the invitation explicit and
-// give a one-click way to put the answer back in the chat.
+function buildDefaultA2ui(d) {
+  const surfaceId = 'walkthrough-disposition';
+  const components = [
+    { id: 'root', component: 'Column', children: ['prompt', 'note', 'actions'] },
+    { id: 'prompt', component: 'Text', text: d.prompt, variant: 'h3' },
+    { id: 'note', component: 'Text', text: d.note || '', variant: 'body' },
+    { id: 'actions', component: 'Row', children: d.options.map((_, i) => 'opt-' + i) },
+  ];
+  d.options.forEach((opt, i) => {
+    components.push({ id: 'opt-' + i + '-label', component: 'Text', text: opt });
+    components.push({
+      id: 'opt-' + i,
+      component: 'Button',
+      variant: i === 0 ? 'primary' : 'secondary',
+      child: 'opt-' + i + '-label',
+      action: { name: 'select_option', context: { option: opt, index: i } },
+    });
+  });
+  return [
+    { version: 'v1.0', createSurface: { surfaceId, catalogId: 'https://a2ui.org/specification/v1_0/basic_catalog.json' } },
+    { version: 'v1.0', updateComponents: { surfaceId, components } },
+  ];
+}
+
+// Render the disposition / A2UI v1.0 action surface so choices follow A2UI JSON.
 function renderAsk() {
   const d = DATA.disposition;
-  if (!d) return;
+  const a2uiMessages = Array.isArray(DATA.a2ui) && DATA.a2ui.length ? DATA.a2ui : (d ? buildDefaultA2ui(d) : null);
+  if (!d && !a2uiMessages) return;
   const ask = $('ask');
+
+  const createMsg = a2uiMessages.find((m) => m.createSurface);
+  const compMsg = a2uiMessages.find((m) => m.updateComponents);
+  const byId = new Map(((compMsg && compMsg.updateComponents && compMsg.updateComponents.components) || []).map((c) => [c.id, c]));
+  const buttons = [...byId.values()].filter((c) => c.component === 'Button');
+  const heading = (d && d.prompt) || (byId.get('prompt') && byId.get('prompt').text) || 'Next action';
+  const note = (d && d.note) || (byId.get('note') && byId.get('note').text) || '';
+  const catalog = (createMsg && createMsg.createSurface && createMsg.createSurface.catalogId) || 'a2ui/v1.0';
+
+  const renderedButtons = buttons.length
+    ? buttons.map((btn) => {
+        const labelComp = byId.get(btn.child);
+        const label = (labelComp && labelComp.text) || btn.id;
+        const actionJson = esc(JSON.stringify(btn.action || { name: 'select_option', context: { option: label } }));
+        return '<button type="button" class="' + (btn.variant === 'primary' ? 'primary' : '') +
+               '" data-answer="' + esc(label) + '" data-a2ui-action="' + actionJson + '">' + esc(label) + '</button>';
+      }).join('')
+    : (d ? d.options.map((o) => '<button type="button" data-answer="' + esc(o) + '">' + esc(o) + '</button>').join('') : '');
+
   ask.innerHTML =
-    '<h3>' + d.prompt + '</h3>' +
-    '<p>' + d.note + '</p>' +
-    '<div class="opts">' +
-    d.options.map((o) => '<button data-answer="' + o + '">' + o + '</button>').join('') +
-    '</div>' +
-    '<p class="tip">Pick one to copy the phrase, then paste it in the chat. <b>Or just say it however you like</b> &mdash; typing or the microphone both work, and no answer is a valid answer.</p>';
+    '<div class="ask-head"><h3>' + esc(heading) + '</h3><span class="a2ui-badge">A2UI v1.0 &middot; ' + esc(catalog) + '</span></div>' +
+    (note ? '<p>' + esc(note) + '</p>' : '') +
+    '<div class="opts">' + renderedButtons + '</div>' +
+    '<p class="tip">Pick an A2UI action to copy it into chat. <b>Or just say it however you like</b> &mdash; typing or the microphone both work, and no answer is a valid answer.</p>' +
+    '<details class="a2ui-raw" id="a2ui-json-drawer"><summary>Inspect A2UI v1.0 JSON payload (' + a2uiMessages.length + ' messages)</summary>' +
+    '<pre id="a2ui-json-pre">' + esc(JSON.stringify(a2uiMessages, null, 2)) + '</pre></details>';
   ask.hidden = false;
   ask.querySelectorAll('button[data-answer]').forEach((b) => {
     b.onclick = async () => {
       const text = b.dataset.answer;
       try { await navigator.clipboard.writeText(text); } catch (e) {}
+      try {
+        const act = b.dataset.a2uiAction ? JSON.parse(b.dataset.a2uiAction) : { name: 'select_option', context: { option: text } };
+        lastA2uiAction = { version: 'v1.0', action: { ...act, surfaceId: (createMsg && createMsg.createSurface && createMsg.createSurface.surfaceId) || 'walkthrough-disposition' } };
+        window.dispatchEvent(new CustomEvent('a2ui:action', { detail: lastA2uiAction }));
+      } catch (e) {}
       b.classList.add('copied');
       b.textContent = 'copied — paste in chat';
       setTimeout(() => { b.classList.remove('copied'); b.textContent = text; }, 2200);
@@ -288,12 +549,20 @@ function renderAsk() {
 window.seek = seek;
 window.state = () => ({
   t: now(), playing, useSystem, scene: (document.querySelector('.slide.active') || {}).id,
-  caption: $('cap').textContent, askShown: !$('ask').hidden
+  caption: $('cap').textContent, askShown: !$('ask').hidden,
+  hudShown: !$('hud').hidden, hudOversight,
+  stickyCompact: $('sticky-header').classList.contains('is-compact'),
+  miniMediaVisible: !$('mini-media').hidden,
+  lastA2uiAction,
 });
 
 build();
+renderHud();
 renderAsk();
+updateVoiceMeta();
+updatePlayButtons();
 tick();
+syncStickyMedia();
 </script>
 </body>
 </html>

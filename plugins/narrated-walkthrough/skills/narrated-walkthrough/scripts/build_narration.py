@@ -217,6 +217,7 @@ def render(tl: dict) -> str:
 
     data = json.dumps(
         {
+            "title": tl["title"],
             "scenes": [
                 {
                     "id": s["id"],
@@ -232,6 +233,8 @@ def render(tl: dict) -> str:
             "cues": cues,
             "total": tl["total_duration"],
             "disposition": tl.get("disposition"),
+            "hud": tl.get("hud"),
+            "a2ui": tl.get("a2ui"),
         },
         ensure_ascii=False,
     )
