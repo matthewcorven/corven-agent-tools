@@ -456,6 +456,15 @@ class PackageTests(unittest.TestCase):
                    "urllib", "shutil", "struct", "gzip"}
         self.assertTrue(roots <= allowed, roots - allowed)
 
+    def test_pr_review_walkthrough_reference_ships_and_guards_merge_authority(self):
+        ref = SKILL / "references" / "pr-review-walkthrough.md"
+        self.assertTrue(ref.is_file(), "pr-review-walkthrough.md reference must exist")
+        text = ref.read_text(encoding="utf-8")
+        self.assertIn("change-learn", text)
+        self.assertIn("playwright-report-retrieval", text)
+        self.assertIn("anchor_scene", text)
+        self.assertIn("Never merge", text)
+
     def test_cli_validate_runs(self):
         result = subprocess.run(
             [sys.executable, str(BUILDER), "--validate", "--plan", str(GOLDEN / "timeline.json")],

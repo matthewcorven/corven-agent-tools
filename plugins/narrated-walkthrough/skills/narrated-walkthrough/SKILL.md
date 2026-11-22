@@ -1,18 +1,18 @@
 ---
 name: narrated-walkthrough
 description: >-
-  Turn findings, a change set, a proposal or a session outcome into a
-  narrated, diagram-driven walkthrough whose spoken audio, slides, captions
-  and scrubber all follow one pre-planned timeline, with narration
-  synthesized by a local text-to-speech model. USE FOR: narrate this
-  visually, walk me through it with audio, synchronized narration and
-  slides, voice-over deck, briefing I can listen to, present changes out
-  loud, explain a session with diagrams and speech, local TTS presentation.
-  DO NOT USE FOR: authoring a Marp/PDF proposal deck (use visual-proposal),
-  explaining a git diff as slides (use change-learn), owning browser or
-  Playwright verification standards (use playwright-report-retrieval),
-  performing the code review itself (use code-review or branch-diff), or
-  producing a video file for external publishing.
+  Turn findings, a change set, a pull request review, a proposal or a session
+  outcome into a narrated, diagram-driven walkthrough whose spoken audio,
+  slides, captions and scrubber all follow one pre-planned timeline, with
+  narration synthesized by a local text-to-speech model. USE FOR: narrate this
+  visually, walk me through it with audio, synchronized narration and slides,
+  voice-over deck, briefing I can listen to, narrated PR review, walk me
+  through this pull request, present changes out loud, explain a session with
+  diagrams and speech, local TTS presentation. DO NOT USE FOR: authoring a
+  Marp/PDF proposal deck (use visual-proposal), explaining a git diff as static
+  slides only (use change-learn), owning browser or Playwright verification
+  standards (use playwright-report-retrieval), or producing a video file for
+  external publishing.
 ---
 
 # Narrated walkthrough
@@ -212,6 +212,15 @@ a server contract breach instead of adding a platform-specific probe.
 | Diagram renders blank | mermaid `htmlLabels` in an SVG-as-image path | render inline in the DOM, or set `htmlLabels: false` when rasterising |
 | Long narration sounds rushed | a single clip carrying three ideas | split into scenes; one claim per clip |
 | Voice changes between scenes | unknown voice name (e.g. `"default"`) or unanchored zero-shot synthesis | pick a trained named voice (e.g. `US_James`) and set `tts.anchor_scene` (or `tts.ref_audio`/`ref_text`) plus `temperature: 0.0`, then rebuild with `--force` |
+
+## PR review walkthroughs
+
+To deliver a pull request review using this exact timeline, voice-anchoring, and
+verdict-disposition process (composing `change-learn`/`branch-diff`, real code
+review, `playwright-report-retrieval`, and `e2e-artifacts`), follow
+[`references/pr-review-walkthrough.md`](references/pr-review-walkthrough.md).
+The walkthrough reviews and recommends; it never approves or merges without the
+human's verdict.
 
 ## Guardrails
 

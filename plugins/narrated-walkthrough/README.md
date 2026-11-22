@@ -27,6 +27,7 @@ slide, and in the chat reply that delivers it.
 | Builder | `skills/narrated-walkthrough/scripts/build_narration.py` | Synthesizes missing clips, measures them, derives offsets, renders a single-file deck, serves it |
 | Authoring method | `skills/narrated-walkthrough/references/authoring-method.md` | Scene budgeting, narration for the ear, diagram contracts, disposition honesty |
 | Rendering + timing | `skills/narrated-walkthrough/references/rendering.md` | Why the clock is derived, seeking, captions, the ask panel, browser verification |
+| PR review walkthrough | `skills/narrated-walkthrough/references/pr-review-walkthrough.md` | Composing `change-learn`, code review, `playwright-report-retrieval`, `e2e-artifacts`, and PR verdict disposition |
 | Case study | `skills/narrated-walkthrough/references/case-study.md` | The session that produced it, the four defects found, the measurements it narrated |
 | Golden example | `skills/narrated-walkthrough/examples/golden/` | Three scenes, runnable end to end |
 | Schema | `skills/narrated-walkthrough/schemas/narrated-timeline.v1.json` | Executable plan contract, closed at every level |
