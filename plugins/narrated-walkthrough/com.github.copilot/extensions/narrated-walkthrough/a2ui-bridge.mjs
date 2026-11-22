@@ -8,12 +8,19 @@
 //   4. Structured session.send({ prompt, displayPrompt, mode }) when an AI turn
 //      is required — waking the yielded Copilot agent deterministically.
 
+import { execFile } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { DETERMINISTIC_COMPUTE_ACTIONS, executeDeterministicAction } from "./deterministic-actions.mjs";
 import { collectLiveTelemetry } from "./live-telemetry.mjs";
+
+const execFileAsync = promisify(execFile);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PLAYER_TEMPLATE_PATH = path.resolve(__dirname, "..", "..", "..", "skills", "narrated-walkthrough", "player", "player.html");
 
 export const MAX_BODY_BYTES = 16 * 1024;
 export const DETERMINISTIC_ONLY_ACTIONS = new Set([
@@ -515,6 +522,77 @@ async function inspectPackDir(dir, meta = {}) {
 }
 
 /**
+ * Infer a repository's sibling `<repo>-artifacts` root from any path inside the repo or worktree.
+ */
+export async function inferArtifactRootFromRepo(repoPath) {
+    if (!repoPath) return null;
+    const absRepo = path.resolve(repoPath);
+    let canonicalRepo = absRepo;
+    try {
+        const { stdout } = await execFileAsync("git", ["-C", absRepo, "rev-parse", "--git-common-dir"], { timeout: 5000 });
+        const commonDir = path.resolve(absRepo, stdout.trim());
+        if (path.basename(commonDir) === ".git") {
+            canonicalRepo = path.dirname(commonDir);
+        }
+    } catch {
+        // Not a git repo — fall back to absRepo basename
+    }
+    const candidate = `${canonicalRepo}-artifacts`;
+    const st = await stat(candidate).catch(() => null);
+    return st && st.isDirectory() ? candidate : null;
+}
+
+/**
+ * Render a live A-HUD landing view when a repo has no built walkthrough packs yet.
+ */
+export async function renderEmptyLandingHtml({ title, repoPath }) {
+    const tpl = await readFile(PLAYER_TEMPLATE_PATH, "utf8");
+    const repoName = repoPath ? path.basename(path.resolve(repoPath)) : "this repository";
+    const starterData = {
+        title: title || `A-HUD — ${repoName}`,
+        scenes: [],
+        cues: [],
+        total: 0,
+        hud: {
+            summary: `Live deterministic Architect HUD for ${repoName}. No narrated walkthrough artifact packs have been dropped yet — live repo, queue, PR, and artifact telemetry are active below, or trigger a pack build with one click.`,
+            oversight_default: "lead",
+        },
+        a2ui: [
+            {
+                version: "v1.0",
+                createSurface: {
+                    surfaceId: "ahud-starter-actions",
+                    catalogId: "https://a2ui.org/specification/v1_0/basic_catalog.json",
+                },
+            },
+            {
+                version: "v1.0",
+                updateComponents: {
+                    surfaceId: "ahud-starter-actions",
+                    components: [
+                        { id: "root", component: "Column", children: ["prompt", "note", "actions"] },
+                        { id: "prompt", component: "Text", variant: "h3", text: `No walkthrough packs dropped yet in ${repoName} — build one now?` },
+                        { id: "note", component: "Text", variant: "body", text: "Live deterministic telemetry above is already active. Pick a starter pack below to wake the agent and drop a narrated pack into your artifact root." },
+                        { id: "actions", component: "Row", children: ["act-standup", "act-pr-review"] },
+                        { id: "lbl-standup", component: "Text", text: "Generate Daily Standup Walkthrough Pack" },
+                        { id: "act-standup", component: "Button", variant: "primary", child: "lbl-standup", action: { name: "generate_pack", context: { kind: "standup", repoPath: repoPath || "" } } },
+                        { id: "lbl-pr", component: "Text", text: "Generate PR Review Walkthrough Pack" },
+                        { id: "act-pr-review", component: "Button", variant: "secondary", child: "lbl-pr", action: { name: "generate_pack", context: { kind: "pr_review", repoPath: repoPath || "" } } },
+                    ],
+                },
+            },
+        ],
+    };
+    const safeData = JSON.stringify(starterData).replace(/<\//g, "<\\/");
+    return tpl
+        .replace("__DATA__", safeData)
+        .replace("__TITLE__", starterData.title)
+        .replace("__VOICE__", "live telemetry")
+        .replace("__MODEL__", "A-HUD")
+        .replace("__MERMAID__", "<script>window.mermaid = { initialize() {}, async render() { return { svg: '' }; } };</script>");
+}
+
+/**
  * Find the nearest runs.jsonl artifacts root by walking up from deckDir (max 5 levels).
  */
 export async function inferPacksRoot(deckDir) {
@@ -645,13 +723,16 @@ export async function startWalkthroughServer({
 }) {
     const token = randomBytes(24).toString("hex");
     const clients = new Set();
-    const resolvedDeck = path.resolve(deckDir);
-    const resolvedPacksRoot = packsRoot ? path.resolve(packsRoot) : await inferPacksRoot(resolvedDeck);
+    const resolvedDeck = deckDir ? path.resolve(deckDir) : null;
+    const resolvedRepo = repoPath ? path.resolve(repoPath) : null;
+    const resolvedPacksRoot = packsRoot
+        ? path.resolve(packsRoot)
+        : (resolvedDeck ? await inferPacksRoot(resolvedDeck) : await inferArtifactRootFromRepo(resolvedRepo));
     const state = {
         title,
         deckDir: resolvedDeck,
         packsRoot: resolvedPacksRoot,
-        repoPath: repoPath ? path.resolve(repoPath) : null,
+        repoPath: resolvedRepo,
         oversight: "lead",
         lastSceneId: null,
         lastTimestampSec: 0,
@@ -854,8 +935,9 @@ export async function startWalkthroughServer({
             }
 
             if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/slides.html")) {
-                const slidesFile = path.join(state.deckDir, "slides.html");
-                const html = await readFile(slidesFile, "utf8");
+                const html = state.deckDir
+                    ? await readFile(path.join(state.deckDir, "slides.html"), "utf8")
+                    : await renderEmptyLandingHtml({ title: state.title, repoPath: state.repoPath });
                 const injected = injectBridgeBootstrap(html, {
                     version: "v1.0",
                     instanceId,
@@ -877,6 +959,10 @@ export async function startWalkthroughServer({
             }
 
             if (req.method === "GET" || req.method === "HEAD") {
+                if (!state.deckDir) {
+                    sendJson(res, 404, { ok: false, error: "No active deck loaded." });
+                    return;
+                }
                 const assetPath = resolveSafeAsset(state.deckDir, url.pathname);
                 if (!assetPath) {
                     sendJson(res, 403, { ok: false, error: "Forbidden path." });

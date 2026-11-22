@@ -513,6 +513,7 @@ class PackageTests(unittest.TestCase):
         self.assertIn("createCanvas", ext_src)
         self.assertIn("push_a2ui", ext_src)
         self.assertIn("get_telemetry", ext_src)
+        self.assertNotIn('required: ["deckDir"],\n                additionalProperties: false,\n            },\n            actions:', ext_src)
         self.assertIn("session.send", bridge_src)
         self.assertIn("x-canvas-token", bridge_src)
 

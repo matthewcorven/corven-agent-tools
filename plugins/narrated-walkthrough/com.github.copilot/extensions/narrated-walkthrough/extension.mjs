@@ -8,7 +8,12 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { CanvasError, createCanvas, joinSession } from "@github/copilot-sdk/extension";
-import { discoverArtifactPacks, inferPacksRoot, startWalkthroughServer } from "./a2ui-bridge.mjs";
+import {
+    discoverArtifactPacks,
+    inferArtifactRootFromRepo,
+    inferPacksRoot,
+    startWalkthroughServer,
+} from "./a2ui-bridge.mjs";
 
 const instances = new Map(); // instanceId -> server entry
 let session;
@@ -58,7 +63,7 @@ session = await joinSession({
                 properties: {
                     deckDir: {
                         type: "string",
-                        description: "Absolute path to a built walkthrough directory containing slides.html and audio/.",
+                        description: "Optional absolute path to a built walkthrough directory containing slides.html and audio/. When omitted (e.g. opened from the Copilot App canvas picker), auto-discovers the newest dropped artifact pack for the current repository or opens the live A-HUD landing view.",
                     },
                     packsRoot: {
                         type: "string",
@@ -69,7 +74,6 @@ session = await joinSession({
                         description: "Optional display title override shown in host chrome.",
                     },
                 },
-                required: ["deckDir"],
                 additionalProperties: false,
             },
             actions: [
@@ -209,12 +213,33 @@ session = await joinSession({
                 },
             ],
             open: async (ctx) => {
-                const { resolved, title } = await validateDeckDir(ctx.input?.deckDir);
-                const displayTitle = ctx.input?.title?.trim() || title;
-                const packsRoot = typeof ctx.input?.packsRoot === "string" && path.isAbsolute(ctx.input.packsRoot)
-                    ? path.resolve(ctx.input.packsRoot)
-                    : await inferPacksRoot(resolved);
                 const repoPath = ctx.session?.workingDirectory || process.cwd();
+                const explicitPacksRoot = typeof ctx.input?.packsRoot === "string" && path.isAbsolute(ctx.input.packsRoot)
+                    ? path.resolve(ctx.input.packsRoot)
+                    : null;
+
+                let resolved = null;
+                let autoTitle = `A-HUD — ${path.basename(path.resolve(repoPath))}`;
+                let packsRoot = explicitPacksRoot;
+
+                if (typeof ctx.input?.deckDir === "string" && ctx.input.deckDir.trim()) {
+                    const validated = await validateDeckDir(ctx.input.deckDir);
+                    resolved = validated.resolved;
+                    autoTitle = validated.title;
+                    if (!packsRoot) packsRoot = await inferPacksRoot(resolved);
+                } else {
+                    // Bare UI open (no deckDir passed): auto-discover the sibling artifacts root
+                    // and select the newest dropped artifact pack if one exists; otherwise open
+                    // cleanly into the live deterministic A-HUD landing view.
+                    if (!packsRoot) packsRoot = await inferArtifactRootFromRepo(repoPath);
+                    const packs = packsRoot ? await discoverArtifactPacks({ packsRoot }) : [];
+                    if (packs.length > 0) {
+                        resolved = packs[0].deckDir;
+                        autoTitle = packs[0].title || autoTitle;
+                    }
+                }
+
+                const displayTitle = ctx.input?.title?.trim() || autoTitle;
                 let entry = instances.get(ctx.instanceId);
                 if (!entry) {
                     entry = await startWalkthroughServer({
@@ -244,7 +269,7 @@ session = await joinSession({
                 return {
                     url: entry.url,
                     title: displayTitle,
-                    status: "A-HUD live · deterministic telemetry ready",
+                    status: resolved ? "A-HUD live · deterministic telemetry ready" : "A-HUD live · awaiting first pack",
                 };
             },
             onClose: async (ctx) => {

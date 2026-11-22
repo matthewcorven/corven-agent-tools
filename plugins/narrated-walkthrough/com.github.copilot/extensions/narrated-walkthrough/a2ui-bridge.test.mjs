@@ -242,3 +242,33 @@ test("A-HUD landscape discovers runs.jsonl artifact packs and switches packs det
         await rm(rootDir, { recursive: true, force: true });
     }
 });
+
+test("startWalkthroughServer supports bare UI opens with deckDir=null (zero packs yet)", async () => {
+    const tmpRepo = await mkdtemp(path.join(os.tmpdir(), "nw-empty-repo-"));
+    try {
+        const srv = await startWalkthroughServer({
+            instanceId: "ui-bare-open",
+            deckDir: null,
+            packsRoot: null,
+            repoPath: tmpRepo,
+            title: "A-HUD Empty",
+            session: { async send() { return "m1"; } },
+            telemetryPollMs: 0,
+        });
+        try {
+            const res = await fetch(srv.url);
+            assert.equal(res.status, 200);
+            const html = await res.text();
+            assert.ok(html.includes("__WALKTHROUGH_BRIDGE__"));
+            assert.ok(html.includes("ahud-starter-actions"));
+            const stateRes = await fetch(`${srv.url}state`);
+            assert.equal(stateRes.status, 200);
+            const st = await stateRes.json();
+            assert.equal(st.deckDir, null);
+        } finally {
+            await srv.close();
+        }
+    } finally {
+        await rm(tmpRepo, { recursive: true, force: true });
+    }
+});
