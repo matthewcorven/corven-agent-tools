@@ -489,6 +489,9 @@ class PackageTests(unittest.TestCase):
             'connectBridgeEvents',
             'data-color-mode="dark"',
             'detectDarkMode',
+            'id="packs-bar"',
+            'pauseForLiveChat',
+            'briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat',
         ):
             self.assertIn(token, html, f"player.html missing expected UI hook: {token}")
 
@@ -518,10 +521,16 @@ class PackageTests(unittest.TestCase):
                 }
             ],
             "hud": {
+                "pack_kind": "pr_review",
+                "producer": "PR Review Agent",
                 "summary": "Ahead on rollout.",
                 "oversight_default": "lead",
                 "stats": [{"label": "CI", "value": "9/9", "trend": "green", "tone": "ok"}],
-                "nodes": [{"id": "lead", "name": "Eric", "role": "Lead", "level": "lead", "summary": "Review owner"}],
+                "nodes": [{
+                    "id": "lead", "name": "Eric", "role": "Lead", "level": "lead", "summary": "Review owner",
+                    "state": "waiting_merge", "state_label": "Waiting on PR merge · free for next item", "queue_depth": 0,
+                    "quick_actions": [{"label": "Assign next item", "action": "assign_next_item", "context": {"nodeId": "lead"}}],
+                }],
                 "artifacts": [{"label": "PR #353", "url": "https://github.com/matthewcorven/venom-dog-sports/pull/353"}],
             },
             "a2ui": [

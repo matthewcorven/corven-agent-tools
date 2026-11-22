@@ -9,7 +9,7 @@
 //      is required — waking the yielded Copilot agent deterministically.
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { appendFile, readFile, stat } from "node:fs/promises";
+import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 
@@ -406,6 +406,137 @@ export function resolveSafeAsset(deckDir, urlPath) {
     return resolved;
 }
 
+function classifyPackKind(spec, title, hudPackKind) {
+    if (typeof hudPackKind === "string" && hudPackKind.trim()) return hudPackKind.trim();
+    const hay = `${spec || ""} ${title || ""}`.toLowerCase();
+    if (/\bpr[\s#-]*\d+|\bpull[\s-]?request|\breview\b/.test(hay)) return "pr_review";
+    if (/\bstandup\b|\bmorning[\s-]?brief\b|\bdaily\b/.test(hay)) return "standup";
+    return "walkthrough";
+}
+
+async function inspectPackDir(dir, meta = {}) {
+    const resolved = path.resolve(dir);
+    const slidesSt = await stat(path.join(resolved, "slides.html")).catch(() => null);
+    if (!slidesSt || !slidesSt.isFile()) return null;
+
+    let tl = null;
+    let deck = null;
+    try { tl = JSON.parse(await readFile(path.join(resolved, "timeline.json"), "utf8")); } catch {}
+    try { deck = JSON.parse(await readFile(path.join(resolved, "deck.json"), "utf8")); } catch {}
+
+    const title = (typeof tl?.title === "string" && tl.title.trim())
+        || meta.spec
+        || path.basename(resolved);
+    const kind = classifyPackKind(meta.spec, title, tl?.hud?.pack_kind);
+    const producer = (typeof tl?.hud?.producer === "string" && tl.hud.producer.trim())
+        || (kind === "pr_review" ? "PR Review Agent" : kind === "standup" ? "Morning Standup Briefer" : "Walkthrough Agent");
+    const totalDuration = typeof tl?.total_duration === "number"
+        ? tl.total_duration
+        : (typeof deck?.total_duration === "number" ? deck.total_duration : null);
+    const sceneCount = Array.isArray(tl?.scenes)
+        ? tl.scenes.length
+        : (typeof deck?.scenes === "number" ? deck.scenes : 0);
+
+    let hasVideo = false;
+    try {
+        const files = await readdir(resolved);
+        hasVideo = files.some((f) => f.endsWith(".mp4") || f.endsWith(".webm"));
+    } catch {}
+
+    return {
+        id: meta.run || path.basename(path.dirname(resolved)) || path.basename(resolved),
+        kind,
+        title,
+        producer,
+        spec: meta.spec || "",
+        issue: meta.issue ? String(meta.issue) : null,
+        branch: meta.branch || null,
+        commit: meta.commit || null,
+        updatedAt: meta.updatedUtc || meta.utc || slidesSt.mtime.toISOString(),
+        totalDuration,
+        sceneCount,
+        hasVideo,
+        deckDir: resolved,
+    };
+}
+
+/**
+ * Find the nearest runs.jsonl artifacts root by walking up from deckDir (max 5 levels).
+ */
+export async function inferPacksRoot(deckDir) {
+    let cur = path.resolve(deckDir);
+    for (let depth = 0; depth < 5; depth++) {
+        const idx = path.join(cur, "runs.jsonl");
+        const st = await stat(idx).catch(() => null);
+        if (st && st.isFile()) return cur;
+        const parent = path.dirname(cur);
+        if (parent === cur) break;
+        cur = parent;
+    }
+    return path.dirname(path.resolve(deckDir));
+}
+
+/**
+ * Discover all agent-dropped narrated walkthrough artifact packs under packsRoot.
+ * Supports e2e-artifacts `runs.jsonl` indices as well as flat directories of packs.
+ */
+export async function discoverArtifactPacks({ packsRoot, activeDeckDir }) {
+    const foundByDir = new Map();
+    const activeResolved = activeDeckDir ? path.resolve(activeDeckDir) : null;
+
+    if (packsRoot) {
+        const root = path.resolve(packsRoot);
+        const runsJsonl = path.join(root, "runs.jsonl");
+        const idxSt = await stat(runsJsonl).catch(() => null);
+
+        if (idxSt && idxSt.isFile()) {
+            const text = await readFile(runsJsonl, "utf8").catch(() => "");
+            const latestByRun = new Map();
+            for (const line of text.split(/\r?\n/)) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                try {
+                    const row = JSON.parse(trimmed);
+                    if (row && row.run) {
+                        const prev = latestByRun.get(row.run) || {};
+                        latestByRun.set(row.run, { ...prev, ...row });
+                    }
+                } catch {}
+            }
+            for (const row of latestByRun.values()) {
+                const candidateDir = row.phasePath || (row.path ? path.join(row.path, "planning") : null);
+                if (!candidateDir) continue;
+                const pack = await inspectPackDir(candidateDir, row);
+                if (pack) foundByDir.set(pack.deckDir, pack);
+            }
+        }
+
+        // Also scan immediate child directories (and <child>/planning) for flat pack folders
+        try {
+            const entries = await readdir(root, { withFileTypes: true });
+            for (const ent of entries) {
+                if (!ent.isDirectory() || ent.name.startsWith(".")) continue;
+                for (const candidate of [path.join(root, ent.name), path.join(root, ent.name, "planning")]) {
+                    const abs = path.resolve(candidate);
+                    if (foundByDir.has(abs)) continue;
+                    const pack = await inspectPackDir(abs, { run: ent.name });
+                    if (pack) foundByDir.set(pack.deckDir, pack);
+                }
+            }
+        } catch {}
+    }
+
+    // Ensure the currently loaded deckDir always appears in the landscape feed
+    if (activeResolved && !foundByDir.has(activeResolved)) {
+        const activePack = await inspectPackDir(activeResolved, {});
+        if (activePack) foundByDir.set(activePack.deckDir, activePack);
+    }
+
+    return [...foundByDir.values()]
+        .map((p) => ({ ...p, active: activeResolved === p.deckDir }))
+        .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+}
+
 function sendJson(res, status, value) {
     res.writeHead(status, {
         "content-type": "application/json; charset=utf-8",
@@ -450,14 +581,18 @@ export async function startWalkthroughServer({
     instanceId,
     canvasId = "narrated-walkthrough",
     deckDir,
+    packsRoot,
     title = "Narrated Walkthrough",
     session,
 }) {
     const token = randomBytes(24).toString("hex");
     const clients = new Set();
+    const resolvedDeck = path.resolve(deckDir);
+    const resolvedPacksRoot = packsRoot ? path.resolve(packsRoot) : await inferPacksRoot(resolvedDeck);
     const state = {
         title,
-        deckDir: path.resolve(deckDir),
+        deckDir: resolvedDeck,
+        packsRoot: resolvedPacksRoot,
         oversight: "lead",
         lastSceneId: null,
         lastTimestampSec: 0,
@@ -528,12 +663,61 @@ export async function startWalkthroughServer({
                     instanceId,
                     canvasId,
                     deckDir: state.deckDir,
+                    packsRoot: state.packsRoot,
                     title: state.title,
                     oversight: state.oversight,
                     agentStatus: state.agentStatus,
                     lastSceneId: state.lastSceneId,
                     lastTimestampSec: state.lastTimestampSec,
                     recentCallbacks: state.recentCallbacks.slice(-10),
+                });
+                return;
+            }
+
+            if (req.method === "GET" && url.pathname === "/packs") {
+                const packs = await discoverArtifactPacks({
+                    packsRoot: state.packsRoot,
+                    activeDeckDir: state.deckDir,
+                });
+                sendJson(res, 200, {
+                    ok: true,
+                    packsRoot: state.packsRoot,
+                    activeDeckDir: state.deckDir,
+                    packs,
+                });
+                return;
+            }
+
+            if (req.method === "POST" && url.pathname === "/packs/select") {
+                const provided = req.headers["x-canvas-token"];
+                if (!tokensMatch(token, typeof provided === "string" ? provided : "")) {
+                    sendJson(res, 403, { ok: false, error: "Invalid or missing x-canvas-token." });
+                    return;
+                }
+                const payload = await readJsonBody(req);
+                const wantDir = typeof payload?.deckDir === "string" ? path.resolve(payload.deckDir) : "";
+                const packs = await discoverArtifactPacks({
+                    packsRoot: state.packsRoot,
+                    activeDeckDir: state.deckDir,
+                });
+                const matched = packs.find((p) => p.deckDir === wantDir || (payload?.id && p.id === payload.id));
+                if (!matched) {
+                    sendJson(res, 403, { ok: false, error: "Requested artifact pack is not in the discovered landscape." });
+                    return;
+                }
+                state.deckDir = matched.deckDir;
+                state.title = matched.title;
+                state.liveA2ui = null;
+                runtime.broadcast("deck_reloaded", {
+                    deckDir: matched.deckDir,
+                    packId: matched.id,
+                    title: matched.title,
+                    timestamp: new Date().toISOString(),
+                });
+                sendJson(res, 200, {
+                    ok: true,
+                    dispatchedToAgent: false,
+                    pack: { ...matched, active: true },
                 });
                 return;
             }
@@ -561,6 +745,8 @@ export async function startWalkthroughServer({
                     actionUrl: "/a2ui/action",
                     eventsUrl: "/events",
                     stateUrl: "/state",
+                    packsUrl: "/packs",
+                    selectPackUrl: "/packs/select",
                 });
                 res.writeHead(200, {
                     "content-type": "text/html; charset=utf-8",

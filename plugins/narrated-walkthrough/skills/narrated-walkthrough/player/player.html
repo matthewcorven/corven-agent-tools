@@ -229,13 +229,41 @@ __MERMAID__
                display:flex; flex-direction:column; gap:6px; }
   .node-card.lead { border-color:var(--lead-border); background:var(--lead-bg); }
   .node-card.video { border-color:var(--video-border); background:var(--video-bg); }
-  .node-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .node-card.state-bottleneck { border-color:var(--err-border); }
+  .node-card.state-waiting_merge { border-color:var(--warn-border); }
+  .node-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
   .node-name { font-weight:650; font-size:14px; color:var(--ink); }
   .node-role { font-size:11px; padding:2px 7px; border-radius:999px; background:var(--pill-bg); color:var(--dim);
                font-weight:600; }
+  .node-state { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:650;
+                padding:2px 8px; border-radius:999px; align-self:flex-start;
+                background:var(--pill-bg); color:var(--dim); border:1px solid var(--line); }
+  .node-state.active, .node-state.ready { background:var(--ok-bg); color:var(--ok-ink); border-color:var(--ok-border); }
+  .node-state.waiting_merge, .node-state.idle { background:var(--warn-bg); color:var(--warn-ink); border-color:var(--warn-border); }
+  .node-state.bottleneck { background:var(--err-bg); color:var(--err-ink); border-color:var(--err-border); }
   .node-desc { font-size:13px; color:var(--dim); margin:0; }
-  .node-btn { align-self:flex-start; font-size:12px; padding:5px 10px; border-radius:7px; }
+  .node-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:auto; padding-top:2px; }
+  .node-btn { font-size:12px; padding:5px 10px; border-radius:7px; }
   .node-btn.copied { border-color:var(--ok-border); color:var(--ok-ink); background:var(--ok-bg); }
+  .packs-bar { background:var(--surface); border:1px solid var(--line); border-radius:14px;
+               padding:14px 18px; margin-bottom:16px; }
+  .packs-bar[hidden] { display:none; }
+  .packs-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
+                margin-bottom:10px; }
+  .packs-title { font-size:12px; text-transform:uppercase; letter-spacing:.09em; color:var(--dim);
+                 font-weight:700; }
+  .packs-refresh { font-size:11px; padding:4px 9px; border-radius:7px; }
+  .packs-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:8px; }
+  .pack-card { text-align:left; border:1px solid var(--line); border-radius:10px; padding:10px 12px;
+               background:var(--surface-sub); display:flex; flex-direction:column; gap:4px; }
+  .pack-card.active { border-color:var(--accent); background:var(--accent-soft-bg); }
+  .pack-top { display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:11px; }
+  .pack-kind { font-weight:700; text-transform:uppercase; letter-spacing:.05em; padding:2px 6px;
+               border-radius:999px; background:var(--pill-bg); color:var(--dim); }
+  .pack-card.active .pack-kind { background:var(--accent); color:var(--accent-ink); }
+  .pack-name { font-size:13px; font-weight:650; color:var(--ink); line-height:1.3; }
+  .pack-meta { font-size:11px; color:var(--dim); }
+  .hint.is-live-chat { color:var(--accent-soft-ink); font-weight:600; }
   .hud-artifacts { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; padding-top:10px;
                    border-top:1px solid var(--line); }
   .hud-link { font-size:12px; padding:4px 9px; border-radius:999px; border:1px solid var(--line);
@@ -329,6 +357,7 @@ __MERMAID__
     <div class="track" id="full-track"><i id="fill"></i></div>
     <div class="clock" id="clock">0:00 / 0:00</div>
   </div>
+  <section class="packs-bar" id="packs-bar" aria-label="Agent artifact packs landscape" hidden></section>
   <section class="hud" id="hud" aria-label="Architect oversight HUD" hidden></section>
   <div id="slides"></div>
   <section class="ask" id="ask" aria-label="A2UI action surface" hidden></section>
@@ -336,7 +365,7 @@ __MERMAID__
 
 <footer>
   <div class="cap"><span id="cap"></span></div>
-  <div class="hint">Space = play/pause &middot; &#8592;/&#8594; = previous/next scene &middot; audio is pre-generated, so playback is exact</div>
+  <div class="hint" id="footer-hint">Space = play/pause &middot; &#8592;/&#8594; = previous/next scene &middot; briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat</div>
 </footer>
 
 <script>
@@ -426,8 +455,95 @@ let lastA2uiAction = null;
 let liveA2uiOverride = null;
 let bridgeAgentStatus = 'standalone';
 let bridgeSource = null;
+let discoveredPacks = [];
+let liveChatTarget = null;
+const DEFAULT_FOOTER_HINT = 'Space = play/pause · ←/→ = previous/next scene · briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat';
 const BRIDGE = (typeof window.__WALKTHROUGH_BRIDGE__ === 'object' && window.__WALKTHROUGH_BRIDGE__) ? window.__WALKTHROUGH_BRIDGE__ : null;
 const recordedMetaHtml = $('voice-meta').innerHTML;
+
+function setFooterLiveChat(targetLabel) {
+  liveChatTarget = targetLabel || null;
+  const el = $('footer-hint');
+  if (!el) return;
+  if (liveChatTarget) {
+    el.classList.add('is-live-chat');
+    el.textContent = 'Live chat active (' + liveChatTarget + ') · briefing paused at ' + fmt(now()) + ' — press Space to resume pre-generated playback';
+  } else {
+    el.classList.remove('is-live-chat');
+    el.textContent = DEFAULT_FOOTER_HINT;
+  }
+}
+
+function pauseForLiveChat(targetLabel) {
+  if (playing) pause();
+  setFooterLiveChat(targetLabel);
+}
+
+function formatPackKind(kind) {
+  if (kind === 'pr_review') return 'PR Review';
+  if (kind === 'standup') return 'Daily Standup';
+  return 'Walkthrough';
+}
+
+function renderPacksBar() {
+  const host = $('packs-bar');
+  if (!host || !BRIDGE || !discoveredPacks.length) {
+    if (host) host.hidden = true;
+    return;
+  }
+  host.innerHTML =
+    '<div class="packs-head">' +
+      '<span class="packs-title">A-HUD Landscape &middot; Agent Artifact Packs (' + discoveredPacks.length + ')</span>' +
+      '<button type="button" class="packs-refresh" id="packs-refresh-btn">Refresh packs</button>' +
+    '</div>' +
+    '<div class="packs-grid">' +
+      discoveredPacks.map((p) => {
+        const dur = typeof p.totalDuration === 'number' ? fmt(p.totalDuration) : '';
+        const metaParts = [p.producer, p.sceneCount ? p.sceneCount + ' scenes' : '', dur, p.issue ? '#' + p.issue : ''].filter(Boolean);
+        return '<button type="button" class="pack-card' + (p.active ? ' active' : '') + '" data-pack-dir="' + esc(p.deckDir) + '" data-pack-id="' + esc(p.id) + '">' +
+          '<div class="pack-top"><span class="pack-kind">' + esc(formatPackKind(p.kind)) + '</span>' +
+          '<span>' + (p.active ? 'Viewing' : (p.hasVideo ? 'Video + Deck' : 'Open pack')) + '</span></div>' +
+          '<div class="pack-name">' + esc(p.title) + '</div>' +
+          '<div class="pack-meta">' + esc(metaParts.join(' · ')) + '</div>' +
+        '</button>';
+      }).join('') +
+    '</div>';
+  host.hidden = false;
+
+  const refBtn = $('packs-refresh-btn');
+  if (refBtn) refBtn.onclick = () => loadPacks();
+  host.querySelectorAll('button[data-pack-dir]').forEach((b) => {
+    b.onclick = async () => {
+      if (b.classList.contains('active') || !BRIDGE.selectPackUrl) return;
+      b.disabled = true;
+      try {
+        const resp = await fetch(BRIDGE.selectPackUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-canvas-token': BRIDGE.token },
+          body: JSON.stringify({ deckDir: b.dataset.packDir, id: b.dataset.packId }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        window.location.reload();
+      } catch (e) {
+        b.disabled = false;
+      }
+    };
+  });
+}
+
+async function loadPacks() {
+  if (!BRIDGE || !BRIDGE.packsUrl) return;
+  try {
+    const resp = await fetch(BRIDGE.packsUrl, { cache: 'no-store' });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (Array.isArray(data.packs)) {
+      discoveredPacks = data.packs;
+      renderPacksBar();
+      syncStickyMedia();
+    }
+  } catch (e) {}
+}
 
 function activeSceneId() {
   return (document.querySelector('.slide.active') || {}).id || (DATA.scenes[0] ? 's-' + DATA.scenes[0].id : '');
@@ -665,14 +781,28 @@ function renderHud() {
       (st.trend ? '<span class="stat-trend ' + esc(st.tone || '') + '">' + esc(st.trend) + '</span>' : '') +
       '</div>'
     ).join('') + '</div>' : '') +
-    (visibleNodes.length ? '<div class="hud-nodes">' + visibleNodes.map((n) =>
-      '<div class="node-card ' + esc(n.level || '') + '" data-node-id="' + esc(n.id) + '">' +
+    (visibleNodes.length ? '<div class="hud-nodes">' + visibleNodes.map((n) => {
+      const stCls = n.state ? ('state-' + esc(n.state)) : '';
+      const qBadge = typeof n.queue_depth === 'number' ? (' · queue ' + n.queue_depth) : '';
+      const statePill = (n.state || n.state_label)
+        ? '<span class="node-state ' + esc(n.state || '') + '">' + esc((n.state_label || n.state) + qBadge) + '</span>'
+        : '';
+      const quickBtns = Array.isArray(n.quick_actions)
+        ? n.quick_actions.map((qa, qi) =>
+            '<button type="button" class="node-btn" data-node-quick="' + esc(n.id) + '" data-quick-idx="' + qi + '">' + esc(qa.label) + '</button>'
+          ).join('')
+        : '';
+      return '<div class="node-card ' + esc(n.level || '') + ' ' + stCls + '" data-node-id="' + esc(n.id) + '">' +
         '<div class="node-head"><span class="node-name">' + esc(n.name) + '</span>' +
         '<span class="node-role">' + esc(n.role) + '</span></div>' +
+        statePill +
         '<p class="node-desc">' + esc(n.summary) + '</p>' +
-        '<button type="button" class="node-btn" data-chat-node="' + esc(n.id) + '">Chat with ' + esc(n.name) + '</button>' +
-      '</div>'
-    ).join('') + '</div>' : '') +
+        '<div class="node-actions">' +
+          '<button type="button" class="node-btn" data-chat-node="' + esc(n.id) + '">Chat with ' + esc(n.name) + '</button>' +
+          quickBtns +
+        '</div>' +
+      '</div>';
+    }).join('') + '</div>' : '') +
     (hudOversight === 'full' && artifacts.length ? '<div class="hud-artifacts">' + artifacts.map((a) => {
       const href = safeUrl(a.url);
       return href
@@ -700,6 +830,7 @@ function renderHud() {
     b.onclick = async () => {
       const node = allNodes.find((n) => n.id === b.dataset.chatNode);
       if (!node) return;
+      pauseForLiveChat(node.name);
       const prompt = node.chat_prompt || ('Speak with ' + node.name + ' (' + node.role + ') regarding ' + DATA.title);
       window.dispatchEvent(new CustomEvent('narrated-walkthrough:chat-agent', { detail: { node, prompt } }));
       if (BRIDGE) {
@@ -712,12 +843,12 @@ function renderHud() {
               name: 'chat_node',
               surfaceId: 'architect-hud',
               sourceComponentId: 'node-' + node.id,
-              context: { nodeId: node.id, role: node.role, level: node.level, prompt },
+              context: { nodeId: node.id, role: node.role, level: node.level, state: node.state, queueDepth: node.queue_depth, prompt },
             },
           });
           lastA2uiAction = { version: 'v1.0', action: { name: 'chat_node', surfaceId: 'architect-hud', context: { nodeId: node.id } }, callbackId: res.callbackId };
           b.classList.add('copied');
-          $('hud-status').textContent = 'Sent directly to Copilot agent (' + node.name + ') — turn active.';
+          $('hud-status').textContent = 'Sent directly to Copilot agent (' + node.name + ') — briefing paused for live chat.';
           setTimeout(() => b.classList.remove('copied'), 2200);
         } catch (err) {
           $('hud-status').textContent = 'Bridge callback failed: ' + err.message;
@@ -729,6 +860,44 @@ function renderHud() {
       try { await navigator.clipboard.writeText(prompt); } catch (e) {}
       b.classList.add('copied');
       $('hud-status').textContent = 'Pinned handoff to ' + node.name + ' (' + node.role + ') — ready to paste or continue in chat.';
+      setTimeout(() => b.classList.remove('copied'), 1800);
+    };
+  });
+  host.querySelectorAll('button[data-node-quick]').forEach((b) => {
+    b.onclick = async () => {
+      const node = allNodes.find((n) => n.id === b.dataset.nodeQuick);
+      const qa = node && Array.isArray(node.quick_actions) ? node.quick_actions[Number(b.dataset.quickIdx)] : null;
+      if (!node || !qa) return;
+      pauseForLiveChat(node.name + ' · ' + qa.label);
+      const payload = {
+        label: node.name + ': ' + qa.label,
+        node,
+        action: {
+          name: qa.action,
+          surfaceId: 'architect-hud',
+          sourceComponentId: 'node-' + node.id + '-qa-' + b.dataset.quickIdx,
+          context: { nodeId: node.id, nodeState: node.state, queueDepth: node.queue_depth, ...(qa.context || {}) },
+        },
+      };
+      lastA2uiAction = { version: 'v1.0', action: payload.action };
+      window.dispatchEvent(new CustomEvent('a2ui:action', { detail: lastA2uiAction }));
+      if (BRIDGE) {
+        b.disabled = true;
+        try {
+          await sendBridgeCallback(payload);
+          b.classList.add('copied');
+          $('hud-status').textContent = 'Sent "' + qa.label + '" for ' + node.name + ' to Copilot agent.';
+          setTimeout(() => b.classList.remove('copied'), 2200);
+        } catch (err) {
+          $('hud-status').textContent = 'Bridge callback failed: ' + err.message;
+        } finally {
+          b.disabled = false;
+        }
+        return;
+      }
+      try { await navigator.clipboard.writeText(payload.label); } catch (e) {}
+      b.classList.add('copied');
+      $('hud-status').textContent = 'Copied "' + payload.label + '" to clipboard.';
       setTimeout(() => b.classList.remove('copied'), 1800);
     };
   });
@@ -835,6 +1004,7 @@ function speakFrom(t) {
 
 function play() {
   if (playing) return;
+  setFooterLiveChat(null);
   playing = true;
   updatePlayButtons();
   wallStart = performance.now();
@@ -998,6 +1168,7 @@ function renderAsk() {
       window.dispatchEvent(new CustomEvent('a2ui:action', { detail: a2uiPayload }));
 
       if (BRIDGE) {
+        pauseForLiveChat(text);
         b.disabled = true;
         try {
           const res = await sendBridgeCallback(a2uiPayload);
@@ -1027,6 +1198,7 @@ function renderAsk() {
       const inp = $('steer-input');
       const noteText = (inp && inp.value || '').trim();
       if (!noteText) return;
+      pauseForLiveChat('Direct note');
       const btn = form.querySelector('button[type="submit"]');
       if (btn) btn.disabled = true;
       try {
@@ -1055,6 +1227,8 @@ window.state = () => ({
   miniMediaVisible: !$('mini-media').hidden,
   bridgeConnected: Boolean(BRIDGE),
   bridgeAgentStatus,
+  packCount: discoveredPacks.length,
+  liveChatTarget,
   lastA2uiAction,
 });
 
@@ -1062,6 +1236,7 @@ build();
 renderHud();
 renderAsk();
 connectBridgeEvents();
+loadPacks();
 updateVoiceMeta();
 updatePlayButtons();
 tick();

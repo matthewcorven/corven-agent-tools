@@ -8,7 +8,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { CanvasError, createCanvas, joinSession } from "@github/copilot-sdk/extension";
-import { startWalkthroughServer } from "./a2ui-bridge.mjs";
+import { discoverArtifactPacks, inferPacksRoot, startWalkthroughServer } from "./a2ui-bridge.mjs";
 
 const instances = new Map(); // instanceId -> server entry
 let session;
@@ -59,6 +59,10 @@ session = await joinSession({
                     deckDir: {
                         type: "string",
                         description: "Absolute path to a built walkthrough directory containing slides.html and audio/.",
+                    },
+                    packsRoot: {
+                        type: "string",
+                        description: "Optional artifacts root (containing runs.jsonl or pack folders) surfaced in the unified A-HUD pack switcher.",
                     },
                     title: {
                         type: "string",
@@ -147,15 +151,38 @@ session = await joinSession({
                     },
                 },
                 {
-                    name: "get_state",
+                    name: "list_packs",
                     description:
-                        "Inspect the open Narrated Walkthrough canvas: active deckDir, connected SSE clients, agent status, and recent A2UI callbacks.",
+                        "List all agent-dropped narrated walkthrough artifact packs discovered across the A-HUD landscape.",
                     handler: async (ctx) => {
                         const entry = getInstance(ctx.instanceId);
+                        const packs = await discoverArtifactPacks({
+                            packsRoot: entry.runtime.state.packsRoot,
+                            activeDeckDir: entry.runtime.state.deckDir,
+                        });
+                        return {
+                            packsRoot: entry.runtime.state.packsRoot,
+                            activeDeckDir: entry.runtime.state.deckDir,
+                            packs,
+                        };
+                    },
+                },
+                {
+                    name: "get_state",
+                    description:
+                        "Inspect the open Narrated Walkthrough canvas: active deckDir, packsRoot, connected SSE clients, agent status, and recent A2UI callbacks.",
+                    handler: async (ctx) => {
+                        const entry = getInstance(ctx.instanceId);
+                        const packs = await discoverArtifactPacks({
+                            packsRoot: entry.runtime.state.packsRoot,
+                            activeDeckDir: entry.runtime.state.deckDir,
+                        });
                         return {
                             instanceId: ctx.instanceId,
                             url: entry.url,
                             deckDir: entry.runtime.state.deckDir,
+                            packsRoot: entry.runtime.state.packsRoot,
+                            packCount: packs.length,
                             title: entry.runtime.state.title,
                             oversight: entry.runtime.state.oversight,
                             agentStatus: entry.runtime.state.agentStatus,
@@ -168,18 +195,23 @@ session = await joinSession({
             open: async (ctx) => {
                 const { resolved, title } = await validateDeckDir(ctx.input?.deckDir);
                 const displayTitle = ctx.input?.title?.trim() || title;
+                const packsRoot = typeof ctx.input?.packsRoot === "string" && path.isAbsolute(ctx.input.packsRoot)
+                    ? path.resolve(ctx.input.packsRoot)
+                    : await inferPacksRoot(resolved);
                 let entry = instances.get(ctx.instanceId);
                 if (!entry) {
                     entry = await startWalkthroughServer({
                         instanceId: ctx.instanceId,
                         canvasId: ctx.canvasId,
                         deckDir: resolved,
+                        packsRoot,
                         title: displayTitle,
                         session,
                     });
                     instances.set(ctx.instanceId, entry);
                 } else {
                     entry.runtime.state.deckDir = resolved;
+                    entry.runtime.state.packsRoot = packsRoot;
                     entry.runtime.state.title = displayTitle;
                     entry.runtime.session = session;
                     entry.runtime.broadcast("deck_reloaded", {
@@ -191,7 +223,7 @@ session = await joinSession({
                 return {
                     url: entry.url,
                     title: displayTitle,
-                    status: "Live A2UI bridge ready",
+                    status: "A-HUD live · packs & A2UI ready",
                 };
             },
             onClose: async (ctx) => {

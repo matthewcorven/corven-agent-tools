@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
     buildAgentTurnPayload,
+    discoverArtifactPacks,
     injectBridgeBootstrap,
     resolveSafeAsset,
     startWalkthroughServer,
@@ -171,5 +172,73 @@ test("live loopback server validates CSRF, handles deterministic-only hooks with
         }
     } finally {
         await rm(tmpDir, { recursive: true, force: true });
+    }
+});
+
+test("A-HUD landscape discovers runs.jsonl artifact packs and switches packs deterministically without LLM turns", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "nw-packs-test-"));
+    try {
+        const packA = path.join(rootDir, "wt-a", "runs", "run-pr-353", "planning");
+        const packB = path.join(rootDir, "wt-a", "runs", "run-standup", "planning");
+        await mkdir(packA, { recursive: true });
+        await mkdir(packB, { recursive: true });
+        await writeFile(path.join(packA, "slides.html"), "<html><head></head><body>PR353</body></html>");
+        await writeFile(path.join(packA, "timeline.json"), JSON.stringify({ title: "PR #353 Review", scenes: [{ id: "s1" }], total_duration: 85.4 }));
+        await writeFile(path.join(packB, "slides.html"), "<html><head></head><body>STANDUP</body></html>");
+        await writeFile(path.join(packB, "timeline.json"), JSON.stringify({ title: "Daily Standup Brief", scenes: [{ id: "s1" }, { id: "s2" }], total_duration: 90.1 }));
+
+        const runsJsonl = [
+            JSON.stringify({ run: "run-standup", spec: "narrated-morning-brief", phasePath: packB, utc: "2026-11-22T01:37:32Z", issue: "349" }),
+            JSON.stringify({ run: "run-pr-353", spec: "pr-353-review-walkthrough", phasePath: packA, utc: "2026-11-22T03:59:51Z", issue: "350" }),
+        ].join("\n") + "\n";
+        await writeFile(path.join(rootDir, "runs.jsonl"), runsJsonl);
+
+        const packs = await discoverArtifactPacks({ packsRoot: rootDir, activeDeckDir: packA });
+        assert.equal(packs.length, 2);
+        assert.equal(packs[0].kind, "pr_review");
+        assert.equal(packs[0].active, true);
+        assert.equal(packs[1].kind, "standup");
+        assert.equal(packs[1].active, false);
+
+        const sent = [];
+        const srv = await startWalkthroughServer({
+            instanceId: "ahud-landscape",
+            deckDir: packA,
+            packsRoot: rootDir,
+            session: { async send(o) { sent.push(o); return "m1"; } },
+        });
+        try {
+            const listRes = await fetch(`${srv.url}packs`);
+            assert.equal(listRes.status, 200);
+            const listJson = await listRes.json();
+            assert.equal(listJson.packs.length, 2);
+
+            // Reject switching to arbitrary path outside discovered packs
+            const badSwitch = await fetch(`${srv.url}packs/select`, {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-canvas-token": srv.token },
+                body: JSON.stringify({ deckDir: "/etc" }),
+            });
+            assert.equal(badSwitch.status, 403);
+
+            // Switch to Standup pack deterministically (0 LLM calls)
+            const okSwitch = await fetch(`${srv.url}packs/select`, {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-canvas-token": srv.token },
+                body: JSON.stringify({ deckDir: packB }),
+            });
+            assert.equal(okSwitch.status, 200);
+            const swJson = await okSwitch.json();
+            assert.equal(swJson.dispatchedToAgent, false);
+            assert.equal(swJson.pack.kind, "standup");
+            assert.equal(sent.length, 0);
+
+            const htmlAfter = await (await fetch(srv.url)).text();
+            assert.ok(htmlAfter.includes("STANDUP"));
+        } finally {
+            await srv.close();
+        }
+    } finally {
+        await rm(rootDir, { recursive: true, force: true });
     }
 });

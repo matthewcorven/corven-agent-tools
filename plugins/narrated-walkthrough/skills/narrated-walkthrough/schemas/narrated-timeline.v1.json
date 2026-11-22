@@ -113,6 +113,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "pack_kind": { "type": "string" },
+        "producer": { "type": "string" },
         "summary": { "type": "string", "minLength": 1 },
         "oversight_default": { "type": "string", "minLength": 1 },
         "stats": {
@@ -142,7 +144,23 @@
               "level": { "type": "string" },
               "parent": { "type": "string" },
               "summary": { "type": "string", "minLength": 1 },
-              "chat_prompt": { "type": "string" }
+              "chat_prompt": { "type": "string" },
+              "state": { "type": "string" },
+              "state_label": { "type": "string" },
+              "queue_depth": { "type": "number", "minimum": 0 },
+              "quick_actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["label", "action"],
+                  "properties": {
+                    "label": { "type": "string", "minLength": 1 },
+                    "action": { "type": "string", "minLength": 1 },
+                    "context": { "type": "object" }
+                  }
+                }
+              }
             }
           }
         },
