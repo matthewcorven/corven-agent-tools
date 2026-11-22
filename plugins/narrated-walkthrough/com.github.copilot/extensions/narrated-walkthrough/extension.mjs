@@ -101,6 +101,9 @@ session = await joinSession({
                         entry.runtime.state.deckDir = resolved;
                         entry.runtime.state.title = ctx.input?.title?.trim() || title;
                         entry.runtime.state.liveA2ui = null;
+                        entry.runtime.state.telemetryCache = null;
+                        entry.runtime.state.telemetryCachedAt = 0;
+                        entry.runtime.state.telemetryFingerprint = "";
                         entry.runtime.broadcast("deck_reloaded", {
                             deckDir: resolved,
                             title: entry.runtime.state.title,

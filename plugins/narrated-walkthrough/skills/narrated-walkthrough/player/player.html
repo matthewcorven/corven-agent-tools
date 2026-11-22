@@ -199,16 +199,18 @@ __MERMAID__
                transform-origin:left center; transform:scaleX(0); transition:transform .2s linear; }
   .clock { font-variant-numeric:tabular-nums; font-size:12px; color:var(--dim); min-width:96px; text-align:right; }
 
-  /* Unified A-HUD container: integrated pack tab-header + connected tab-body */
+  /* Unified A-HUD container: integrated single-row pack tab-header + connected tab-body */
   .hud { background:var(--surface); border:1px solid var(--line); border-radius:14px;
          padding:0; margin-bottom:20px; overflow:hidden; }
   .hud[hidden] { display:none; }
-  .hud-tabstrip { display:flex; align-items:flex-end; gap:6px; flex-wrap:wrap;
-                  background:var(--surface-sub); border-bottom:1px solid var(--line);
-                  padding:10px 16px 0; }
-  .hud-tab { text-align:left; border:1px solid transparent; border-bottom:1px solid transparent;
-             border-radius:10px 10px 0 0; padding:8px 14px 10px; background:transparent;
-             color:var(--dim); display:flex; flex-direction:column; gap:3px; max-width:340px;
+  .hud-tabbar { display:flex; align-items:flex-end; justify-content:space-between; gap:10px;
+                background:var(--surface-sub); border-bottom:1px solid var(--line);
+                padding:10px 14px 0; }
+  .hud-tabstrip { display:flex; align-items:flex-end; gap:6px; flex-wrap:nowrap;
+                  overflow-x:auto; scrollbar-width:thin; flex:1 1 auto; min-width:0; }
+  .hud-tab { flex:0 0 auto; text-align:left; border:1px solid transparent; border-bottom:1px solid transparent;
+             border-radius:10px 10px 0 0; padding:8px 13px 10px; background:transparent;
+             color:var(--dim); display:flex; flex-direction:column; gap:3px; max-width:260px;
              transition:background-color .15s ease, color .15s ease, border-color .15s ease; }
   .hud-tab:hover:not(.active):not(:disabled) { background:var(--surface-hover); color:var(--ink);
                                                border-color:var(--line); border-bottom-color:transparent; }
@@ -220,10 +222,10 @@ __MERMAID__
                   border-radius:999px; background:var(--pill-bg); color:var(--dim); }
   .hud-tab.active .hud-tab-kind { background:var(--accent); color:var(--accent-ink); }
   .hud-tab-meta { color:var(--dim); white-space:nowrap; }
-  .hud-tab-name { font-size:13px; font-weight:650; line-height:1.25; white-space:nowrap;
+  .hud-tab-name { font-size:12.5px; font-weight:650; line-height:1.25; white-space:nowrap;
                   overflow:hidden; text-overflow:ellipsis; }
-  .hud-tabtools { margin-left:auto; display:flex; align-items:center; gap:8px; padding-bottom:9px;
-                  flex-wrap:wrap; }
+  .hud-tabtools { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding-bottom:9px;
+                  white-space:nowrap; }
   .hud-refresh { font-size:11px; padding:4px 10px; border-radius:7px; }
   .hud-body { padding:18px 22px 20px; }
   .hud-top { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
@@ -852,24 +854,26 @@ function renderHud() {
     ? allNodes.filter((n) => n.level === 'lead' || n.level === 'video' || n.state === 'bottleneck')
     : allNodes;
 
-  // Integrated tab-header strip inside the same .hud container
+  // Integrated single-row scrollable tab-header strip inside the same .hud container
   const tabsHtml = (useLive && discoveredPacks.length)
-    ? '<div class="hud-tabstrip" role="tablist" aria-label="Agent artifact packs">' +
-        discoveredPacks.map((p) => {
-          const dur = typeof p.totalDuration === 'number' ? fmt(p.totalDuration) : '';
-          const meta = [p.sceneCount ? p.sceneCount + ' scenes' : '', dur, p.issue ? '#' + p.issue : ''].filter(Boolean).join(' · ');
-          return '<button type="button" role="tab" aria-selected="' + (p.active ? 'true' : 'false') + '" class="hud-tab' + (p.active ? ' active' : '') + '" data-pack-dir="' + esc(p.deckDir) + '" data-pack-id="' + esc(p.id) + '">' +
-            '<div class="hud-tab-top"><span class="hud-tab-kind">' + esc(formatPackKind(p.kind)) + '</span><span class="hud-tab-meta">' + esc(meta) + '</span></div>' +
-            '<div class="hud-tab-name">' + esc(p.title) + '</div>' +
-          '</button>';
-        }).join('') +
+    ? '<div class="hud-tabbar">' +
+        '<div class="hud-tabstrip" role="tablist" aria-label="Agent artifact packs">' +
+          discoveredPacks.map((p) => {
+            const dur = typeof p.totalDuration === 'number' ? fmt(p.totalDuration) : '';
+            const meta = [p.sceneCount ? p.sceneCount + ' scenes' : '', dur, p.issue ? '#' + p.issue : ''].filter(Boolean).join(' · ');
+            return '<button type="button" role="tab" aria-selected="' + (p.active ? 'true' : 'false') + '" class="hud-tab' + (p.active ? ' active' : '') + '" data-pack-dir="' + esc(p.deckDir) + '" data-pack-id="' + esc(p.id) + '" title="' + esc(p.title) + '">' +
+              '<div class="hud-tab-top"><span class="hud-tab-kind">' + esc(formatPackKind(p.kind)) + '</span><span class="hud-tab-meta">' + esc(meta) + '</span></div>' +
+              '<div class="hud-tab-name">' + esc(p.title) + '</div>' +
+            '</button>';
+          }).join('') +
+        '</div>' +
         '<div class="hud-tabtools">' +
           '<span class="bridge-pill" data-bridge-pill>Live Copilot Bridge &middot; Ready</span>' +
           '<button type="button" class="hud-refresh" id="hud-refresh-btn"' + (telemetryLoading ? ' disabled' : '') + '>' + (telemetryLoading ? 'Refreshing…' : 'Refresh live') + '</button>' +
         '</div>' +
       '</div>'
     : (useLive
-      ? '<div class="hud-tabstrip"><span class="hud-title" style="padding-bottom:10px;">A-HUD &middot; Live Landscape</span>' +
+      ? '<div class="hud-tabbar"><span class="hud-title" style="padding-bottom:10px;">A-HUD &middot; Live Landscape</span>' +
           '<div class="hud-tabtools">' +
             '<span class="bridge-pill" data-bridge-pill>Live Copilot Bridge &middot; Ready</span>' +
             '<button type="button" class="hud-refresh" id="hud-refresh-btn"' + (telemetryLoading ? ' disabled' : '') + '>' + (telemetryLoading ? 'Refreshing…' : 'Refresh live') + '</button>' +
