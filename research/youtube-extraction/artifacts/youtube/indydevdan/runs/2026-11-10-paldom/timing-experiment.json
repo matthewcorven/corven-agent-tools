@@ -1,0 +1,137 @@
+{
+  "purpose": "Bounded diagnostic only: test whether upstream -nt affects ASR segment granularity. Main upstream snapshot and main run results remain unchanged.",
+  "source_video_id": "GRlcm3wmOqs",
+  "source_start_seconds": 0,
+  "source_duration_seconds": 60,
+  "model": "small.en",
+  "tested_at_utc": "2026-11-11T01:50:15.540791+00:00",
+  "variants": [
+    {
+      "variant": "upstream-no-timestamps",
+      "returncode": 0,
+      "seconds": 1.021,
+      "additional_flags": [
+        "-nt"
+      ],
+      "segment_count": 2,
+      "median_segment_seconds": 30.0,
+      "max_segment_seconds": 30.0,
+      "segment_time_ranges_ms": [
+        {
+          "from": 0,
+          "to": 30000
+        },
+        {
+          "from": 30000,
+          "to": 60000
+        }
+      ],
+      "max_end_overrun_ms": 0
+    },
+    {
+      "variant": "without-no-timestamps",
+      "returncode": 0,
+      "seconds": 1.347,
+      "additional_flags": [],
+      "segment_count": 23,
+      "median_segment_seconds": 2.72,
+      "max_segment_seconds": 3.84,
+      "segment_time_ranges_ms": [
+        {
+          "from": 0,
+          "to": 2600
+        },
+        {
+          "from": 2600,
+          "to": 5800
+        },
+        {
+          "from": 5800,
+          "to": 9160
+        },
+        {
+          "from": 9160,
+          "to": 10240
+        },
+        {
+          "from": 10240,
+          "to": 12760
+        },
+        {
+          "from": 12760,
+          "to": 15760
+        },
+        {
+          "from": 15760,
+          "to": 19480
+        },
+        {
+          "from": 19480,
+          "to": 21280
+        },
+        {
+          "from": 21280,
+          "to": 24280
+        },
+        {
+          "from": 24280,
+          "to": 28120
+        },
+        {
+          "from": 28120,
+          "to": 31840
+        },
+        {
+          "from": 31840,
+          "to": 35240
+        },
+        {
+          "from": 35240,
+          "to": 37760
+        },
+        {
+          "from": 37760,
+          "to": 39800
+        },
+        {
+          "from": 39800,
+          "to": 43160
+        },
+        {
+          "from": 43160,
+          "to": 45880
+        },
+        {
+          "from": 45880,
+          "to": 49640
+        },
+        {
+          "from": 49640,
+          "to": 50600
+        },
+        {
+          "from": 50600,
+          "to": 52440
+        },
+        {
+          "from": 52440,
+          "to": 54040
+        },
+        {
+          "from": 54040,
+          "to": 57260
+        },
+        {
+          "from": 57260,
+          "to": 58440
+        },
+        {
+          "from": 58440,
+          "to": 60300
+        }
+      ],
+      "max_end_overrun_ms": 300
+    }
+  ],
+  "interpretation": "Removing -nt improves granularity on this one sample, but is not a validated fix: the final alternative segment ends 300ms beyond the 60s clip. Range validation and actual alignment assessment remain required."
+}

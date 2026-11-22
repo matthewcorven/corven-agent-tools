@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "kind": "research",
+  "status": "unfinished",
+  "title": "YouTube extraction and multimodal evidence",
+  "relocated_on_local_date": "2026-11-10",
+  "timezone": "America/New_York",
+  "source_repository": "matthewcorven/corven-agents",
+  "destination_repository": "matthewcorven/corven-agent-tools",
+  "ready_for_implementation": false,
+  "plugin_installed_or_registered": false,
+  "latest_evaluation": "artifacts/youtube/indydevdan/runs/2026-11-10-paldom/README.md",
+  "baseline": "artifacts/indydevdan/2026-11-10/README.md",
+  "tooling_landscape": "tooling-landscape.md",
+  "upstream": {
+    "repository": "https://github.com/Paldom/video-to-skill",
+    "commit": "576f5ea880f965091be26320065dd732ea483e50",
+    "license": "MIT",
+    "modified": false
+  },
+  "latest_run": {
+    "target_video_count": 6,
+    "processed_video_ids": ["GRlcm3wmOqs", "1v7ldJiyH-Y"],
+    "media_access_blocked_video_ids": ["52JX83rGPLc", "OLqP8jxJ0Wc", "DNDYYHsypZg", "8BD6w5wELRo"],
+    "retained_frame_count": 10,
+    "full_transcripts_retained": false,
+    "raw_media_retained": false,
+    "complete_visual_review": false,
+    "semantic_alignment_verified": false
+  },
+  "blockers": [
+    "Four public media inputs returned HTTP 403 for both tested formats.",
+    "Upstream -nt ASR produces 30-second segments and accepts out-of-media timestamps.",
+    "Usable image pixels were not exposed to the assistant for full visual review.",
+    "Speech/frame time overlap is not verified semantic-intent alignment.",
+    "Settled-frame selection, privacy screening, retention and portable export need validation.",
+    "Archived session helpers are machine-specific, not supported project scripts."
+  ],
+  "next_step": "Evaluate an authorized local screencast with known speech and visual changes; prove image delivery and bounded timestamp/semantic evidence before proposing internal skills.",
+  "migration_manifest": "MIGRATION.json"
+}

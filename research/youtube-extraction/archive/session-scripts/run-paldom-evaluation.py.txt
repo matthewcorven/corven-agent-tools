@@ -1,0 +1,176 @@
+"""Bounded evaluation harness, not a project skill. Full media/captions stay temporary."""
+from __future__ import annotations
+import argparse
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+REPO = Path('/Users/core/git/matthewcorven/corven-agents')
+SESSION = Path(__file__).parent
+SHA = '576f5ea880f965091be26320065dd732ea483e50'
+UPSTREAM = REPO / 'research/youtube/tooling/paldom-video-to-skill' / SHA
+OUTPUT = REPO / 'research/youtube/indydevdan/runs/2026-11-10-paldom'
+STATE = SESSION / 'paldom-working-location.json'
+SELECTION = REPO / 'research/indydevdan/2026-11-10/selection.json'
+
+
+def write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+
+
+def scratch_root():
+    if STATE.exists():
+        root = Path(json.loads(STATE.read_text())['scratch'])
+        if not root.is_dir():
+            raise RuntimeError('Previous scratch directory no longer exists.')
+        return root
+    root = Path(tempfile.mkdtemp(prefix='paldom-video-eval-'))
+    bindir = root / 'bin'
+    bindir.mkdir()
+    shim = bindir / 'yt-dlp'
+    shim.write_text('#!/bin/sh\nexec /Users/core/.local/bin/yt-dlp --ignore-config --no-cache-dir --no-progress --no-geo-bypass --retries 0 --fragment-retries 0 "$@"\n')
+    shim.chmod(0o700)
+    write_json(STATE, {'scratch': str(root), 'purpose': 'Temporary raw-media/caption processing; remove after evaluation.'})
+    return root
+
+
+def safe_error(text):
+    text = re.sub(r'https?://[^\s]+', '[URL]', text)
+    text = re.sub(r'AIza[0-9A-Za-z_-]{30,}', '[REDACTED]', text)
+    return text[-2200:]
+
+
+def run(command, env, timeout):
+    started = time.monotonic()
+    try:
+        p = subprocess.run(command, env=env, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout, safe_error(p.stderr), round(time.monotonic() - started, 3)
+    except subprocess.TimeoutExpired:
+        return 124, '', f'Bounded operation exceeded {timeout} seconds.', round(time.monotonic() - started, 3)
+
+
+def evaluate(video_id, do_frames, local_asr=False):
+    root = scratch_root()
+    selected = json.loads(SELECTION.read_text())['selected_videos']
+    entry = next(v for v in selected if v['id'] == video_id)
+    work = root / video_id
+    work.mkdir(exist_ok=True)
+    dest = OUTPUT / 'videos' / video_id
+    dest.mkdir(parents=True, exist_ok=True)
+    record_path = dest / 'run.json'
+    record = json.loads(record_path.read_text()) if record_path.exists() else {
+        'video_id': video_id, 'title': entry['title'], 'url': entry['url'],
+        'upstream_commit': SHA,
+        'started_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'stages': {},
+        'retention': 'Raw media, full captions/transcripts, and unselected frames are temporary inputs, not retained deliverables.',
+        'secret_use': 'No API key, browser cookies or credential files used. yt-dlp configuration and cache disabled; retries disabled.',
+    }
+    env = os.environ.copy()
+    env.pop('GOOGLE_API_YOUTUBE_API_KEY', None)
+    env['PATH'] = str(root / 'bin') + os.pathsep + env.get('PATH', '')
+    env['PYTHONDONTWRITEBYTECODE'] = '1'
+    transcript = work / 'transcript'
+    if 'transcript' not in record['stages'] and not local_asr:
+        rc, stdout, stderr, elapsed = run([
+            sys.executable, str(UPSTREAM / 'skills/video-transcribe/scripts/fetch_transcript.py'),
+            entry['url'], '--out', str(transcript), '--no-asr', '--sleep-requests', '2',
+        ], env, 180)
+        stage = {'returncode': rc, 'seconds': elapsed, 'status': 'success' if rc == 0 else 'failed'}
+        if (transcript / 'transcript.json').exists():
+            data = json.loads((transcript / 'transcript.json').read_text())
+            stage.update({'kind': data['kind'], 'track': data['track'], 'quality': data['quality'], 'segment_count': len(data['segments']), 'sha256_of_transient_transcript': hashlib.sha256((transcript / 'transcript.json').read_bytes()).hexdigest()})
+        if (transcript / 'metadata.json').exists():
+            metadata = json.loads((transcript / 'metadata.json').read_text())
+            metadata['caption_failure'] = safe_error(metadata.get('caption_failure', ''))
+            stage['metadata'] = metadata
+        if rc:
+            stage['diagnostic'] = stderr
+        record['stages']['transcript'] = stage
+        write_json(record_path, record)
+        print(video_id, 'transcript', stage['status'], 'seconds', elapsed, flush=True)
+    if not do_frames:
+        return
+    if 'media' not in record['stages']:
+        rc, stdout, stderr, elapsed = run([
+            str(root / 'bin/yt-dlp'), '--no-playlist', '--quiet', '--no-warnings',
+            '--format', 'bv*[height<=720]+ba/b[height<=720]', '--merge-output-format', 'mp4',
+            '--max-filesize', '1G', '--socket-timeout', '30', '-o', str(work / 'source.%(ext)s'), entry['url'],
+        ], env, 360)
+        candidates = [p for p in work.glob('source.*') if p.suffix in {'.mp4', '.mkv', '.webm'}]
+        stage = {'returncode': rc, 'seconds': elapsed, 'status': 'success' if rc == 0 and candidates else 'failed'}
+        if stage['status'] == 'success':
+            media = candidates[0]
+            stage.update({'bytes': media.stat().st_size, 'sha256_of_transient_media': hashlib.sha256(media.read_bytes()).hexdigest()})
+        else:
+            stage['diagnostic'] = stderr
+        record['stages']['media'] = stage
+        write_json(record_path, record)
+        print(video_id, 'media', stage['status'], 'seconds', elapsed, flush=True)
+    if record['stages']['media']['status'] != 'success':
+        record['stages']['frames'] = {'status': 'blocked', 'reason': 'Full local media unavailable; upstream frame extractor requires a local video. No storyboard substitution in this evaluation.'}
+        write_json(record_path, record)
+        return
+    media = next(p for p in work.glob('source.*') if p.suffix in {'.mp4', '.mkv', '.webm'})
+    if local_asr:
+        if 'captions' not in record['stages']:
+            record['stages']['captions'] = record['stages'].get('transcript', {'status': 'not_attempted', 'reason': 'Pilot received HTTP 429 from captions; used local ASR without repeated endpoint requests.'})
+        transcript = work / 'asr'
+        if record['stages'].get('transcript', {}).get('kind') != 'asr':
+            env['WHISPER_CPP_MODEL'] = str(root / 'models/ggml-small.en.bin')
+            rc, stdout, stderr, elapsed = run([
+                sys.executable, str(UPSTREAM / 'skills/video-transcribe/scripts/fetch_transcript.py'),
+                str(media), '--out', str(transcript), '--asr-model', 'small.en',
+            ], env, 900)
+            stage = {'returncode': rc, 'seconds': elapsed, 'status': 'success' if rc == 0 else 'failed', 'backend': 'whisper.cpp', 'model': 'small.en'}
+            if (transcript / 'transcript.json').exists():
+                data = json.loads((transcript / 'transcript.json').read_text())
+                stage.update({'kind': data['kind'], 'track': data['track'], 'quality': data['quality'], 'segment_count': len(data['segments']), 'sha256_of_transient_transcript': hashlib.sha256((transcript / 'transcript.json').read_bytes()).hexdigest()})
+            if (transcript / 'metadata.json').exists():
+                stage['metadata'] = json.loads((transcript / 'metadata.json').read_text())
+            if rc:
+                stage['diagnostic'] = stderr
+            record['stages']['transcript'] = stage
+            write_json(record_path, record)
+            print(video_id, 'local ASR', stage['status'], 'seconds', elapsed, flush=True)
+    previous_frames = record['stages'].get('frames')
+    regenerate = bool(local_asr and previous_frames and previous_frames.get('shots_with_speech') == 0 and record['stages']['transcript']['status'] == 'success')
+    if 'frames' not in record['stages'] or regenerate:
+        if regenerate:
+            record['stages']['frames_before_asr'] = previous_frames
+        visuals = work / ('visuals-with-speech' if local_asr else 'visuals')
+        cmd = [sys.executable, str(UPSTREAM / 'skills/video-keyframes/scripts/extract_frames.py'), str(media), '--out', str(visuals), '--max-frames', '60']
+        if record['stages']['transcript']['status'] == 'success':
+            cmd += ['--transcript', str(transcript / 'transcript.json')]
+        rc, stdout, stderr, elapsed = run(cmd, env, 900)
+        stage = {'returncode': rc, 'seconds': elapsed, 'status': 'success' if rc == 0 else 'failed'}
+        timeline = visuals / 'timeline.json'
+        if timeline.exists():
+            data = json.loads(timeline.read_text())
+            stage.update({k: v for k, v in data.items() if k not in {'source', 'shots'}})
+            stage['shot_count'] = len(data['shots'])
+            stage['shots_with_speech'] = sum(bool(s.get('speech')) for s in data['shots'])
+            stage['shots_with_ocr'] = sum(bool(s.get('ocr')) for s in data['shots'])
+            stage['sha256_of_transient_timeline'] = hashlib.sha256(timeline.read_bytes()).hexdigest()
+        stage['diagnostic'] = stderr
+        record['stages']['frames'] = stage
+        write_json(record_path, record)
+        print(video_id, 'frames', stage['status'], 'seconds', elapsed, flush=True)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('video_id', nargs='+')
+    parser.add_argument('--frames', action='store_true')
+    parser.add_argument('--local-asr', action='store_true')
+    args = parser.parse_args()
+    for video_id in args.video_id:
+        evaluate(video_id, args.frames, args.local_asr)

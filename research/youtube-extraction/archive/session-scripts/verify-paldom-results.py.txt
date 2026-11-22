@@ -1,0 +1,98 @@
+import datetime
+import hashlib
+import json
+from pathlib import Path
+import re
+from PIL import Image
+
+REPO = Path('/Users/core/git/matthewcorven/corven-agents')
+ROOT = REPO / 'research/youtube/indydevdan/runs/2026-11-10-paldom'
+UPSTREAM = REPO / 'research/youtube/tooling/paldom-video-to-skill/576f5ea880f965091be26320065dd732ea483e50'
+expected = ['GRlcm3wmOqs','1v7ldJiyH-Y','52JX83rGPLc','OLqP8jxJ0Wc','DNDYYHsypZg','8BD6w5wELRo']
+collection = json.loads((ROOT/'collection.json').read_text())
+assert [v['video_id'] for v in collection['videos']] == expected
+provenance = json.loads((UPSTREAM/'PROVENANCE.json').read_text())
+for entry in provenance['files']:
+    path = UPSTREAM/entry['path']
+    assert path.stat().st_size == entry['bytes']
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == entry['sha256']
+rows=[]
+image_count=0
+for vid in expected:
+    folder=ROOT/'videos'/vid
+    run=json.loads((folder/'run.json').read_text())
+    evidence=json.loads((folder/'evidence.json').read_text())
+    notes=(folder/'notes.md').read_text()
+    assert run['video_id']==vid and evidence['video_id']==vid
+    assert evidence['url']==f'https://www.youtube.com/watch?v={vid}'
+    assert vid in notes
+    assert 'transcript' in notes.lower()
+    frames=evidence['selected_frames']
+    processed=run['stages']['media']['status']=='success'
+    if processed:
+        assert evidence['status']=='processed'
+        assert evidence['duration_seconds']==run['stages']['frames']['duration_s']
+        assert run['stages']['transcript']['status']=='success'
+        assert run['stages']['transcript']['kind']=='asr'
+        assert run['stages']['frames']['status']=='success'
+        assert len(frames)==5
+        duration=run['stages']['frames']['duration_s']
+        assert len({frame['id'] for frame in frames})==len(frames)
+        for frame in frames:
+            path=folder/frame['file']
+            assert path.resolve().is_relative_to(folder.resolve())
+            assert frame['file'] in notes
+            assert 0<=frame['timestamp_seconds']<duration
+            assert 0<=frame['source_shot_start_ms']<frame['source_shot_end_ms']<=duration*1000
+            assert 0<=frame['transcript_start_ms']<frame['transcript_end_ms']<=duration*1000
+            assert frame['source_shot_start_ms']<=frame['timestamp_seconds']*1000<frame['source_shot_end_ms']
+            assert frame['transcript_start_ms']<=frame['timestamp_seconds']*1000<frame['transcript_end_ms']
+            assert hashlib.sha256(path.read_bytes()).hexdigest()==frame['sha256']
+            assert frame['summary'] and frame['uncertainty']
+            assert frame['visual_observation_basis']
+            with Image.open(path) as image:
+                assert image.format in {'JPEG','PNG'}
+                width,height=image.size
+                assert width==frame['width']==1280 and height==frame['height']==720
+                image.verify()
+            image_count+=1
+    else:
+        assert frames==[]
+        assert evidence['status']=='blocked'
+        assert run['stages']['media_alternative']['status']=='failed'
+        assert run['stages']['frames']['status']=='blocked'
+        assert run['stages']['transcript']['status']=='blocked'
+        assert '403' in notes
+    rows.append({'video_id':vid,'status':'processed' if processed else 'blocked','retained_frames':len(frames),'notes':str((folder/'notes.md').relative_to(ROOT))})
+assert sum(row['status']=='processed' for row in rows)==2
+assert sum(row['status']=='blocked' for row in rows)==4
+assert image_count==10
+for md in [REPO/'research/README.md',REPO/'research/youtube/README.md',*ROOT.rglob('*.md')]:
+    for link in re.findall(r'\]\(([^)]+)\)',md.read_text()):
+        if re.match(r'^[a-zA-Z]+:',link) or link.startswith('#'):
+            continue
+        path=(md.parent/link.split('#')[0]).resolve()
+        assert path.is_relative_to(REPO)
+        assert path.exists() or path==(ROOT/'manifest.json').resolve(),f'Broken link: {md}: {link}'
+for p in ROOT.rglob('*'):
+    if not p.is_file():continue
+    assert p.suffix in {'.md','.json','.jpg','.jpeg','.png'},f'Unexpected output: {p}'
+    assert p.name not in {'transcript.json','timeline.json','audio.json','source.mp4'}
+    if p.suffix in {'.md','.json'}:
+        text=p.read_text()
+        assert not re.search(r'AIza[0-9A-Za-z_-]{30,}',text)
+        assert 'googlevideo.com/videoplayback' not in text
+cleanup=json.loads((ROOT/'cleanup.json').read_text())
+assert cleanup['removed_processing_files']>0
+assert not (REPO/'research/youtube/.processing/paldom-a4d38886-e7a2-45fc-b255-a0677b486f58').exists()
+baseline=REPO/'research/indydevdan/2026-11-10'
+for entry in json.loads((baseline/'manifest.json').read_text())['files']:
+    assert hashlib.sha256((baseline/entry['path']).read_bytes()).hexdigest()==entry['sha256']
+files=[]
+for p in sorted(ROOT.rglob('*')):
+    if p.is_file() and p.name!='manifest.json':
+        data=p.read_bytes()
+        files.append({'path':str(p.relative_to(ROOT)),'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
+manifest={'schema_version':1,'verified_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'videos':rows,'retained_image_count':image_count,'upstream_files_verified_unchanged':len(provenance['files']),'checks':['selected six unchanged','explicit 2 processed / 4 blocked outcomes','upstream SHA256s unchanged','actual image decoding and dimensions','selected timestamps in bounds','local Markdown links','no full transcript or media deliverables','retained-file checksums'],'limitations':['Full pixel review remains unavailable; image/semantic claims limited to OCR/context evidence.','Main-run ASR uses coarse 30-second chunks; upstream quality pass is not accuracy proof.','Four inputs remain inaccessible over the two tested public formats.'],'files':files}
+(ROOT/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+print(json.dumps({'videos':rows,'images':image_count,'files':len(files)+1,'total_bytes':sum(f['bytes'] for f in files),'upstream_unchanged_files':len(provenance['files'])},indent=2))

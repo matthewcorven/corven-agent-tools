@@ -1,0 +1,46 @@
+{
+  "video_id": "52JX83rGPLc",
+  "title": "ELITE Agentic Engineers Are LEAVING THE LOOP... Here’s why",
+  "url": "https://www.youtube.com/watch?v=52JX83rGPLc",
+  "published_at": "2026-10-26T13:00:05Z",
+  "upload_date": "20261026",
+  "duration_seconds": 1546,
+  "channel": "IndyDevDan",
+  "channel_id": "UC_x36zCEGilGpB1m-V4gmjg",
+  "metadata_method": "Public YouTube metadata via yt-dlp --ignore-config --skip-download --dump-single-json; fetched 2026-11-10 UTC.",
+  "captions_status": "available; English automatic captions fetched and analyzed across the full duration; no transcript/subtitles retained in this packet; recognition errors possible",
+  "captions_language": "en-orig",
+  "captions_automatic": true,
+  "copyright_note": "Original research commentary and three illustrative stills only. Full copyrighted transcripts, subtitles, audiovisual downloads and descriptions are not reproduced.",
+  "frame_verification": "PNG decoding plus local macOS Vision OCR and time-matched captions. Image-view tool returned success without an accessible pixel payload; full visual review remains unverified.",
+  "frame_access_notes": "Initial direct-media extraction failed. Public metadata-provided User-Agent enabled these three format-136 captures. A later alternate-frame attempt returned HTTP 403 and was not pursued. No complete audiovisual file retained.",
+  "frames": [
+    {
+      "file": "frames/01-02m30s.png",
+      "timestamp_seconds": 150,
+      "caption": "The opening in-loop illustration anchors the explanation of attention spent continually prompting, before the contrast with approval-driven and scheduled systems.",
+      "capture_method": "Bounded remote seek before input, one frame from public H.264 format 136; no full video download retained.",
+      "width": 1280,
+      "height": 720,
+      "timestamp_accuracy": "Requested video seek position; not a storyboard estimate."
+    },
+    {
+      "file": "frames/02-09m22s.png",
+      "timestamp_seconds": 562,
+      "caption": "The mock incident dashboard pairs an event stream with a proposed checkout fix and a deployment-approval state, illustrating preparation before a human decision.",
+      "capture_method": "Bounded remote seek before input, one frame from public H.264 format 136; no full video download retained.",
+      "width": 1280,
+      "height": 720,
+      "timestamp_accuracy": "Requested video seek position; not a storyboard estimate."
+    },
+    {
+      "file": "frames/03-13m25s.png",
+      "timestamp_seconds": 805,
+      "caption": "The UI-replication dashboard compares a requested design and generated page alongside iteration results; a similarity target is not independent proof of correctness.",
+      "capture_method": "Bounded remote seek before input, one frame from public H.264 format 136; no full video download retained.",
+      "width": 1280,
+      "height": 720,
+      "timestamp_accuracy": "Requested video seek position; not a storyboard estimate."
+    }
+  ]
+}

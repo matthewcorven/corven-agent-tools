@@ -1,0 +1,297 @@
+{
+  "schema_version": 1,
+  "video_id": "1v7ldJiyH-Y",
+  "description": "Text-free trace of temporary upstream candidates. Full speech/OCR and unselected images are not retained.",
+  "strategy": "scene",
+  "scene_threshold": 0.06473,
+  "shots": [
+    {
+      "index": 0,
+      "start_ms": 0,
+      "end_ms": 25358,
+      "motion": 64,
+      "ocr_characters": 83,
+      "speech_characters": 492,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 1,
+      "start_ms": 25358,
+      "end_ms": 34000,
+      "motion": 7,
+      "ocr_characters": 190,
+      "speech_characters": 976,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 2,
+      "start_ms": 34000,
+      "end_ms": 71805,
+      "motion": 30,
+      "ocr_characters": 3,
+      "speech_characters": 985,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 3,
+      "start_ms": 71805,
+      "end_ms": 94594,
+      "motion": 7,
+      "ocr_characters": 30,
+      "speech_characters": 1014,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 4,
+      "start_ms": 94594,
+      "end_ms": 98565,
+      "motion": 12,
+      "ocr_characters": 23,
+      "speech_characters": 512,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 5,
+      "start_ms": 98565,
+      "end_ms": 126726,
+      "motion": 17,
+      "ocr_characters": 122,
+      "speech_characters": 884,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 6,
+      "start_ms": 126726,
+      "end_ms": 201267,
+      "motion": 10,
+      "ocr_characters": 31,
+      "speech_characters": 1379,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 7,
+      "start_ms": 201267,
+      "end_ms": 212178,
+      "motion": 3,
+      "ocr_characters": 47,
+      "speech_characters": 992,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 8,
+      "start_ms": 212178,
+      "end_ms": 217884,
+      "motion": 24,
+      "ocr_characters": 18,
+      "speech_characters": 499,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 9,
+      "start_ms": 217884,
+      "end_ms": 233199,
+      "motion": 16,
+      "ocr_characters": 21,
+      "speech_characters": 499,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 10,
+      "start_ms": 233199,
+      "end_ms": 245345,
+      "motion": 16,
+      "ocr_characters": 58,
+      "speech_characters": 1016,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 11,
+      "start_ms": 245345,
+      "end_ms": 315148,
+      "motion": 12,
+      "ocr_characters": 32,
+      "speech_characters": 1472,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 12,
+      "start_ms": 315148,
+      "end_ms": 384951,
+      "motion": -1,
+      "ocr_characters": 52,
+      "speech_characters": 1308,
+      "gap_fill_sample": true
+    },
+    {
+      "index": 13,
+      "start_ms": 384951,
+      "end_ms": 403369,
+      "motion": 13,
+      "ocr_characters": 131,
+      "speech_characters": 883,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 14,
+      "start_ms": 403369,
+      "end_ms": 405037,
+      "motion": 13,
+      "ocr_characters": 21,
+      "speech_characters": 483,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 15,
+      "start_ms": 405037,
+      "end_ms": 461494,
+      "motion": 14,
+      "ocr_characters": 359,
+      "speech_characters": 1341,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 16,
+      "start_ms": 461494,
+      "end_ms": 470636,
+      "motion": 11,
+      "ocr_characters": 116,
+      "speech_characters": 416,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 17,
+      "start_ms": 470636,
+      "end_ms": 511511,
+      "motion": 14,
+      "ocr_characters": 384,
+      "speech_characters": 1399,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 18,
+      "start_ms": 511511,
+      "end_ms": 555855,
+      "motion": 14,
+      "ocr_characters": 795,
+      "speech_characters": 930,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 19,
+      "start_ms": 555855,
+      "end_ms": 564397,
+      "motion": 13,
+      "ocr_characters": 814,
+      "speech_characters": 420,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 20,
+      "start_ms": 564397,
+      "end_ms": 596762,
+      "motion": 6,
+      "ocr_characters": 17,
+      "speech_characters": 852,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 21,
+      "start_ms": 596762,
+      "end_ms": 608441,
+      "motion": 8,
+      "ocr_characters": 238,
+      "speech_characters": 966,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 22,
+      "start_ms": 608441,
+      "end_ms": 707039,
+      "motion": 8,
+      "ocr_characters": 1310,
+      "speech_characters": 2048,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 23,
+      "start_ms": 707039,
+      "end_ms": 714480,
+      "motion": 10,
+      "ocr_characters": 1364,
+      "speech_characters": 554,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 24,
+      "start_ms": 714480,
+      "end_ms": 821187,
+      "motion": 7,
+      "ocr_characters": 1241,
+      "speech_characters": 2497,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 25,
+      "start_ms": 821187,
+      "end_ms": 835434,
+      "motion": 7,
+      "ocr_characters": 1267,
+      "speech_characters": 454,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 26,
+      "start_ms": 835434,
+      "end_ms": 835467,
+      "motion": 11,
+      "ocr_characters": 976,
+      "speech_characters": 454,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 27,
+      "start_ms": 835467,
+      "end_ms": 839038,
+      "motion": 12,
+      "ocr_characters": 781,
+      "speech_characters": 454,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 28,
+      "start_ms": 839038,
+      "end_ms": 859859,
+      "motion": 8,
+      "ocr_characters": 204,
+      "speech_characters": 1022,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 29,
+      "start_ms": 859859,
+      "end_ms": 925457,
+      "motion": 8,
+      "ocr_characters": 26,
+      "speech_characters": 1744,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 30,
+      "start_ms": 925457,
+      "end_ms": 1036368,
+      "motion": 12,
+      "ocr_characters": 852,
+      "speech_characters": 2753,
+      "gap_fill_sample": false
+    },
+    {
+      "index": 31,
+      "start_ms": 1036368,
+      "end_ms": 1115914,
+      "motion": 11,
+      "ocr_characters": 1516,
+      "speech_characters": 1601,
+      "gap_fill_sample": false
+    }
+  ]
+}

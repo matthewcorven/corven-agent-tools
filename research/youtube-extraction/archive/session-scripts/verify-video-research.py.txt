@@ -1,0 +1,92 @@
+import datetime
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+
+root = Path('/Users/core/git/matthewcorven/corven-agents/research/indydevdan/2026-11-10')
+expected = ['GRlcm3wmOqs', '1v7ldJiyH-Y', '52JX83rGPLc', 'OLqP8jxJ0Wc', 'DNDYYHsypZg', '8BD6w5wELRo']
+selection = json.loads((root / 'selection.json').read_text())
+assert [v['id'] for v in selection['selected_videos']] == expected
+snapshot_time = datetime.datetime.fromisoformat(selection['retrieved_at_utc'])
+publications = []
+packets = []
+images = []
+for i, video_id in enumerate(expected, 1):
+    folder = root / f'{i:02}-{video_id}'
+    source = json.loads((folder / 'source.json').read_text())
+    assert source['video_id'] == video_id
+    assert source['url'] == f'https://www.youtube.com/watch?v={video_id}'
+    assert source['channel_id'] == 'UC_x36zCEGilGpB1m-V4gmjg'
+    listed_duration = selection['selected_videos'][i - 1]['duration']
+    if source['duration_seconds'] != listed_duration:
+        assert video_id == '8BD6w5wELRo'
+        assert source['duration_seconds'] == 1568 and listed_duration == 1569
+        assert source.get('duration_note'), 'Document the channel/watch-page discrepancy'
+    published = datetime.datetime.fromisoformat(source['published_at'].replace('Z', '+00:00'))
+    assert published.tzinfo is not None
+    assert published <= snapshot_time
+    publications.append(published)
+    notes = (folder / 'notes.md').read_text()
+    assert video_id in notes
+    assert 'transcript' in notes.lower()
+    assert len(source['frames']) == 3
+    for frame in source['frames']:
+        path = folder / frame['file']
+        assert path.resolve().is_relative_to(folder.resolve())
+        assert 0 <= frame['timestamp_seconds'] < source['duration_seconds']
+        assert len(frame['caption']) > 20
+        assert frame['file'] in notes
+        assert path.read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'json', str(path)],
+            capture_output=True, text=True, check=True, timeout=20)
+        size = json.loads(result.stdout)['streams'][0]
+        assert size['width'] >= 320 and size['height'] >= 180
+        assert size == {k: frame[k] for k in ('width', 'height')}
+        images.append({'path': str(path.relative_to(root)), **size})
+    packets.append({
+        'video_id': video_id,
+        'title': source['title'],
+        'published_at': source['published_at'],
+        'duration_seconds': source['duration_seconds'],
+        'notes': str((folder / 'notes.md').relative_to(root)),
+        'source': str((folder / 'source.json').relative_to(root)),
+        'captions_status': source['captions_status'],
+        'frame_count': len(source['frames']),
+    })
+assert publications == sorted(publications, reverse=True)
+for notes_path in root.rglob('*.md'):
+    text = notes_path.read_text()
+    for link in re.findall(r'\]\(([^)]+)\)', text):
+        if re.match(r'^[a-zA-Z]+:', link) or link.startswith('#'):
+            continue
+        target = (notes_path.parent / link.split('#')[0]).resolve()
+        assert target.is_relative_to(root.resolve()), f'Link escaped collection: {link}'
+        assert target.exists() or target == (root / 'manifest.json').resolve(), f'Broken local link in {notes_path}: {link}'
+assert len(list(root.rglob('*.png'))) == 18
+for path in root.rglob('*'):
+    if path.is_file():
+        assert path.suffix in {'.md', '.json', '.png'}, f'Unexpected artifact: {path}'
+        assert not any(x in path.name.lower() for x in ['transcript', '.vtt', '.srt', '.json3'])
+        if path.suffix in {'.md', '.json'}:
+            text = path.read_text()
+            assert not re.search(r'AIza[0-9A-Za-z_-]{30,}', text), f'Potential API key in {path}'
+            assert 'googlevideo.com/videoplayback' not in text, f'Signed media URL in {path}'
+            assert '"automatic_captions"' not in text, f'Raw metadata in {path}'
+files = []
+for path in sorted(root.rglob('*')):
+    if path.is_file() and path.name != 'manifest.json':
+        content = path.read_bytes()
+        files.append({'path': str(path.relative_to(root)), 'bytes': len(content), 'sha256': hashlib.sha256(content).hexdigest()})
+report = {
+    'verified_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    'checks': ['exact selected six', 'channel identity', 'newest-first publication dates', 'durations', 'three frame records per video', 'frame timestamps in bounds', 'PNG signatures and ffprobe decoding', 'local Markdown links', 'no transcript or full media artifacts', 'no obvious API key or signed media URL in text'],
+    'packets': packets,
+    'images': images,
+    'files': files,
+    'limitations': ['No full transcripts delivered; original summaries instead.', 'Requested API key was absent; public access used.', 'Six direct 1280x720 frames; twelve 320x180 storyboard samples with approximate timestamps.', 'Image viewing exposed no pixels to the analysis context. OCR-assisted or timestamp-context selection only; full visual review not completed.', 'Videos 5 and 6 use minute-spaced caption samples, with additional focused passages for video 5; later supplemental requests failed.', 'Source claims and automatic captions are not independently fact-checked.', 'Video 6 duration is 1568 seconds in per-video metadata versus 1569 in the channel listing; documented discrepancy preserved.'],
+}
+(root / 'manifest.json').write_text(json.dumps(report, indent=2) + '\n')
+print(json.dumps({'verified_videos': len(packets), 'verified_images': len(images), 'files_in_inventory': len(files), 'total_bytes': sum(f['bytes'] for f in files), 'packets': packets}, indent=2))

@@ -1,0 +1,61 @@
+{
+  "video_id": "8BD6w5wELRo",
+  "title": "OpenRouter State Of Models: Jev, Open-Weights, and Tokenomics",
+  "url": "https://www.youtube.com/watch?v=8BD6w5wELRo",
+  "published_at": "2026-10-05T13:00:15Z",
+  "upload_date": "20261005",
+  "duration_seconds": 1568,
+  "channel": "IndyDevDan",
+  "channel_id": "UC_x36zCEGilGpB1m-V4gmjg",
+  "metadata_method": "Public yt-dlp metadata extraction (--ignore-config --skip-download --dump-single-json); no API key or authenticated cookies. Publication timestamp is the extractor timestamp, expressed as UTC.",
+  "captions_status": "Public English en-orig automatic-caption JSON3 fetched and parsed in memory; minute samples across the video reviewed. Later supplemental caption requests returned HTTP errors and were not retried.",
+  "captions_language": "en-orig",
+  "captions_automatic": true,
+  "frames": [
+    {
+      "file": "frames/01-01m29s.png",
+      "timestamp_seconds": 89,
+      "timestamp_approximate": true,
+      "caption": "A large token-count overlay is detectable in this still. The accompanying discussion uses growth in routed usage to motivate cost/performance economics; the small image is insufficient to validate the displayed number.",
+      "width": 320,
+      "height": 180,
+      "source_method": "Public YouTube sb0 storyboard tile; image fetched and cropped in memory after direct 720p range extraction failed. No video downloaded.",
+      "storyboard_tile_index": 9,
+      "timestamp_basis": "Estimated from storyboard frame rate; allow approximately one 10-second sampling interval of uncertainty.",
+      "inspection_method": "PNG structure/CRC and local native image decoding verified; local macOS Vision OCR attempted. The image-view tool exposed no pixels to the analysis context, so direct visual inspection was unavailable.",
+      "inspection_result": "Local OCR detected a large token-count overlay (the word TOKENS); the numeric value was not reliably recognized."
+    },
+    {
+      "file": "frames/02-06m27s.png",
+      "timestamp_seconds": 387,
+      "timestamp_approximate": true,
+      "caption": "Source-aligned model-selection still. This passage argues for workhorse models that balance speed, cost and capability. Tiny labels are not reliably readable and should not be treated as a comparison table.",
+      "width": 320,
+      "height": 180,
+      "source_method": "Public YouTube sb0 storyboard tile; image fetched and cropped in memory after direct 720p range extraction failed. No video downloaded.",
+      "storyboard_tile_index": 39,
+      "timestamp_basis": "Estimated from storyboard frame rate; allow approximately one 10-second sampling interval of uncertainty.",
+      "inspection_method": "PNG structure/CRC and local native image decoding verified; local macOS Vision OCR attempted. The image-view tool exposed no pixels to the analysis context, so direct visual inspection was unavailable.",
+      "inspection_result": "Tiny text insufficient for reliable OCR; explanatory caption is grounded in the source-time caption passage, not unverified visual details."
+    },
+    {
+      "file": "frames/03-13m14s.png",
+      "timestamp_seconds": 794,
+      "timestamp_approximate": true,
+      "caption": "Source-aligned classifier-experiment still. The surrounding discussion compares agent runs with and without Jev. Any improvement is a presenter-reported result for that workload, not independently benchmarked here.",
+      "width": 320,
+      "height": 180,
+      "source_method": "Public YouTube sb0 storyboard tile; image fetched and cropped in memory after direct 720p range extraction failed. No video downloaded.",
+      "storyboard_tile_index": 80,
+      "timestamp_basis": "Estimated from storyboard frame rate; allow approximately one 10-second sampling interval of uncertainty.",
+      "inspection_method": "PNG structure/CRC and local native image decoding verified; local macOS Vision OCR attempted. The image-view tool exposed no pixels to the analysis context, so direct visual inspection was unavailable.",
+      "inspection_result": "Tiny text insufficient for reliable OCR; explanatory caption is grounded in the source-time caption passage, not unverified visual details."
+    }
+  ],
+  "copyright_transcript_limitation": "Original research commentary and three illustrative stills only. Full transcripts, subtitles, copied descriptions, and audio/video downloads are not included. Caption text is analyzed in memory; automatic transcription may misrecognize names, numbers, and code.",
+  "frame_extraction_limitation": "Direct HTTPS 720p range seeks failed, including a targeted request-header correction. Public 320x180 storyboard stills are provided instead, with approximate timestamps.",
+  "duration_note": "Direct watch metadata reports 1568 seconds (26:08); supplied channel-listing duration was 1569 seconds (26:09). Direct metadata is retained here.",
+  "evidence_scope": "Public metadata; English automatic-caption minute samples spanning the full video; original commentary. No copied description used as spoken evidence.",
+  "inspection_limitation": "Direct pixel viewing was unavailable. PNG validation and local OCR were performed; most small on-screen text was unreadable. Captions identify the surrounding source discussion rather than asserting unverified frame details.",
+  "retrieved_at_date": "2026-11-10"
+}

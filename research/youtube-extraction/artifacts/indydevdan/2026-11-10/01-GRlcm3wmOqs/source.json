@@ -1,0 +1,58 @@
+{
+  "video_id": "GRlcm3wmOqs",
+  "title": "ZERO to RUNNING Software Factory In 16 Minutes (LIQUID Software)",
+  "url": "https://www.youtube.com/watch?v=GRlcm3wmOqs",
+  "published_at": "2026-11-09T14:00:16Z",
+  "upload_date": "20261109",
+  "duration_seconds": 995,
+  "channel": "IndyDevDan",
+  "channel_id": "UC_x36zCEGilGpB1m-V4gmjg",
+  "metadata_method": "Public yt-dlp --ignore-config --skip-download --dump-single-json; parsed in memory; published_at from timestamp 1794232816.",
+  "captions_status": "Public English automatic JSON3 captions successfully fetched and analyzed in memory across the video; repeated adjacent text segments suppressed; no transcript or subtitles retained in this packet.",
+  "captions_language": "en-orig",
+  "captions_automatic": true,
+  "manual_captions_available": false,
+  "chapters_available": false,
+  "selection_position": 1,
+  "selection_source": "https://www.youtube.com/@indydevdan/videos",
+  "retrieved_on": "2026-11-10",
+  "frame_capture_method": "Public storyboard format sb0, individual 320x180 tiles cropped from in-memory sheets. Direct format 136 ffmpeg extraction returned HTTP 403 both without and with the public format User-Agent. No cover thumbnails substituted.",
+  "frame_timestamp_method": "Approximate: zero-based storyboard frame index divided by yt-dlp reported fps 0.10150753768844221. This is not a frame-accurate seek; allow roughly 15 seconds of sampling/alignment uncertainty.",
+  "frame_inspection_method": "Local PNG decoding and macOS Vision OCR, with in-memory upscaling for text recognition. The image-view tool returned success without usable pixels; no complete visual inspection is claimed. Recognized large headings supported selection; no credential-label warning detected, with low-resolution limitations.",
+  "frames": [
+    {
+      "file": "frames/01-0256.png",
+      "timestamp_seconds": 256.14,
+      "timestamp_approximate": true,
+      "storyboard_frame_index": 26,
+      "width": 320,
+      "height": 180,
+      "caption": "Feature-map slide near the initialization discussion. The legible heading illustrates the incremental capability-map presentation, not a finished analytics application; small labels are not reliably readable."
+    },
+    {
+      "file": "frames/02-0384.png",
+      "timestamp_seconds": 384.21,
+      "timestamp_approximate": true,
+      "storyboard_frame_index": 39,
+      "width": 320,
+      "height": 180,
+      "caption": "Configuration feature card accompanying the planning stage. It connects the empty template to the need for a problem-specific plan; the heading is the reliable visual evidence at this resolution."
+    },
+    {
+      "file": "frames/03-0601.png",
+      "timestamp_seconds": 600.94,
+      "timestamp_approximate": true,
+      "storyboard_frame_index": 61,
+      "width": 320,
+      "height": 180,
+      "caption": "Specialized-subagents slide marking the bounded-delegation discussion. Model, task and budget choices are explained in the narration, not inferred from unreadable fine text in the sample."
+    }
+  ],
+  "limitations": [
+    "Automatic captions can misrecognize technical terms and names.",
+    "Only low-resolution public storyboard frames were accessible; timestamps are approximate.",
+    "Image content was inspected through local OCR rather than complete visual review.",
+    "Presenter claims about durability, budgets, autonomy and completed analytics configuration were not independently tested."
+  ],
+  "copyright_transcript_limitation": "Original research commentary and three illustrative stills only; rights remain with their respective holders. Full copyrighted transcripts, subtitles, audio/video downloads, copied descriptions and signed media URLs are not included."
+}

@@ -1,0 +1,340 @@
+{
+  "verified_at_utc": "2026-11-10T22:49:08.174679+00:00",
+  "checks": [
+    "exact selected six",
+    "channel identity",
+    "newest-first publication dates",
+    "durations",
+    "three frame records per video",
+    "frame timestamps in bounds",
+    "PNG signatures and ffprobe decoding",
+    "local Markdown links",
+    "no transcript or full media artifacts",
+    "no obvious API key or signed media URL in text"
+  ],
+  "packets": [
+    {
+      "video_id": "GRlcm3wmOqs",
+      "title": "ZERO to RUNNING Software Factory In 16 Minutes (LIQUID Software)",
+      "published_at": "2026-11-09T14:00:16Z",
+      "duration_seconds": 995,
+      "notes": "01-GRlcm3wmOqs/notes.md",
+      "source": "01-GRlcm3wmOqs/source.json",
+      "captions_status": "Public English automatic JSON3 captions successfully fetched and analyzed in memory across the video; repeated adjacent text segments suppressed; no transcript or subtitles retained in this packet.",
+      "frame_count": 3
+    },
+    {
+      "video_id": "1v7ldJiyH-Y",
+      "title": "Tiny Software Factories: Agentic Engineering DONE WRONG",
+      "published_at": "2026-11-02T14:00:24Z",
+      "duration_seconds": 1116,
+      "notes": "02-1v7ldJiyH-Y/notes.md",
+      "source": "02-1v7ldJiyH-Y/source.json",
+      "captions_status": "Public English automatic JSON3 captions successfully fetched and analyzed in memory across the video; repeated adjacent text segments suppressed; no transcript or subtitles retained in this packet.",
+      "frame_count": 3
+    },
+    {
+      "video_id": "52JX83rGPLc",
+      "title": "ELITE Agentic Engineers Are LEAVING THE LOOP... Here\u2019s why",
+      "published_at": "2026-10-26T13:00:05Z",
+      "duration_seconds": 1546,
+      "notes": "03-52JX83rGPLc/notes.md",
+      "source": "03-52JX83rGPLc/source.json",
+      "captions_status": "available; English automatic captions fetched and analyzed across the full duration; no transcript/subtitles retained in this packet; recognition errors possible",
+      "frame_count": 3
+    },
+    {
+      "video_id": "OLqP8jxJ0Wc",
+      "title": "My Jev Pi Durable Agent CURATES News: HYPE, FACT, or SIGNAL",
+      "published_at": "2026-10-19T13:00:05Z",
+      "duration_seconds": 1354,
+      "notes": "04-OLqP8jxJ0Wc/notes.md",
+      "source": "04-OLqP8jxJ0Wc/source.json",
+      "captions_status": "available; English automatic captions fetched and analyzed across the full duration; no transcript/subtitles retained in this packet; recognition errors possible",
+      "frame_count": 3
+    },
+    {
+      "video_id": "DNDYYHsypZg",
+      "title": "Pi Durable PROACTIVE Agents: Jev Triggers My ON-CALL Pi Agent",
+      "published_at": "2026-10-12T13:00:15Z",
+      "duration_seconds": 2116,
+      "notes": "05-DNDYYHsypZg/notes.md",
+      "source": "05-DNDYYHsypZg/source.json",
+      "captions_status": "Public English en-orig automatic-caption JSON3 fetched and parsed in memory; minute samples across the video reviewed. Later supplemental caption requests returned HTTP errors and were not retried.",
+      "frame_count": 3
+    },
+    {
+      "video_id": "8BD6w5wELRo",
+      "title": "OpenRouter State Of Models: Jev, Open-Weights, and Tokenomics",
+      "published_at": "2026-10-05T13:00:15Z",
+      "duration_seconds": 1568,
+      "notes": "06-8BD6w5wELRo/notes.md",
+      "source": "06-8BD6w5wELRo/source.json",
+      "captions_status": "Public English en-orig automatic-caption JSON3 fetched and parsed in memory; minute samples across the video reviewed. Later supplemental caption requests returned HTTP errors and were not retried.",
+      "frame_count": 3
+    }
+  ],
+  "images": [
+    {
+      "path": "01-GRlcm3wmOqs/frames/01-0256.png",
+      "width": 320,
+      "height": 180
+    },
+    {
+      "path": "01-GRlcm3wmOqs/frames/02-0384.png",
+      "width": 320,
+      "height": 180
+    },
+    {
+      "path": "01-GRlcm3wmOqs/frames/03-0601.png",
+      "width": 320,
+      "height": 180
+    },
+    {
+      "path": "02-1v7ldJiyH-Y/frames/01-0540.png",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "path": "02-1v7ldJiyH-Y/frames/02-0731.png",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "path": "02-1v7ldJiyH-Y/frames/03-1043.png",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "path": "03-52JX83rGPLc/frames/01-02m30s.png",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "path": "03-52JX83rGPLc/frames/02-09m22s.png",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "path": "03-52JX83rGPLc/frames/03-13m25s.png",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "path": "04-OLqP8jxJ0Wc/frames/01-05m26s.png",
+      "width": 320,
+      "height": 180
+    },
+    {
+      "path": "04-OLqP8jxJ0Wc/frames/02-08m53s.png",
+      "width": 320,
+      "height": 180
+    },
+    {
+      "path": "04-OLqP8jxJ0Wc/frames/03-10m22s.png",
+      "width": 320,
+      "height": 180
+    },
+    {
+      "path": "05-DNDYYHsypZg/frames/01-02m59s.png",
+      "width": 320,
+      "height": 180
+    },
+    {
+      "path": "05-DNDYYHsypZg/frames/02-08m56s.png",
+      "width": 320,
+      "height": 180
+    },
+    {
+      "path": "05-DNDYYHsypZg/frames/03-22m01s.png",
+      "width": 320,
+      "height": 180
+    },
+    {
+      "path": "06-8BD6w5wELRo/frames/01-01m29s.png",
+      "width": 320,
+      "height": 180
+    },
+    {
+      "path": "06-8BD6w5wELRo/frames/02-06m27s.png",
+      "width": 320,
+      "height": 180
+    },
+    {
+      "path": "06-8BD6w5wELRo/frames/03-13m14s.png",
+      "width": 320,
+      "height": 180
+    }
+  ],
+  "files": [
+    {
+      "path": "01-GRlcm3wmOqs/frames/01-0256.png",
+      "bytes": 40887,
+      "sha256": "6354c2c0e0aa715206b30697faf96fa49e9306d572ad46bfe63035be3c07e1c3"
+    },
+    {
+      "path": "01-GRlcm3wmOqs/frames/02-0384.png",
+      "bytes": 36168,
+      "sha256": "377fe05f9f94f56a8b07462b16f4276bfcbf21b8c5e191e7b943f20f1720fc00"
+    },
+    {
+      "path": "01-GRlcm3wmOqs/frames/03-0601.png",
+      "bytes": 43161,
+      "sha256": "8c4befac9f66644afbecfe99ccd6c4cfca7ed8260dbb926ba0ca98d51637db77"
+    },
+    {
+      "path": "01-GRlcm3wmOqs/notes.md",
+      "bytes": 7228,
+      "sha256": "66fb33a7d13cce39efcb7b3d06434c06ba78bed274a58074257a27dc0ee34dfa"
+    },
+    {
+      "path": "01-GRlcm3wmOqs/source.json",
+      "bytes": 3729,
+      "sha256": "a81dc56be72dfbfbda709325bfe47f57a5f9f35bba8b4e54fdec401fd35d911e"
+    },
+    {
+      "path": "02-1v7ldJiyH-Y/frames/01-0540.png",
+      "bytes": 380823,
+      "sha256": "cbf2476c59ee4c322b7a4d1ba0e2fcd71a6eaaff314718b37849e38e0e2f37d2"
+    },
+    {
+      "path": "02-1v7ldJiyH-Y/frames/02-0731.png",
+      "bytes": 320300,
+      "sha256": "b66aedd93d9ebf2e76163f96d797962d2ab34cce42c962a2ede061763ddfe68c"
+    },
+    {
+      "path": "02-1v7ldJiyH-Y/frames/03-1043.png",
+      "bytes": 348680,
+      "sha256": "25281e8d4173c197c9f96812473b567df4638284525a6059fb3177ad51bb3445"
+    },
+    {
+      "path": "02-1v7ldJiyH-Y/notes.md",
+      "bytes": 7485,
+      "sha256": "b657e47f59da4de5dcec8cada0b7ab3a638677ffa7b7587db41d289e677a4e63"
+    },
+    {
+      "path": "02-1v7ldJiyH-Y/source.json",
+      "bytes": 3624,
+      "sha256": "a8d16b3f9548a6d170cef9f52608913e1a83f16cc53d8ca75a033f92d4ab266e"
+    },
+    {
+      "path": "03-52JX83rGPLc/frames/01-02m30s.png",
+      "bytes": 192430,
+      "sha256": "21ef9ada26a9603d0fc2eb0ba4b5818402aa40a638930096dcab3681d03db1b4"
+    },
+    {
+      "path": "03-52JX83rGPLc/frames/02-09m22s.png",
+      "bytes": 483167,
+      "sha256": "0ad26de8b811bcb0300f02bdea6bd1c18d9605447812ef0479862e87d14adb36"
+    },
+    {
+      "path": "03-52JX83rGPLc/frames/03-13m25s.png",
+      "bytes": 447065,
+      "sha256": "edf06c99ef1c364832f7c39fd13a58c31ed35051d625e090d97006f9f1bd78c3"
+    },
+    {
+      "path": "03-52JX83rGPLc/notes.md",
+      "bytes": 7030,
+      "sha256": "e35f5565ce989cd1583e4a6f3e8c6c54cbc8fa95a23d19342573c5891bda3311"
+    },
+    {
+      "path": "03-52JX83rGPLc/source.json",
+      "bytes": 2974,
+      "sha256": "f1ff3676c79767922afcd8ca6ecf49c54a7f9a582517ce6448d42a1afccae2e5"
+    },
+    {
+      "path": "04-OLqP8jxJ0Wc/frames/01-05m26s.png",
+      "bytes": 49887,
+      "sha256": "186c9f6dfa2e5e4525cc5bd53e343a3ed882573270fe7d7c1479c4134d9ee86e"
+    },
+    {
+      "path": "04-OLqP8jxJ0Wc/frames/02-08m53s.png",
+      "bytes": 41018,
+      "sha256": "ff76fa7c9f50139910d5c2a30459cd3e7172c8a2516f4166f40bbd2147b92eed"
+    },
+    {
+      "path": "04-OLqP8jxJ0Wc/frames/03-10m22s.png",
+      "bytes": 32286,
+      "sha256": "059d467de2fe66172f228a1df3b89a2a2bb87845269ff402cfe5ff0807362711"
+    },
+    {
+      "path": "04-OLqP8jxJ0Wc/notes.md",
+      "bytes": 7785,
+      "sha256": "9298dcecf9a5163393a7313ae2fae651c2ff2856b6d136cf8fca47d986a131c4"
+    },
+    {
+      "path": "04-OLqP8jxJ0Wc/source.json",
+      "bytes": 3239,
+      "sha256": "13929a99340393e9b686b8beea9a20561eaa3d0f01528e4f65da6bb38ef8e832"
+    },
+    {
+      "path": "05-DNDYYHsypZg/frames/01-02m59s.png",
+      "bytes": 60972,
+      "sha256": "ee8805d3421de905072d0e2be00f2e8c302eba45aba76f26c5683fefa8192f33"
+    },
+    {
+      "path": "05-DNDYYHsypZg/frames/02-08m56s.png",
+      "bytes": 43525,
+      "sha256": "5218293e5b8771e0da9b35b656b7cc017d26ee28645b7b0d8f4ab2df5f2340f6"
+    },
+    {
+      "path": "05-DNDYYHsypZg/frames/03-22m01s.png",
+      "bytes": 41687,
+      "sha256": "b571e63b2f93498661f30ec11957f4e5c34290b44f7985de20a0b14eace27398"
+    },
+    {
+      "path": "05-DNDYYHsypZg/notes.md",
+      "bytes": 6643,
+      "sha256": "9fe6e6d0e331cb0b7e51671c10611f451c8b93d8e812f1a1bd851bcdca282ab4"
+    },
+    {
+      "path": "05-DNDYYHsypZg/source.json",
+      "bytes": 5309,
+      "sha256": "cf6a893777bf6844b1c086a2b0d3bacc379d5c7b32c334b7696cee9d9dff9112"
+    },
+    {
+      "path": "06-8BD6w5wELRo/frames/01-01m29s.png",
+      "bytes": 58917,
+      "sha256": "211bf8d0977d40d6caab1ccccd9c7854b87306d5e20aa86bcf1c36ad642b616b"
+    },
+    {
+      "path": "06-8BD6w5wELRo/frames/02-06m27s.png",
+      "bytes": 49488,
+      "sha256": "5d389960a109e95c8fd270cf9c068e7127ba5c86bf1011198439d95e8ac7f9ef"
+    },
+    {
+      "path": "06-8BD6w5wELRo/frames/03-13m14s.png",
+      "bytes": 52509,
+      "sha256": "e48c5c3380c7179a04cca052ea8164f1c73db8c49d9ced226197ce29fbf85058"
+    },
+    {
+      "path": "06-8BD6w5wELRo/notes.md",
+      "bytes": 7119,
+      "sha256": "732201b4e5d2321a52b6a95d17982dfd5dd99cb4b3bf978050e9c703f9650474"
+    },
+    {
+      "path": "06-8BD6w5wELRo/source.json",
+      "bytes": 5348,
+      "sha256": "6a23a4579d0490fe7904413c073595a4c42ee68b6a1a4395fe1bece1584a4672"
+    },
+    {
+      "path": "README.md",
+      "bytes": 5440,
+      "sha256": "e7bf42237fd4b132d0978634a7256fda1cdfbb7e1fae855a965e5a389190777f"
+    },
+    {
+      "path": "selection.json",
+      "bytes": 2401,
+      "sha256": "b097044f9a87e436a72965988bfa73a16543f0c5256ba891aa4e2b040299c46a"
+    }
+  ],
+  "limitations": [
+    "No full transcripts delivered; original summaries instead.",
+    "Requested API key was absent; public access used.",
+    "Six direct 1280x720 frames; twelve 320x180 storyboard samples with approximate timestamps.",
+    "Image viewing exposed no pixels to the analysis context. OCR-assisted or timestamp-context selection only; full visual review not completed.",
+    "Videos 5 and 6 use minute-spaced caption samples, with additional focused passages for video 5; later supplemental requests failed.",
+    "Source claims and automatic captions are not independently fact-checked.",
+    "Video 6 duration is 1568 seconds in per-video metadata versus 1569 in the channel listing; documented discrepancy preserved."
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "cleaned_at_utc": "2026-11-11T01:55:57.945745+00:00",
+  "removed_processing_files": 120,
+  "removed_processing_bytes": 683521486,
+  "removed_categories": [
+    "downloaded full media and partial downloads",
+    "local full ASR and caption intermediates",
+    "raw OCR and complete speech timelines",
+    "unselected frame candidates",
+    "diagnostic audio and ASR outputs",
+    "temporary Whisper model weights",
+    "temporary safety wrapper"
+  ],
+  "retained": "Original research notes,10 selected720p JPEGs,text-free metrics,evidence records,and unchanged MIT-licensed upstream snapshot.",
+  "installed_system_dependencies": "Tesseract and whisper.cpp plus their Homebrew dependencies remain installed; model weights do not.",
+  "old_os_temporary_location_removed": true
+}

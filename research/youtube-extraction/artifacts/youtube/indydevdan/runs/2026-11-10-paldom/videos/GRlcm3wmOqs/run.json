@@ -1,0 +1,116 @@
+{
+  "video_id": "GRlcm3wmOqs",
+  "title": "ZERO to RUNNING Software Factory In 16 Minutes (LIQUID Software)",
+  "url": "https://www.youtube.com/watch?v=GRlcm3wmOqs",
+  "upstream_commit": "576f5ea880f965091be26320065dd732ea483e50",
+  "started_at_utc": "2026-11-11T01:42:19.646896+00:00",
+  "stages": {
+    "transcript": {
+      "returncode": 0,
+      "seconds": 21.238,
+      "status": "success",
+      "backend": "whisper.cpp",
+      "model": "small.en",
+      "kind": "asr",
+      "track": null,
+      "quality": {
+        "status": "pass",
+        "reasons": [],
+        "metrics": {
+          "effective_chars": 14307,
+          "segments": 34,
+          "chars_per_minute": 862.982,
+          "repetition_ratio": 0.33,
+          "timed_coverage_ratio": 1.0,
+          "max_segment_gap_ms": 0
+        }
+      },
+      "segment_count": 34,
+      "sha256_of_transient_transcript": "6b1e2cd07d980a3bf327775ebf6e25e13ebde64825c2b7522f557a24365ed057",
+      "metadata": {
+        "source": "local-file",
+        "video_id": null,
+        "title": "source",
+        "channel": null,
+        "url": null,
+        "duration_s": 994.714,
+        "upload_date": null,
+        "language": "en",
+        "chapters": [],
+        "transcript_source": "asr",
+        "caption_track": null,
+        "transcript_quality": "pass"
+      }
+    },
+    "media": {
+      "returncode": 0,
+      "seconds": 5.278,
+      "status": "success",
+      "bytes": 44245935,
+      "sha256_of_transient_media": "387cafdd0835e07be786fd10b79efa1e2d5001cdc25286d297cad233d37d3832"
+    },
+    "frames": {
+      "returncode": 0,
+      "seconds": 25.555,
+      "status": "success",
+      "duration_s": 994.714,
+      "strategy": "scene",
+      "scene_threshold": 0.09292,
+      "calibration_confidence": 1.0,
+      "frames_extracted": 78,
+      "frames_kept": 35,
+      "frame_budget": 60,
+      "ocr": true,
+      "shot_count": 35,
+      "shots_with_speech": 35,
+      "shots_with_ocr": 35,
+      "sha256_of_transient_timeline": "c92060fcc882f55b28891843bd261cd8e13bae7360a911c0a7b0444720611929",
+      "diagnostic": "[coverage] dedup left 1 stretch(es) over 120s unobserved; added 1 sampled frame(s)\n"
+    },
+    "captions": {
+      "returncode": 1,
+      "seconds": 8.228,
+      "status": "failed",
+      "diagnostic": "[captions] auto/en rate_limited: ERROR: Unable to download video subtitles for 'en': HTTP Error 429: Too Many Requests\n{\"error\": \"no_captions\", \"message\": \"No usable caption track (rate_limited: ERROR: Unable to download video subtitles for 'en': HTTP Error 429: Too Many Requests) and --no-asr was set.\", \"fix\": \"Re-run without --no-asr to transcribe locally, or wait out the rate limit.\"}\n"
+    },
+    "frames_before_asr": {
+      "returncode": 0,
+      "seconds": 24.83,
+      "status": "success",
+      "duration_s": 994.714,
+      "strategy": "scene",
+      "scene_threshold": 0.09292,
+      "calibration_confidence": 1.0,
+      "frames_extracted": 78,
+      "frames_kept": 35,
+      "frame_budget": 60,
+      "ocr": true,
+      "shot_count": 35,
+      "shots_with_speech": 0,
+      "shots_with_ocr": 35,
+      "sha256_of_transient_timeline": "008d334854b9559bcad0acbbefe92974cb1a6daaf063c31d8db8de10cca1dd66",
+      "diagnostic": "[coverage] dedup left 1 stretch(es) over 120s unobserved; added 1 sampled frame(s)\n"
+    }
+  },
+  "retention": "Raw media, full captions/transcripts, and unselected frames are temporary inputs, not retained deliverables.",
+  "secret_use": "No API key, browser cookies or credential files used. yt-dlp configuration and cache disabled; retries disabled.",
+  "evaluation": {
+    "asr_segment_duration_median_seconds": 30.0,
+    "asr_segment_duration_max_seconds": 30.0,
+    "asr_segment_count": 34,
+    "coarse_timing_warning": "Upstream whisper.cpp invocation emits long, near-30s segments; many short shots inherit the same complete speech segment. Coverage is not word-level alignment.",
+    "original_candidate_count": 35,
+    "gap_fill_samples": 1,
+    "short_shot_intervals_under_two_seconds": 4,
+    "visual_review": "Pixel payload unavailable to the assistant; OCR/source-context review only.",
+    "asr_out_of_media_bounds": [
+      {
+        "index": 33,
+        "start_ms": 990000,
+        "end_ms": 1020000
+      }
+    ],
+    "max_asr_end_overrun_seconds": 25.286,
+    "quality_gate_false_assurance": "Upstream pass does not reject the observed out-of-duration ASR interval."
+  }
+}

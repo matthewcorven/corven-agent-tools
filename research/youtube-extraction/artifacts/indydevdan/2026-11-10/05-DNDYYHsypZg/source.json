@@ -1,0 +1,60 @@
+{
+  "video_id": "DNDYYHsypZg",
+  "title": "Pi Durable PROACTIVE Agents: Jev Triggers My ON-CALL Pi Agent",
+  "url": "https://www.youtube.com/watch?v=DNDYYHsypZg",
+  "published_at": "2026-10-12T13:00:15Z",
+  "upload_date": "20261012",
+  "duration_seconds": 2116,
+  "channel": "IndyDevDan",
+  "channel_id": "UC_x36zCEGilGpB1m-V4gmjg",
+  "metadata_method": "Public yt-dlp metadata extraction (--ignore-config --skip-download --dump-single-json); no API key or authenticated cookies. Publication timestamp is the extractor timestamp, expressed as UTC.",
+  "captions_status": "Public English en-orig automatic-caption JSON3 fetched and parsed in memory; minute samples across the video reviewed. Later supplemental caption requests returned HTTP errors and were not retried.",
+  "captions_language": "en-orig",
+  "captions_automatic": true,
+  "frames": [
+    {
+      "file": "frames/01-02m59s.png",
+      "timestamp_seconds": 179,
+      "timestamp_approximate": true,
+      "caption": "Source-aligned incident-response still. The surrounding demonstration follows detection through investigation to an approval gate in a mock checkout application; it is not proof of a production remediation.",
+      "width": 320,
+      "height": 180,
+      "source_method": "Public YouTube sb0 storyboard tile; image fetched and cropped in memory after direct 720p range extraction failed. No video downloaded.",
+      "storyboard_tile_index": 18,
+      "timestamp_basis": "Estimated from storyboard frame rate; allow approximately one 10-second sampling interval of uncertainty.",
+      "inspection_method": "PNG structure/CRC and local native image decoding verified; local macOS Vision OCR attempted. The image-view tool exposed no pixels to the analysis context, so direct visual inspection was unavailable.",
+      "inspection_result": "Tiny text insufficient for reliable OCR; explanatory caption is grounded in the source-time caption passage, not unverified visual details."
+    },
+    {
+      "file": "frames/02-08m56s.png",
+      "timestamp_seconds": 536,
+      "timestamp_approximate": true,
+      "caption": "Source-aligned shared-state still. The accompanying passage describes persistent, per-device JSON application state readable by another agent session, not unrestricted memory shared across every machine.",
+      "width": 320,
+      "height": 180,
+      "source_method": "Public YouTube sb0 storyboard tile; image fetched and cropped in memory after direct 720p range extraction failed. No video downloaded.",
+      "storyboard_tile_index": 54,
+      "timestamp_basis": "Estimated from storyboard frame rate; allow approximately one 10-second sampling interval of uncertainty.",
+      "inspection_method": "PNG structure/CRC and local native image decoding verified; local macOS Vision OCR attempted. The image-view tool exposed no pixels to the analysis context, so direct visual inspection was unavailable.",
+      "inspection_result": "Tiny text insufficient for reliable OCR; explanatory caption is grounded in the source-time caption passage, not unverified visual details."
+    },
+    {
+      "file": "frames/03-22m01s.png",
+      "timestamp_seconds": 1321,
+      "timestamp_approximate": true,
+      "caption": "Source-aligned extension-control still. The nearby passage contrasts a blocked destructive command with behavior after protection is disabled. This is a configuration demonstration, not a verified security boundary.",
+      "width": 320,
+      "height": 180,
+      "source_method": "Public YouTube sb0 storyboard tile; image fetched and cropped in memory after direct 720p range extraction failed. No video downloaded.",
+      "storyboard_tile_index": 133,
+      "timestamp_basis": "Estimated from storyboard frame rate; allow approximately one 10-second sampling interval of uncertainty.",
+      "inspection_method": "PNG structure/CRC and local native image decoding verified; local macOS Vision OCR attempted. The image-view tool exposed no pixels to the analysis context, so direct visual inspection was unavailable.",
+      "inspection_result": "Tiny text insufficient for reliable OCR; explanatory caption is grounded in the source-time caption passage, not unverified visual details."
+    }
+  ],
+  "copyright_transcript_limitation": "Original research commentary and three illustrative stills only. Full transcripts, subtitles, copied descriptions, and audio/video downloads are not included. Caption text is analyzed in memory; automatic transcription may misrecognize names, numbers, and code.",
+  "frame_extraction_limitation": "Direct HTTPS 720p range seeks failed, including a targeted request-header correction. Public 320x180 storyboard stills are provided instead, with approximate timestamps.",
+  "evidence_scope": "Public metadata; English automatic-caption minute samples spanning the full video; original commentary. No copied description used as spoken evidence. Focused caption passages at 02:10\u201305:56, 07:56\u201314:10 and 20:23\u201323:30 were additionally reviewed.",
+  "inspection_limitation": "Direct pixel viewing was unavailable. PNG validation and local OCR were performed; most small on-screen text was unreadable. Captions identify the surrounding source discussion rather than asserting unverified frame details.",
+  "retrieved_at_date": "2026-11-10"
+}

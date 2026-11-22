@@ -1,0 +1,9 @@
+{
+  "model": "whisper.cpp small.en",
+  "source_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+  "bytes": 487614201,
+  "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+  "verified_against": "Hugging Face repository LFS oid",
+  "storage": "Temporary model file; removed after evaluation.",
+  "purpose": "English local ASR fallback; no audio sent to a model service."
+}
