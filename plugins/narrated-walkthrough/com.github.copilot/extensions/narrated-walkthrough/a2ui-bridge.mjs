@@ -12,6 +12,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { collectLiveTelemetry } from "./live-telemetry.mjs";
 
 export const MAX_BODY_BYTES = 16 * 1024;
 export const DETERMINISTIC_ONLY_ACTIONS = new Set([
@@ -453,6 +454,7 @@ async function inspectPackDir(dir, meta = {}) {
         branch: meta.branch || null,
         commit: meta.commit || null,
         updatedAt: meta.updatedUtc || meta.utc || slidesSt.mtime.toISOString(),
+        worktreePath: meta.worktreePath || null,
         totalDuration,
         sceneCount,
         hasVideo,
@@ -582,8 +584,12 @@ export async function startWalkthroughServer({
     canvasId = "narrated-walkthrough",
     deckDir,
     packsRoot,
+    repoPath,
     title = "Narrated Walkthrough",
     session,
+    telemetryRunner,
+    telemetryPollMs = 45000,
+    telemetryTtlMs = 15000,
 }) {
     const token = randomBytes(24).toString("hex");
     const clients = new Set();
@@ -593,6 +599,7 @@ export async function startWalkthroughServer({
         title,
         deckDir: resolvedDeck,
         packsRoot: resolvedPacksRoot,
+        repoPath: repoPath ? path.resolve(repoPath) : null,
         oversight: "lead",
         lastSceneId: null,
         lastTimestampSec: 0,
@@ -600,7 +607,43 @@ export async function startWalkthroughServer({
         lastMessageId: null,
         recentCallbacks: [],
         liveA2ui: null,
+        telemetryCache: null,
+        telemetryCachedAt: 0,
+        telemetryFingerprint: "",
     };
+
+    async function getTelemetry({ force = false } = {}) {
+        const nowMs = Date.now();
+        if (!force && state.telemetryCache && (nowMs - state.telemetryCachedAt) < telemetryTtlMs) {
+            return state.telemetryCache;
+        }
+        const packs = await discoverArtifactPacks({
+            packsRoot: state.packsRoot,
+            activeDeckDir: state.deckDir,
+        });
+        const activePack = packs.find((p) => p.active) || null;
+        const effectiveRepoPath = state.repoPath || activePack?.worktreePath || null;
+        const tel = await collectLiveTelemetry({
+            repoPath: effectiveRepoPath,
+            deckDir: state.deckDir,
+            packMeta: activePack,
+            ...(telemetryRunner ? { run: telemetryRunner } : {}),
+        });
+        state.telemetryCache = tel;
+        state.telemetryCachedAt = Date.now();
+        const fp = JSON.stringify({
+            headSha: tel.headSha,
+            stats: tel.stats,
+            nodes: tel.nodes.map((n) => [n.id, n.state, n.state_label, n.queue_depth, n.quick_actions]),
+            packFreshness: tel.packFreshness,
+        });
+        const changed = fp !== state.telemetryFingerprint;
+        state.telemetryFingerprint = fp;
+        if (changed) {
+            runtime.broadcast("telemetry_update", tel);
+        }
+        return tel;
+    }
 
     const runtime = {
         instanceId,
@@ -609,6 +652,7 @@ export async function startWalkthroughServer({
         clients,
         state,
         session,
+        getTelemetry,
         get deckDir() {
             return state.deckDir;
         },
@@ -622,6 +666,16 @@ export async function startWalkthroughServer({
             }
         },
     };
+
+    const telemetryPoller = telemetryPollMs > 0
+        ? setInterval(() => {
+            if (clients.size === 0) return;
+            getTelemetry({ force: true }).catch(() => {});
+        }, telemetryPollMs)
+        : null;
+    if (telemetryPoller && typeof telemetryPoller.unref === "function") {
+        telemetryPoller.unref();
+    }
 
     const server = createServer(async (req, res) => {
         try {
@@ -674,6 +728,13 @@ export async function startWalkthroughServer({
                 return;
             }
 
+            if (req.method === "GET" && url.pathname === "/telemetry") {
+                const force = url.searchParams.get("force") === "1";
+                const tel = await getTelemetry({ force });
+                sendJson(res, 200, tel);
+                return;
+            }
+
             if (req.method === "GET" && url.pathname === "/packs") {
                 const packs = await discoverArtifactPacks({
                     packsRoot: state.packsRoot,
@@ -708,6 +769,9 @@ export async function startWalkthroughServer({
                 state.deckDir = matched.deckDir;
                 state.title = matched.title;
                 state.liveA2ui = null;
+                state.telemetryCache = null;
+                state.telemetryCachedAt = 0;
+                state.telemetryFingerprint = "";
                 runtime.broadcast("deck_reloaded", {
                     deckDir: matched.deckDir,
                     packId: matched.id,
@@ -747,6 +811,7 @@ export async function startWalkthroughServer({
                     stateUrl: "/state",
                     packsUrl: "/packs",
                     selectPackUrl: "/packs/select",
+                    telemetryUrl: "/telemetry",
                 });
                 res.writeHead(200, {
                     "content-type": "text/html; charset=utf-8",
@@ -823,6 +888,7 @@ export async function startWalkthroughServer({
         token,
         runtime,
         async close() {
+            if (telemetryPoller) clearInterval(telemetryPoller);
             for (const client of clients) {
                 try {
                     client.end();

@@ -199,14 +199,43 @@ __MERMAID__
                transform-origin:left center; transform:scaleX(0); transition:transform .2s linear; }
   .clock { font-variant-numeric:tabular-nums; font-size:12px; color:var(--dim); min-width:96px; text-align:right; }
 
-  /* Architect HUD (stats, trends, oversight depth, hierarchical agent nodes) */
+  /* Unified A-HUD container: integrated pack tab-header + connected tab-body */
   .hud { background:var(--surface); border:1px solid var(--line); border-radius:14px;
-         padding:18px 22px; margin-bottom:20px; }
+         padding:0; margin-bottom:20px; overflow:hidden; }
   .hud[hidden] { display:none; }
+  .hud-tabstrip { display:flex; align-items:flex-end; gap:6px; flex-wrap:wrap;
+                  background:var(--surface-sub); border-bottom:1px solid var(--line);
+                  padding:10px 16px 0; }
+  .hud-tab { text-align:left; border:1px solid transparent; border-bottom:1px solid transparent;
+             border-radius:10px 10px 0 0; padding:8px 14px 10px; background:transparent;
+             color:var(--dim); display:flex; flex-direction:column; gap:3px; max-width:340px;
+             transition:background-color .15s ease, color .15s ease, border-color .15s ease; }
+  .hud-tab:hover:not(.active):not(:disabled) { background:var(--surface-hover); color:var(--ink);
+                                               border-color:var(--line); border-bottom-color:transparent; }
+  .hud-tab.active { background:var(--surface); color:var(--ink); border-color:var(--line);
+                    border-top:2px solid var(--accent); border-bottom-color:var(--surface);
+                    margin-bottom:-1px; }
+  .hud-tab-top { display:flex; align-items:center; gap:7px; font-size:10px; }
+  .hud-tab-kind { font-weight:700; text-transform:uppercase; letter-spacing:.06em; padding:2px 6px;
+                  border-radius:999px; background:var(--pill-bg); color:var(--dim); }
+  .hud-tab.active .hud-tab-kind { background:var(--accent); color:var(--accent-ink); }
+  .hud-tab-meta { color:var(--dim); white-space:nowrap; }
+  .hud-tab-name { font-size:13px; font-weight:650; line-height:1.25; white-space:nowrap;
+                  overflow:hidden; text-overflow:ellipsis; }
+  .hud-tabtools { margin-left:auto; display:flex; align-items:center; gap:8px; padding-bottom:9px;
+                  flex-wrap:wrap; }
+  .hud-refresh { font-size:11px; padding:4px 10px; border-radius:7px; }
+  .hud-body { padding:18px 22px 20px; }
   .hud-top { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
-             margin-bottom:12px; }
+             margin-bottom:10px; }
   .hud-title { font-size:12px; text-transform:uppercase; letter-spacing:.09em; color:var(--dim);
                font-weight:700; }
+  .hud-prov { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:11px; color:var(--dim);
+              margin:0 0 12px; }
+  .prov-chip { padding:2px 8px; border-radius:999px; background:var(--pill-bg); border:1px solid var(--line);
+               color:var(--dim); font-weight:600; }
+  .prov-chip.live { background:var(--ok-bg); color:var(--ok-ink); border-color:var(--ok-border); }
+  .prov-chip.stale { background:var(--warn-bg); color:var(--warn-ink); border-color:var(--warn-border); }
   .hud-summary { font-size:14px; color:var(--ink); margin:0 0 14px; }
   .oversight { display:inline-flex; gap:4px; background:var(--pill-bg); padding:3px; border-radius:9px;
                border:1px solid var(--line); }
@@ -245,24 +274,6 @@ __MERMAID__
   .node-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:auto; padding-top:2px; }
   .node-btn { font-size:12px; padding:5px 10px; border-radius:7px; }
   .node-btn.copied { border-color:var(--ok-border); color:var(--ok-ink); background:var(--ok-bg); }
-  .packs-bar { background:var(--surface); border:1px solid var(--line); border-radius:14px;
-               padding:14px 18px; margin-bottom:16px; }
-  .packs-bar[hidden] { display:none; }
-  .packs-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
-                margin-bottom:10px; }
-  .packs-title { font-size:12px; text-transform:uppercase; letter-spacing:.09em; color:var(--dim);
-                 font-weight:700; }
-  .packs-refresh { font-size:11px; padding:4px 9px; border-radius:7px; }
-  .packs-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:8px; }
-  .pack-card { text-align:left; border:1px solid var(--line); border-radius:10px; padding:10px 12px;
-               background:var(--surface-sub); display:flex; flex-direction:column; gap:4px; }
-  .pack-card.active { border-color:var(--accent); background:var(--accent-soft-bg); }
-  .pack-top { display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:11px; }
-  .pack-kind { font-weight:700; text-transform:uppercase; letter-spacing:.05em; padding:2px 6px;
-               border-radius:999px; background:var(--pill-bg); color:var(--dim); }
-  .pack-card.active .pack-kind { background:var(--accent); color:var(--accent-ink); }
-  .pack-name { font-size:13px; font-weight:650; color:var(--ink); line-height:1.3; }
-  .pack-meta { font-size:11px; color:var(--dim); }
   .hint.is-live-chat { color:var(--accent-soft-ink); font-weight:600; }
   .hud-artifacts { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; padding-top:10px;
                    border-top:1px solid var(--line); }
@@ -357,7 +368,6 @@ __MERMAID__
     <div class="track" id="full-track"><i id="fill"></i></div>
     <div class="clock" id="clock">0:00 / 0:00</div>
   </div>
-  <section class="packs-bar" id="packs-bar" aria-label="Agent artifact packs landscape" hidden></section>
   <section class="hud" id="hud" aria-label="Architect oversight HUD" hidden></section>
   <div id="slides"></div>
   <section class="ask" id="ask" aria-label="A2UI action surface" hidden></section>
@@ -456,6 +466,8 @@ let liveA2uiOverride = null;
 let bridgeAgentStatus = 'standalone';
 let bridgeSource = null;
 let discoveredPacks = [];
+let liveTelemetry = null;
+let telemetryLoading = false;
 let liveChatTarget = null;
 const DEFAULT_FOOTER_HINT = 'Space = play/pause · ←/→ = previous/next scene · briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat';
 const BRIDGE = (typeof window.__WALKTHROUGH_BRIDGE__ === 'object' && window.__WALKTHROUGH_BRIDGE__) ? window.__WALKTHROUGH_BRIDGE__ : null;
@@ -485,50 +497,11 @@ function formatPackKind(kind) {
   return 'Walkthrough';
 }
 
-function renderPacksBar() {
-  const host = $('packs-bar');
-  if (!host || !BRIDGE || !discoveredPacks.length) {
-    if (host) host.hidden = true;
-    return;
-  }
-  host.innerHTML =
-    '<div class="packs-head">' +
-      '<span class="packs-title">A-HUD Landscape &middot; Agent Artifact Packs (' + discoveredPacks.length + ')</span>' +
-      '<button type="button" class="packs-refresh" id="packs-refresh-btn">Refresh packs</button>' +
-    '</div>' +
-    '<div class="packs-grid">' +
-      discoveredPacks.map((p) => {
-        const dur = typeof p.totalDuration === 'number' ? fmt(p.totalDuration) : '';
-        const metaParts = [p.producer, p.sceneCount ? p.sceneCount + ' scenes' : '', dur, p.issue ? '#' + p.issue : ''].filter(Boolean);
-        return '<button type="button" class="pack-card' + (p.active ? ' active' : '') + '" data-pack-dir="' + esc(p.deckDir) + '" data-pack-id="' + esc(p.id) + '">' +
-          '<div class="pack-top"><span class="pack-kind">' + esc(formatPackKind(p.kind)) + '</span>' +
-          '<span>' + (p.active ? 'Viewing' : (p.hasVideo ? 'Video + Deck' : 'Open pack')) + '</span></div>' +
-          '<div class="pack-name">' + esc(p.title) + '</div>' +
-          '<div class="pack-meta">' + esc(metaParts.join(' · ')) + '</div>' +
-        '</button>';
-      }).join('') +
-    '</div>';
-  host.hidden = false;
-
-  const refBtn = $('packs-refresh-btn');
-  if (refBtn) refBtn.onclick = () => loadPacks();
-  host.querySelectorAll('button[data-pack-dir]').forEach((b) => {
-    b.onclick = async () => {
-      if (b.classList.contains('active') || !BRIDGE.selectPackUrl) return;
-      b.disabled = true;
-      try {
-        const resp = await fetch(BRIDGE.selectPackUrl, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-canvas-token': BRIDGE.token },
-          body: JSON.stringify({ deckDir: b.dataset.packDir, id: b.dataset.packId }),
-        });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        window.location.reload();
-      } catch (e) {
-        b.disabled = false;
-      }
-    };
-  });
+function formatClockTime(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch { return iso; }
 }
 
 async function loadPacks() {
@@ -539,10 +512,29 @@ async function loadPacks() {
     const data = await resp.json();
     if (Array.isArray(data.packs)) {
       discoveredPacks = data.packs;
-      renderPacksBar();
+      renderHud();
       syncStickyMedia();
     }
   } catch (e) {}
+}
+
+async function loadTelemetry(force) {
+  if (!BRIDGE || !BRIDGE.telemetryUrl) return;
+  telemetryLoading = true;
+  renderHud();
+  try {
+    const url = BRIDGE.telemetryUrl + (force ? '?force=1' : '');
+    const resp = await fetch(url, { cache: 'no-store' });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data && data.ok) {
+      liveTelemetry = data;
+    }
+  } catch (e) {} finally {
+    telemetryLoading = false;
+    renderHud();
+    syncStickyMedia();
+  }
 }
 
 function activeSceneId() {
@@ -634,6 +626,16 @@ function connectBridgeEvents() {
       if (Array.isArray(msg.messages) && msg.messages.length) {
         liveA2uiOverride = msg;
         renderAsk();
+      }
+    } catch (e) {}
+  });
+  bridgeSource.addEventListener('telemetry_update', (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg && msg.ok) {
+        liveTelemetry = msg;
+        renderHud();
+        syncStickyMedia();
       }
     } catch (e) {}
   });
@@ -753,66 +755,143 @@ if (window.matchMedia) {
 }
 
 function renderHud() {
-  const h = DATA.hud;
+  const h = DATA.hud || {};
   const host = $('hud');
-  if (!h || !host) return;
-  const stats = h.stats || [];
-  const allNodes = h.nodes || [];
+  if (!host) return;
+  if (!BRIDGE && !DATA.hud) return;
+
+  // In live Copilot Extension Canvas mode, stats/nodes/artifacts come strictly from
+  // deterministic live telemetry (never stale authored numbers from timeline.json).
+  const useLive = Boolean(BRIDGE);
+  const stats = useLive ? (liveTelemetry ? (liveTelemetry.stats || []) : []) : (h.stats || []);
+  const allNodes = useLive ? (liveTelemetry ? (liveTelemetry.nodes || []) : []) : (h.nodes || []);
+  const artifacts = useLive ? (liveTelemetry ? (liveTelemetry.artifacts || []) : []) : (h.artifacts || []);
+
   const visibleNodes = hudOversight === 'executive'
-    ? allNodes.filter((n) => n.level === 'lead' || n.level === 'video')
+    ? allNodes.filter((n) => n.level === 'lead' || n.level === 'video' || n.state === 'bottleneck')
     : allNodes;
-  const artifacts = h.artifacts || [];
+
+  // Integrated tab-header strip inside the same .hud container
+  const tabsHtml = (useLive && discoveredPacks.length)
+    ? '<div class="hud-tabstrip" role="tablist" aria-label="Agent artifact packs">' +
+        discoveredPacks.map((p) => {
+          const dur = typeof p.totalDuration === 'number' ? fmt(p.totalDuration) : '';
+          const meta = [p.sceneCount ? p.sceneCount + ' scenes' : '', dur, p.issue ? '#' + p.issue : ''].filter(Boolean).join(' · ');
+          return '<button type="button" role="tab" aria-selected="' + (p.active ? 'true' : 'false') + '" class="hud-tab' + (p.active ? ' active' : '') + '" data-pack-dir="' + esc(p.deckDir) + '" data-pack-id="' + esc(p.id) + '">' +
+            '<div class="hud-tab-top"><span class="hud-tab-kind">' + esc(formatPackKind(p.kind)) + '</span><span class="hud-tab-meta">' + esc(meta) + '</span></div>' +
+            '<div class="hud-tab-name">' + esc(p.title) + '</div>' +
+          '</button>';
+        }).join('') +
+        '<div class="hud-tabtools">' +
+          '<span class="bridge-pill" data-bridge-pill>Live Copilot Bridge &middot; Ready</span>' +
+          '<button type="button" class="hud-refresh" id="hud-refresh-btn"' + (telemetryLoading ? ' disabled' : '') + '>' + (telemetryLoading ? 'Refreshing…' : 'Refresh live') + '</button>' +
+        '</div>' +
+      '</div>'
+    : (useLive
+      ? '<div class="hud-tabstrip"><span class="hud-title" style="padding-bottom:10px;">A-HUD &middot; Live Landscape</span>' +
+          '<div class="hud-tabtools">' +
+            '<span class="bridge-pill" data-bridge-pill>Live Copilot Bridge &middot; Ready</span>' +
+            '<button type="button" class="hud-refresh" id="hud-refresh-btn"' + (telemetryLoading ? ' disabled' : '') + '>' + (telemetryLoading ? 'Refreshing…' : 'Refresh live') + '</button>' +
+          '</div></div>'
+      : '');
+
+  let provHtml = '';
+  if (useLive) {
+    if (liveTelemetry) {
+      const f = liveTelemetry.packFreshness || {};
+      const chips = [
+        '<span class="prov-chip live">Live deterministic &middot; ' + esc(formatClockTime(liveTelemetry.measuredAt)) + '</span>',
+        liveTelemetry.branch && liveTelemetry.headSha
+          ? '<span class="prov-chip">' + esc(liveTelemetry.branch + ' @ ' + liveTelemetry.headSha) + '</span>'
+          : '',
+        f.stale && f.packCommit
+          ? '<span class="prov-chip stale">Pack recorded @ ' + esc(f.packCommit.slice(0, 8)) + ' (repo moved)</span>'
+          : '',
+        liveTelemetry.sources && liveTelemetry.sources.length
+          ? '<span class="prov-chip">Sources: ' + esc(liveTelemetry.sources.join(', ')) + '</span>'
+          : '',
+      ].filter(Boolean);
+      provHtml = '<div class="hud-prov">' + chips.join('') + '</div>';
+    } else {
+      provHtml = '<div class="hud-prov"><span class="prov-chip">Measuring live repo, queue, PR, and artifact telemetry…</span></div>';
+    }
+  } else {
+    provHtml = '<div class="hud-prov"><span class="prov-chip">Offline pack snapshot (open in Copilot Extension Canvas for live telemetry)</span></div>';
+  }
 
   host.innerHTML =
-    '<div class="hud-top">' +
-      '<span class="hud-title">Architect HUD &middot; Oversight &amp; Agent Routing</span>' +
-      (BRIDGE ? '<span class="bridge-pill" data-bridge-pill>Live Copilot Bridge &middot; Ready</span>' : '') +
-      '<div class="oversight" role="tablist" aria-label="Oversight depth">' +
-        ['executive', 'lead', 'full'].map((lvl) =>
-          '<button type="button" data-oversight="' + lvl + '" class="' + (hudOversight === lvl ? 'on' : '') + '">' +
-          (lvl === 'executive' ? 'Executive' : lvl === 'lead' ? 'Lead & Nodes' : 'Full Trace') + '</button>'
-        ).join('') +
-      '</div>' +
-    '</div>' +
-    (h.summary ? '<p class="hud-summary">' + esc(h.summary) + '</p>' : '') +
-    (stats.length ? '<div class="hud-stats">' + stats.map((st) =>
-      '<div class="stat-card"><div class="stat-label">' + esc(st.label) + '</div>' +
-      '<div class="stat-val">' + esc(st.value) + '</div>' +
-      (st.trend ? '<span class="stat-trend ' + esc(st.tone || '') + '">' + esc(st.trend) + '</span>' : '') +
-      '</div>'
-    ).join('') + '</div>' : '') +
-    (visibleNodes.length ? '<div class="hud-nodes">' + visibleNodes.map((n) => {
-      const stCls = n.state ? ('state-' + esc(n.state)) : '';
-      const qBadge = typeof n.queue_depth === 'number' ? (' · queue ' + n.queue_depth) : '';
-      const statePill = (n.state || n.state_label)
-        ? '<span class="node-state ' + esc(n.state || '') + '">' + esc((n.state_label || n.state) + qBadge) + '</span>'
-        : '';
-      const quickBtns = Array.isArray(n.quick_actions)
-        ? n.quick_actions.map((qa, qi) =>
-            '<button type="button" class="node-btn" data-node-quick="' + esc(n.id) + '" data-quick-idx="' + qi + '">' + esc(qa.label) + '</button>'
-          ).join('')
-        : '';
-      return '<div class="node-card ' + esc(n.level || '') + ' ' + stCls + '" data-node-id="' + esc(n.id) + '">' +
-        '<div class="node-head"><span class="node-name">' + esc(n.name) + '</span>' +
-        '<span class="node-role">' + esc(n.role) + '</span></div>' +
-        statePill +
-        '<p class="node-desc">' + esc(n.summary) + '</p>' +
-        '<div class="node-actions">' +
-          '<button type="button" class="node-btn" data-chat-node="' + esc(n.id) + '">Chat with ' + esc(n.name) + '</button>' +
-          quickBtns +
+    tabsHtml +
+    '<div class="hud-body" role="tabpanel">' +
+      '<div class="hud-top">' +
+        '<span class="hud-title">Architect HUD &middot; Oversight &amp; Agent Routing</span>' +
+        '<div class="oversight" role="tablist" aria-label="Oversight depth">' +
+          ['executive', 'lead', 'full'].map((lvl) =>
+            '<button type="button" data-oversight="' + lvl + '" class="' + (hudOversight === lvl ? 'on' : '') + '">' +
+            (lvl === 'executive' ? 'Executive' : lvl === 'lead' ? 'Lead & Nodes' : 'Full Trace') + '</button>'
+          ).join('') +
         '</div>' +
-      '</div>';
-    }).join('') + '</div>' : '') +
-    (hudOversight === 'full' && artifacts.length ? '<div class="hud-artifacts">' + artifacts.map((a) => {
-      const href = safeUrl(a.url);
-      return href
-        ? '<a class="hud-link" href="' + esc(href) + '" target="_blank" rel="noopener noreferrer">' + esc(a.label) + '</a>'
-        : '<span class="hud-link">' + esc(a.label) + '</span>';
-    }).join('') + '</div>' : '') +
-    '<div class="hud-status" id="hud-status" role="status"></div>';
+      '</div>' +
+      provHtml +
+      (h.summary ? '<p class="hud-summary">' + esc(h.summary) + '</p>' : '') +
+      (stats.length ? '<div class="hud-stats">' + stats.map((st) =>
+        '<div class="stat-card"><div class="stat-label">' + esc(st.label) + '</div>' +
+        '<div class="stat-val">' + esc(st.value) + '</div>' +
+        (st.trend ? '<span class="stat-trend ' + esc(st.tone || '') + '">' + esc(st.trend) + '</span>' : '') +
+        '</div>'
+      ).join('') + '</div>' : '') +
+      (visibleNodes.length ? '<div class="hud-nodes">' + visibleNodes.map((n) => {
+        const stCls = n.state ? ('state-' + esc(n.state)) : '';
+        const statePill = (n.state || n.state_label)
+          ? '<span class="node-state ' + esc(n.state || '') + '">' + esc(n.state_label || n.state) + '</span>'
+          : '';
+        const quickBtns = Array.isArray(n.quick_actions)
+          ? n.quick_actions.map((qa, qi) =>
+              '<button type="button" class="node-btn" data-node-quick="' + esc(n.id) + '" data-quick-idx="' + qi + '">' + esc(qa.label) + '</button>'
+            ).join('')
+          : '';
+        return '<div class="node-card ' + esc(n.level || '') + ' ' + stCls + '" data-node-id="' + esc(n.id) + '">' +
+          '<div class="node-head"><span class="node-name">' + esc(n.name) + '</span>' +
+          '<span class="node-role">' + esc(n.role) + '</span></div>' +
+          statePill +
+          '<p class="node-desc">' + esc(n.summary) + '</p>' +
+          '<div class="node-actions">' +
+            '<button type="button" class="node-btn" data-chat-node="' + esc(n.id) + '">Chat with ' + esc(n.name) + '</button>' +
+            quickBtns +
+          '</div>' +
+        '</div>';
+      }).join('') + '</div>' : '') +
+      (hudOversight === 'full' && artifacts.length ? '<div class="hud-artifacts">' + artifacts.map((a) => {
+        const href = safeUrl(a.url);
+        return href
+          ? '<a class="hud-link" href="' + esc(href) + '" target="_blank" rel="noopener noreferrer">' + esc(a.label) + '</a>'
+          : '<span class="hud-link">' + esc(a.label) + '</span>';
+      }).join('') + '</div>' : '') +
+      '<div class="hud-status" id="hud-status" role="status"></div>' +
+    '</div>';
 
   host.hidden = false;
   if (BRIDGE) renderBridgePill(bridgeAgentStatus === 'standalone' ? 'ready' : bridgeAgentStatus);
+
+  const refBtn = $('hud-refresh-btn');
+  if (refBtn) refBtn.onclick = () => { loadPacks(); loadTelemetry(true); };
+
+  host.querySelectorAll('button[data-pack-dir]').forEach((b) => {
+    b.onclick = async () => {
+      if (b.classList.contains('active') || !BRIDGE || !BRIDGE.selectPackUrl) return;
+      b.disabled = true;
+      try {
+        const resp = await fetch(BRIDGE.selectPackUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-canvas-token': BRIDGE.token },
+          body: JSON.stringify({ deckDir: b.dataset.packDir, id: b.dataset.packId }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        window.location.reload();
+      } catch (e) {
+        b.disabled = false;
+      }
+    };
+  });
   host.querySelectorAll('button[data-oversight]').forEach((b) => {
     b.onclick = () => {
       hudOversight = b.dataset.oversight;
@@ -1228,6 +1307,7 @@ window.state = () => ({
   bridgeConnected: Boolean(BRIDGE),
   bridgeAgentStatus,
   packCount: discoveredPacks.length,
+  liveTelemetryMeasuredAt: liveTelemetry ? liveTelemetry.measuredAt : null,
   liveChatTarget,
   lastA2uiAction,
 });
@@ -1237,6 +1317,7 @@ renderHud();
 renderAsk();
 connectBridgeEvents();
 loadPacks();
+loadTelemetry(false);
 updateVoiceMeta();
 updatePlayButtons();
 tick();

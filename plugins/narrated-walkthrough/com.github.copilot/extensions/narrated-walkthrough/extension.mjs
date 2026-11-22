@@ -168,6 +168,22 @@ session = await joinSession({
                     },
                 },
                 {
+                    name: "get_telemetry",
+                    description:
+                        "Collect fresh 100% deterministic live telemetry (Squad roster, issue-work-queue per-member counts, live PRs, artifact budget, git freshness) for the open A-HUD canvas.",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            force: { type: "boolean", description: "Bypass short TTL cache and re-probe live sources immediately." },
+                        },
+                        additionalProperties: false,
+                    },
+                    handler: async (ctx) => {
+                        const entry = getInstance(ctx.instanceId);
+                        return await entry.runtime.getTelemetry({ force: Boolean(ctx.input?.force) });
+                    },
+                },
+                {
                     name: "get_state",
                     description:
                         "Inspect the open Narrated Walkthrough canvas: active deckDir, packsRoot, connected SSE clients, agent status, and recent A2UI callbacks.",
@@ -198,6 +214,7 @@ session = await joinSession({
                 const packsRoot = typeof ctx.input?.packsRoot === "string" && path.isAbsolute(ctx.input.packsRoot)
                     ? path.resolve(ctx.input.packsRoot)
                     : await inferPacksRoot(resolved);
+                const repoPath = ctx.session?.workingDirectory || process.cwd();
                 let entry = instances.get(ctx.instanceId);
                 if (!entry) {
                     entry = await startWalkthroughServer({
@@ -205,6 +222,7 @@ session = await joinSession({
                         canvasId: ctx.canvasId,
                         deckDir: resolved,
                         packsRoot,
+                        repoPath,
                         title: displayTitle,
                         session,
                     });
@@ -212,7 +230,10 @@ session = await joinSession({
                 } else {
                     entry.runtime.state.deckDir = resolved;
                     entry.runtime.state.packsRoot = packsRoot;
+                    entry.runtime.state.repoPath = repoPath;
                     entry.runtime.state.title = displayTitle;
+                    entry.runtime.state.telemetryCache = null;
+                    entry.runtime.state.telemetryCachedAt = 0;
                     entry.runtime.session = session;
                     entry.runtime.broadcast("deck_reloaded", {
                         deckDir: resolved,
@@ -223,7 +244,7 @@ session = await joinSession({
                 return {
                     url: entry.url,
                     title: displayTitle,
-                    status: "A-HUD live · packs & A2UI ready",
+                    status: "A-HUD live · deterministic telemetry ready",
                 };
             },
             onClose: async (ctx) => {

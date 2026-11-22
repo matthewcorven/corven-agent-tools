@@ -489,7 +489,8 @@ class PackageTests(unittest.TestCase):
             'connectBridgeEvents',
             'data-color-mode="dark"',
             'detectDarkMode',
-            'id="packs-bar"',
+            'hud-tabstrip',
+            'loadTelemetry',
             'pauseForLiveChat',
             'briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat',
         ):
@@ -499,13 +500,16 @@ class PackageTests(unittest.TestCase):
         ext_dir = PLUGIN / "com.github.copilot" / "extensions" / "narrated-walkthrough"
         ext_entry = ext_dir / "extension.mjs"
         bridge_mod = ext_dir / "a2ui-bridge.mjs"
+        telemetry_mod = ext_dir / "live-telemetry.mjs"
         self.assertTrue(ext_entry.is_file(), "extension.mjs must ship with the plugin")
         self.assertTrue(bridge_mod.is_file(), "a2ui-bridge.mjs must ship with the plugin")
+        self.assertTrue(telemetry_mod.is_file(), "live-telemetry.mjs must ship with the plugin")
         ext_src = ext_entry.read_text(encoding="utf-8")
         bridge_src = bridge_mod.read_text(encoding="utf-8")
         self.assertIn('id: "narrated-walkthrough"', ext_src)
         self.assertIn("createCanvas", ext_src)
         self.assertIn("push_a2ui", ext_src)
+        self.assertIn("get_telemetry", ext_src)
         self.assertIn("session.send", bridge_src)
         self.assertIn("x-canvas-token", bridge_src)
 
