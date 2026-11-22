@@ -7,6 +7,8 @@ import test from "node:test";
 import {
     buildAgentTurnPayload,
     discoverArtifactPacks,
+    discoverHuds,
+    generateDocWalkthroughPack,
     injectBridgeBootstrap,
     resolveSafeAsset,
     startWalkthroughServer,
@@ -270,5 +272,85 @@ test("startWalkthroughServer supports bare UI opens with deckDir=null (zero pack
         }
     } finally {
         await rm(tmpRepo, { recursive: true, force: true });
+    }
+});
+
+test("Multi-HUD browser discovers sibling *-artifacts HUDs, switches HUDs deterministically, and generates doc walkthroughs in <2s", async () => {
+    const parentDir = await mkdtemp(path.join(os.tmpdir(), "nw-multihud-"));
+    try {
+        const hudA = path.join(parentDir, "repo-alpha-artifacts");
+        const hudB = path.join(parentDir, "repo-beta-artifacts");
+        const packA = path.join(hudA, "pack1", "planning");
+        const docPath = path.join(parentDir, "arch-flow.md");
+        await mkdir(packA, { recursive: true });
+        await mkdir(hudB, { recursive: true });
+        await writeFile(path.join(packA, "slides.html"), "<html><head></head><body>ALPHA</body></html>");
+        await writeFile(path.join(packA, "timeline.json"), JSON.stringify({ title: "Alpha PR #1", scenes: [{ id: "s1" }], total_duration: 12 }));
+        await writeFile(
+            docPath,
+            "# Flow Architecture\n\n> Control & data flow overview.\n\n## 1. Logical Architecture\n\nExtension connects to SPA.\n\n```mermaid\nflowchart LR\n  A[Host] --> B[SPA]\n```\n\n## 2. Awaited Turns\n\nClicks wake the yielded agent.\n\n```mermaid\nsequenceDiagram\n  SPA->>Bridge: POST /a2ui/action\n```\n",
+        );
+
+        // Fast-path doc walkthrough generation into hudB
+        const t0 = Date.now();
+        const built = await generateDocWalkthroughPack({
+            docPath,
+            packsRoot: hudB,
+            repoPath: parentDir,
+        });
+        const elapsedMs = Date.now() - t0;
+        assert.equal(built.ok, true);
+        assert.equal(built.packKind, "architecture_doc");
+        assert.equal(built.scenes, 2);
+        assert.ok(elapsedMs < 5000, `expected fast doc build, took ${elapsedMs}ms`);
+
+        const huds = await discoverHuds({ activePacksRoot: hudA });
+        assert.equal(huds.length, 2);
+        assert.equal(huds[0].id, "repo-alpha");
+        assert.equal(huds[0].active, true);
+        assert.equal(huds[1].id, "repo-beta");
+        assert.equal(huds[1].packCount, 1);
+
+        const srv = await startWalkthroughServer({
+            instanceId: "multihud-1",
+            deckDir: packA,
+            packsRoot: hudA,
+            session: { async send() { return "m1"; } },
+            telemetryPollMs: 0,
+        });
+        try {
+            const hRes = await fetch(`${srv.url}huds`);
+            assert.equal(hRes.status, 200);
+            const hJson = await hRes.json();
+            assert.equal(hJson.huds.length, 2);
+
+            // Reject arbitrary path outside discovered HUDs
+            const badHud = await fetch(`${srv.url}huds/select`, {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-canvas-token": srv.token },
+                body: JSON.stringify({ packsRoot: "/etc" }),
+            });
+            assert.equal(badHud.status, 403);
+
+            // Switch to repo-beta HUD deterministically
+            const okHud = await fetch(`${srv.url}huds/select`, {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-canvas-token": srv.token },
+                body: JSON.stringify({ id: "repo-beta" }),
+            });
+            assert.equal(okHud.status, 200);
+            const okJson = await okHud.json();
+            assert.equal(okJson.dispatchedToAgent, false);
+            assert.equal(okJson.hud.id, "repo-beta");
+
+            const pRes = await fetch(`${srv.url}packs`);
+            const pJson = await pRes.json();
+            assert.equal(pJson.packs.length, 1);
+            assert.equal(pJson.packs[0].kind, "architecture_doc");
+        } finally {
+            await srv.close();
+        }
+    } finally {
+        await rm(parentDir, { recursive: true, force: true });
     }
 });

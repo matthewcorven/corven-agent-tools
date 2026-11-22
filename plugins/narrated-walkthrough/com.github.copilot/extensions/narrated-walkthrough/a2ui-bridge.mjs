@@ -21,6 +21,7 @@ import { collectLiveTelemetry } from "./live-telemetry.mjs";
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PLAYER_TEMPLATE_PATH = path.resolve(__dirname, "..", "..", "..", "skills", "narrated-walkthrough", "player", "player.html");
+const DOC_BUILDER_PATH = path.resolve(__dirname, "..", "..", "..", "skills", "narrated-walkthrough", "scripts", "doc_to_walkthrough.py");
 
 export const MAX_BODY_BYTES = 16 * 1024;
 export const DETERMINISTIC_ONLY_ACTIONS = new Set([
@@ -471,7 +472,20 @@ function classifyPackKind(spec, title, hudPackKind) {
     const hay = `${spec || ""} ${title || ""}`.toLowerCase();
     if (/\bpr[\s#-]*\d+|\bpull[\s-]?request|\breview\b/.test(hay)) return "pr_review";
     if (/\bstandup\b|\bmorning[\s-]?brief\b|\bdaily\b/.test(hay)) return "standup";
+    if (/\barch(?:itecture)?\b|\bdesign\b|\bdoc(?:ument)?\b|\bflow\b|\bdiagram\b|\badr\b/.test(hay)) return "architecture_doc";
     return "walkthrough";
+}
+
+function normalizeAgentLabel(producer, kind) {
+    const raw = String(producer || "").trim();
+    if (!raw) {
+        if (kind === "pr_review") return "PR Review Agent";
+        if (kind === "standup") return "Morning Standup";
+        if (kind === "architecture_doc") return "Architecture Doc";
+        return "Walkthrough Agent";
+    }
+    // Trim parenthetical timestamps/notes so agent filter stays concise and grouped
+    return raw.replace(/\s*\([^)]*\)\s*$/g, "").trim() || raw;
 }
 
 async function inspectPackDir(dir, meta = {}) {
@@ -489,7 +503,14 @@ async function inspectPackDir(dir, meta = {}) {
         || path.basename(resolved);
     const kind = classifyPackKind(meta.spec, title, tl?.hud?.pack_kind);
     const producer = (typeof tl?.hud?.producer === "string" && tl.hud.producer.trim())
-        || (kind === "pr_review" ? "PR Review Agent" : kind === "standup" ? "Morning Standup Briefer" : "Walkthrough Agent");
+        || (kind === "pr_review"
+            ? "PR Review Agent"
+            : kind === "standup"
+                ? "Morning Standup Briefer"
+                : kind === "architecture_doc"
+                    ? "Architecture Doc Brief"
+                    : "Walkthrough Agent");
+    const agent = normalizeAgentLabel(producer, kind);
     const totalDuration = typeof tl?.total_duration === "number"
         ? tl.total_duration
         : (typeof deck?.total_duration === "number" ? deck.total_duration : null);
@@ -508,6 +529,8 @@ async function inspectPackDir(dir, meta = {}) {
         kind,
         title,
         producer,
+        agent,
+        status: meta.status || "ready",
         spec: meta.spec || "",
         issue: meta.issue ? String(meta.issue) : null,
         branch: meta.branch || null,
@@ -667,6 +690,129 @@ export async function discoverArtifactPacks({ packsRoot, activeDeckDir }) {
     return [...foundByDir.values()]
         .map((p) => ({ ...p, active: activeResolved === p.deckDir }))
         .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+}
+
+/**
+ * Discover all browsable repository HUDs (sibling `<repo>-artifacts/` directories
+ * plus the currently active HUD root) so the Architect can switch across HUDs.
+ */
+export async function discoverHuds({ activePacksRoot, activeRepoPath }) {
+    const byRoot = new Map();
+    const activeRoot = activePacksRoot ? path.resolve(activePacksRoot) : null;
+    const scanParents = new Set();
+    if (activeRoot) scanParents.add(path.dirname(activeRoot));
+    if (activeRepoPath) scanParents.add(path.dirname(path.resolve(activeRepoPath)));
+
+    const registerHud = async (packsRoot, fallbackRepoPath = null) => {
+        const absRoot = path.resolve(packsRoot);
+        if (byRoot.has(absRoot)) return;
+        const base = path.basename(absRoot);
+        const repoName = base.endsWith("-artifacts") ? base.slice(0, -"-artifacts".length) : base;
+        let repoPath = fallbackRepoPath ? path.resolve(fallbackRepoPath) : null;
+        if (!repoPath) {
+            const siblingRepo = path.join(path.dirname(absRoot), repoName);
+            const rSt = await stat(siblingRepo).catch(() => null);
+            if (rSt && rSt.isDirectory()) repoPath = siblingRepo;
+        }
+        const packs = await discoverArtifactPacks({ packsRoot: absRoot });
+        byRoot.set(absRoot, {
+            id: repoName,
+            name: repoName,
+            packsRoot: absRoot,
+            repoPath,
+            packCount: packs.length,
+            latestUpdatedAt: packs[0]?.updatedAt || null,
+            active: activeRoot === absRoot,
+        });
+    };
+
+    if (activeRoot) {
+        await registerHud(activeRoot, activeRepoPath);
+    }
+
+    for (const parentDir of scanParents) {
+        let entries = [];
+        try {
+            entries = await readdir(parentDir, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+        for (const ent of entries) {
+            if (!ent.isDirectory() || !ent.name.endsWith("-artifacts")) continue;
+            await registerHud(path.join(parentDir, ent.name));
+        }
+    }
+
+    return [...byRoot.values()].sort((a, b) => {
+        if (a.active !== b.active) return a.active ? -1 : 1;
+        return String(b.latestUpdatedAt || "").localeCompare(String(a.latestUpdatedAt || ""))
+            || a.name.localeCompare(b.name);
+    });
+}
+
+/**
+ * Fast-path (< 1s) Markdown + Mermaid -> A-HUD Architecture Doc pack generator.
+ */
+export async function generateDocWalkthroughPack({
+    docPath,
+    packsRoot,
+    repoPath,
+    title,
+    producer = "Architecture Doc Brief",
+    withAudio = false,
+}) {
+    if (typeof docPath !== "string" || !path.isAbsolute(docPath) || !docPath.toLowerCase().endsWith(".md")) {
+        throw new Error("docPath must be an absolute path to a .md file.");
+    }
+    const docSt = await stat(docPath).catch(() => null);
+    if (!docSt || !docSt.isFile()) {
+        throw new Error(`Markdown document not found: ${docPath}`);
+    }
+    const resolvedPacksRoot = packsRoot
+        ? path.resolve(packsRoot)
+        : (await inferArtifactRootFromRepo(repoPath) || `${path.resolve(repoPath || path.dirname(docPath))}-artifacts`);
+
+    const nowIso = new Date().toISOString();
+    const utcCompact = nowIso.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+    const rand = randomBytes(3).toString("hex");
+    const slug = path.basename(docPath, path.extname(docPath)).toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 32);
+    const runId = `${utcCompact}-${rand}`;
+    const runDir = path.join(resolvedPacksRoot, "docs", runId);
+    const outDir = path.join(runDir, "planning");
+
+    const args = [DOC_BUILDER_PATH, "--doc", path.resolve(docPath), "--out-dir", outDir, "--producer", producer];
+    if (title) args.push("--title", title);
+    if (withAudio) args.push("--with-audio");
+
+    const { stdout } = await execFileAsync("python3", args, {
+        cwd: repoPath || path.dirname(docPath),
+        timeout: 30000,
+        maxBuffer: 4 * 1024 * 1024,
+    });
+    const parsed = JSON.parse(stdout.trim());
+
+    // Record the newly built doc pack into <packsRoot>/runs.jsonl so A-HUD discovers it immediately
+    const runsIndex = path.join(resolvedPacksRoot, "runs.jsonl");
+    const record = {
+        run: runId,
+        utc: nowIso,
+        updatedUtc: nowIso,
+        phase: "planning",
+        spec: `doc-${slug}`,
+        status: "passed",
+        path: runDir,
+        phasePath: outDir,
+        worktreePath: repoPath ? path.resolve(repoPath) : null,
+        docPath: path.resolve(docPath),
+    };
+    await appendFile(runsIndex, `${JSON.stringify(record)}\n`, "utf8");
+
+    return {
+        ...parsed,
+        runId,
+        packsRoot: resolvedPacksRoot,
+        deckDir: outDir,
+    };
 }
 
 function sendJson(res, status, value) {
@@ -871,6 +1017,63 @@ export async function startWalkthroughServer({
                 return;
             }
 
+            if (req.method === "GET" && url.pathname === "/huds") {
+                const huds = await discoverHuds({
+                    activePacksRoot: state.packsRoot,
+                    activeRepoPath: state.repoPath,
+                });
+                sendJson(res, 200, {
+                    ok: true,
+                    activePacksRoot: state.packsRoot,
+                    activeRepoPath: state.repoPath,
+                    huds,
+                });
+                return;
+            }
+
+            if (req.method === "POST" && url.pathname === "/huds/select") {
+                const provided = req.headers["x-canvas-token"];
+                if (!tokensMatch(token, typeof provided === "string" ? provided : "")) {
+                    sendJson(res, 403, { ok: false, error: "Invalid or missing x-canvas-token." });
+                    return;
+                }
+                const payload = await readJsonBody(req);
+                const wantRoot = typeof payload?.packsRoot === "string" ? path.resolve(payload.packsRoot) : "";
+                const huds = await discoverHuds({
+                    activePacksRoot: state.packsRoot,
+                    activeRepoPath: state.repoPath,
+                });
+                const matched = huds.find((h) => h.packsRoot === wantRoot || (payload?.id && h.id === payload.id));
+                if (!matched) {
+                    sendJson(res, 403, { ok: false, error: "Requested HUD is not in the discovered workspace." });
+                    return;
+                }
+                const hudPacks = await discoverArtifactPacks({ packsRoot: matched.packsRoot });
+                state.packsRoot = matched.packsRoot;
+                state.repoPath = matched.repoPath || state.repoPath;
+                state.deckDir = hudPacks[0]?.deckDir || null;
+                state.title = hudPacks[0]?.title || `A-HUD — ${matched.name}`;
+                state.liveA2ui = null;
+                state.telemetryCache = null;
+                state.telemetryCachedAt = 0;
+                state.telemetryFingerprint = "";
+                state.lastDeterministicResult = null;
+                runtime.broadcast("deck_reloaded", {
+                    packsRoot: state.packsRoot,
+                    deckDir: state.deckDir,
+                    hudId: matched.id,
+                    title: state.title,
+                    timestamp: new Date().toISOString(),
+                });
+                sendJson(res, 200, {
+                    ok: true,
+                    dispatchedToAgent: false,
+                    hud: { ...matched, active: true },
+                    activeDeckDir: state.deckDir,
+                });
+                return;
+            }
+
             if (req.method === "GET" && url.pathname === "/packs") {
                 const packs = await discoverArtifactPacks({
                     packsRoot: state.packsRoot,
@@ -948,6 +1151,8 @@ export async function startWalkthroughServer({
                     stateUrl: "/state",
                     packsUrl: "/packs",
                     selectPackUrl: "/packs/select",
+                    hudsUrl: "/huds",
+                    selectHudUrl: "/huds/select",
                     telemetryUrl: "/telemetry",
                 });
                 res.writeHead(200, {

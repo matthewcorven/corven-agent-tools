@@ -504,6 +504,11 @@ class PackageTests(unittest.TestCase):
             'linkifyGitHubRefs',
             'enhanceDomGitHubRefs',
             'target="_blank" rel="noopener noreferrer"',
+            'id="queue-pane"',
+            'renderQueuePane',
+            'loadHuds',
+            'queue-agent-filter',
+            'queue-sort',
             'briefing audio is pre-generated for exact slide sync; pause or click any agent node anytime for live chat',
         ):
             self.assertIn(token, html, f"player.html missing expected UI hook: {token}")
@@ -524,9 +529,41 @@ class PackageTests(unittest.TestCase):
         self.assertIn("createCanvas", ext_src)
         self.assertIn("push_a2ui", ext_src)
         self.assertIn("get_telemetry", ext_src)
+        self.assertIn("list_huds", ext_src)
+        self.assertIn("generate_doc_walkthrough", ext_src)
         self.assertNotIn('required: ["deckDir"],\n                additionalProperties: false,\n            },\n            actions:', ext_src)
         self.assertIn("session.send", bridge_src)
         self.assertIn("x-canvas-token", bridge_src)
+
+    def test_fast_doc_to_walkthrough_script_and_reference_ship(self):
+        doc_script = SKILL / "scripts" / "doc_to_walkthrough.py"
+        doc_ref = SKILL / "references" / "architecture-doc-walkthrough.md"
+        self.assertTrue(doc_script.is_file(), "doc_to_walkthrough.py must ship")
+        self.assertTrue(doc_ref.is_file(), "architecture-doc-walkthrough.md must ship")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            md = tmp_path / "sample-arch.md"
+            md.write_text(
+                "# Sample Flow\n\n> Summary sentence.\n\n"
+                "## 1. Overview\n\nComponents connect over loopback.\n\n"
+                "```mermaid\nflowchart LR\n  A --> B\n```\n\n"
+                "## 2. Next Steps\n\nChoose what to inspect.\n\n"
+                "```mermaid\nflowchart LR\n  B --> C\n```\n",
+                encoding="utf-8",
+            )
+            out_dir = tmp_path / "out"
+            res = subprocess.run(
+                [sys.executable, str(doc_script), "--doc", str(md), "--out-dir", str(out_dir)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            payload = json.loads(res.stdout.strip())
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["packKind"], "architecture_doc")
+            self.assertEqual(payload["scenes"], 2)
+            self.assertTrue((out_dir / "slides.html").is_file())
+            tl = json.loads((out_dir / "timeline.json").read_text(encoding="utf-8"))
+            self.assertEqual(_shape_errors(tl, json.loads(SCHEMA_PATH.read_text())), [])
 
     def test_hud_and_a2ui_fields_conform_to_closed_schema(self):
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))

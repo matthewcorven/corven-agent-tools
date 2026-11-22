@@ -10,6 +10,8 @@ import path from "node:path";
 import { CanvasError, createCanvas, joinSession } from "@github/copilot-sdk/extension";
 import {
     discoverArtifactPacks,
+    discoverHuds,
+    generateDocWalkthroughPack,
     inferArtifactRootFromRepo,
     inferPacksRoot,
     startWalkthroughServer,
@@ -155,6 +157,78 @@ session = await joinSession({
                             messageCount: messages.length,
                             connectedClients: entry.runtime.clients.size,
                         };
+                    },
+                },
+                {
+                    name: "list_huds",
+                    description:
+                        "List all browsable repository Architect HUDs discovered across sibling *-artifacts roots.",
+                    handler: async (ctx) => {
+                        const entry = getInstance(ctx.instanceId);
+                        const huds = await discoverHuds({
+                            activePacksRoot: entry.runtime.state.packsRoot,
+                            activeRepoPath: entry.runtime.state.repoPath,
+                        });
+                        return {
+                            activePacksRoot: entry.runtime.state.packsRoot,
+                            huds,
+                        };
+                    },
+                },
+                {
+                    name: "generate_doc_walkthrough",
+                    description:
+                        "Built-in fast-path (< 2s): convert a Markdown architecture/design document containing Mermaid diagrams into an A-HUD artifact pack and optionally load it into this open canvas.",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            docPath: {
+                                type: "string",
+                                description: "Absolute path to a Markdown (.md) document with Mermaid diagrams.",
+                            },
+                            title: {
+                                type: "string",
+                                description: "Optional deck title override.",
+                            },
+                            load: {
+                                type: "boolean",
+                                description: "When true (default), immediately switch the open canvas to the newly built doc walkthrough.",
+                            },
+                        },
+                        required: ["docPath"],
+                        additionalProperties: false,
+                    },
+                    handler: async (ctx) => {
+                        const entry = getInstance(ctx.instanceId);
+                        try {
+                            const built = await generateDocWalkthroughPack({
+                                docPath: ctx.input?.docPath,
+                                packsRoot: entry.runtime.state.packsRoot,
+                                repoPath: entry.runtime.state.repoPath,
+                                title: ctx.input?.title,
+                            });
+                            if (ctx.input?.load !== false) {
+                                entry.runtime.state.deckDir = built.deckDir;
+                                entry.runtime.state.packsRoot = built.packsRoot;
+                                entry.runtime.state.title = ctx.input?.title?.trim() || path.basename(ctx.input.docPath, ".md");
+                                entry.runtime.state.liveA2ui = null;
+                                entry.runtime.state.telemetryCache = null;
+                                entry.runtime.state.telemetryCachedAt = 0;
+                                entry.runtime.state.telemetryFingerprint = "";
+                                entry.runtime.broadcast("deck_reloaded", {
+                                    deckDir: built.deckDir,
+                                    runId: built.runId,
+                                    title: entry.runtime.state.title,
+                                    timestamp: new Date().toISOString(),
+                                });
+                            }
+                            return built;
+                        } catch (error) {
+                            throw new CanvasError(
+                                "doc_walkthrough_failed",
+                                error instanceof Error ? error.message : String(error),
+                            );
+                        }
                     },
                 },
                 {

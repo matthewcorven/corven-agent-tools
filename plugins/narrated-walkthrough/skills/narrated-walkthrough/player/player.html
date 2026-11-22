@@ -183,6 +183,58 @@ __MERMAID__
   header .meta { font-size:12px; color:var(--dim); margin-left:auto; white-space:nowrap; }
   header .meta.is-fallback { color:var(--warn-ink); font-weight:600; }
   main { max-width:1080px; margin:0 auto; padding:24px 22px 148px; }
+  main.has-queue { max-width:1380px; }
+  .workspace { display:block; }
+  .workspace.has-queue { display:grid; grid-template-columns:320px minmax(0,1fr); gap:18px; align-items:start; }
+  @media (max-width:960px) {
+    .workspace.has-queue { grid-template-columns:1fr; }
+    .queue-pane { position:static !important; max-height:none !important; }
+  }
+  .queue-pane { background:var(--surface); border:1px solid var(--line); border-radius:14px;
+                position:sticky; top:68px; max-height:calc(100vh - 178px);
+                display:flex; flex-direction:column; overflow:hidden; }
+  .queue-pane[hidden] { display:none; }
+  .queue-head { display:flex; align-items:center; justify-content:space-between; gap:8px;
+                padding:12px 14px 10px; border-bottom:1px solid var(--line); background:var(--surface-sub); }
+  .queue-title { font-size:11.5px; text-transform:uppercase; letter-spacing:.09em; color:var(--dim); font-weight:700; }
+  .queue-count { font-size:11px; padding:2px 7px; border-radius:999px; background:var(--pill-bg);
+                 color:var(--dim); border:1px solid var(--line); font-weight:600; }
+  .queue-controls { padding:10px 12px; border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+  .queue-cats { display:flex; gap:5px; flex-wrap:wrap; }
+  .qcat-btn { font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--line);
+              background:var(--control-bg); color:var(--dim); font-weight:600; }
+  .qcat-btn.on { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+  .queue-selects { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .queue-select { font:inherit; font-size:11.5px; padding:5px 7px; border-radius:7px;
+                  border:1px solid var(--line); background:var(--control-bg); color:var(--ink); min-width:0; }
+  .queue-pinned { padding:8px 10px; border-bottom:1px dashed var(--ask-border); background:var(--ask-bg); }
+  .queue-pinned-label { display:flex; align-items:center; justify-content:space-between; gap:6px;
+                        font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+                        color:var(--warn-ink); margin-bottom:6px; }
+  .queue-reset { font-size:10.5px; padding:2px 7px; border-radius:6px; }
+  .queue-list { overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:7px; }
+  .qitem { width:100%; text-align:left; border:1px solid var(--line); border-radius:10px;
+           padding:9px 11px; background:var(--surface-sub); display:flex; flex-direction:column; gap:4px;
+           transition:border-color .14s ease, background-color .14s ease; }
+  .qitem:hover:not(.selected):not(:disabled) { border-color:var(--accent); background:var(--surface-hover); }
+  .qitem.selected { border-color:var(--accent); background:var(--accent-soft-bg);
+                    box-shadow:inset 3px 0 0 var(--accent); }
+  .qitem-top { display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:10px; }
+  .qitem-kind { font-weight:700; text-transform:uppercase; letter-spacing:.05em; padding:2px 6px;
+                border-radius:999px; background:var(--pill-bg); color:var(--dim); }
+  .qitem.selected .qitem-kind { background:var(--accent); color:var(--accent-ink); }
+  .qitem-kind.kind-pr_review { background:var(--accent-soft-bg); color:var(--accent-soft-ink); }
+  .qitem-kind.kind-standup { background:var(--ok-bg); color:var(--ok-ink); }
+  .qitem-kind.kind-architecture_doc { background:var(--warn-bg); color:var(--warn-ink); }
+  .qitem.selected .qitem-kind.kind-pr_review,
+  .qitem.selected .qitem-kind.kind-standup,
+  .qitem.selected .qitem-kind.kind-architecture_doc { background:var(--accent); color:var(--accent-ink); }
+  .qitem-seq { color:var(--dim); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .qitem-title { font-size:12.5px; font-weight:650; color:var(--ink); line-height:1.3;
+                 display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .qitem-meta { font-size:11px; color:var(--dim); display:flex; align-items:center; justify-content:space-between; gap:6px; }
+  .queue-empty { padding:18px 12px; text-align:center; font-size:12px; color:var(--dim); }
+  .stage-pane { min-width:0; }
   .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:20px;
          padding:12px 16px; background:var(--surface); border:1px solid var(--line);
          border-radius:12px; }
@@ -424,18 +476,23 @@ __MERMAID__
   <div class="meta" id="voice-meta">narration: <b>__MODEL__</b> &middot; voice <b>__VOICE__</b></div>
 </header>
 
-<main>
-  <div class="bar" id="full-bar">
-    <button id="play" class="primary" type="button">&#9654; Play</button>
-    <button id="pause" type="button">&#10074;&#10074; Pause</button>
-    <button id="restart" type="button">&#8634; Restart</button>
-    <button id="voicebtn" type="button" title="Speak with the system voice if the audio cannot play">Use system voice</button>
-    <div class="track" id="full-track"><i id="fill"></i></div>
-    <div class="clock" id="clock">0:00 / 0:00</div>
-  </div>
+<main id="app-main">
   <section class="hud" id="hud" aria-label="Architect oversight HUD" hidden></section>
-  <div id="slides"></div>
-  <section class="ask" id="ask" aria-label="A2UI action surface" hidden></section>
+  <div class="workspace" id="workspace">
+    <aside class="queue-pane" id="queue-pane" aria-label="Agent sessions and artifact packs message queue" hidden></aside>
+    <div class="stage-pane" id="stage-pane">
+      <div class="bar" id="full-bar">
+        <button id="play" class="primary" type="button">&#9654; Play</button>
+        <button id="pause" type="button">&#10074;&#10074; Pause</button>
+        <button id="restart" type="button">&#8634; Restart</button>
+        <button id="voicebtn" type="button" title="Speak with the system voice if the audio cannot play">Use system voice</button>
+        <div class="track" id="full-track"><i id="fill"></i></div>
+        <div class="clock" id="clock">0:00 / 0:00</div>
+      </div>
+      <div id="slides"></div>
+      <section class="ask" id="ask" aria-label="A2UI action surface" hidden></section>
+    </div>
+  </div>
 </main>
 
 <footer>
@@ -530,7 +587,11 @@ let lastA2uiAction = null;
 let liveA2uiOverride = null;
 let bridgeAgentStatus = 'standalone';
 let bridgeSource = null;
+let discoveredHuds = [];
 let discoveredPacks = [];
+let selectedPackId = null;
+let selectedPackDir = null;
+let queueFilter = { category: 'all', agent: 'all', sort: 'desc' };
 let liveTelemetry = null;
 let telemetryLoading = false;
 let lastDetResult = null;
@@ -815,6 +876,7 @@ function pauseForLiveChat(targetLabel) {
 function formatPackKind(kind) {
   if (kind === 'pr_review') return 'PR Review';
   if (kind === 'standup') return 'Daily Standup';
+  if (kind === 'architecture_doc') return 'Doc Discussion';
   return 'Walkthrough';
 }
 
@@ -825,6 +887,234 @@ function formatClockTime(iso) {
   } catch { return iso; }
 }
 
+function formatShortDate(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
+           d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch { return ''; }
+}
+
+function queueStorageKey() {
+  const activeHud = discoveredHuds.find((h) => h.active);
+  return 'nw:queue-filter:' + ((activeHud && activeHud.id) || (BRIDGE && BRIDGE.instanceId) || 'default');
+}
+
+function restoreQueueFilter() {
+  try {
+    const raw = sessionStorage.getItem(queueStorageKey());
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (saved && typeof saved === 'object') {
+      if (typeof saved.category === 'string') queueFilter.category = saved.category;
+      if (typeof saved.agent === 'string') queueFilter.agent = saved.agent;
+      if (typeof saved.sort === 'string') queueFilter.sort = saved.sort;
+    }
+  } catch (e) {}
+}
+
+function persistQueueFilter() {
+  try {
+    sessionStorage.setItem(queueStorageKey(), JSON.stringify(queueFilter));
+  } catch (e) {}
+}
+
+function getFilteredSortedPacks() {
+  const list = discoveredPacks.filter((p) => {
+    if (queueFilter.category !== 'all' && p.kind !== queueFilter.category) return false;
+    if (queueFilter.agent !== 'all' && (p.agent || p.producer || '') !== queueFilter.agent) return false;
+    return true;
+  });
+  const sorted = [...list];
+  if (queueFilter.sort === 'asc') {
+    sorted.sort((a, b) => String(a.updatedAt || '').localeCompare(String(b.updatedAt || '')));
+  } else if (queueFilter.sort === 'category') {
+    sorted.sort((a, b) => String(a.kind || '').localeCompare(String(b.kind || '')) || String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  } else if (queueFilter.sort === 'duration') {
+    sorted.sort((a, b) => (Number(b.totalDuration) || 0) - (Number(a.totalDuration) || 0));
+  } else {
+    // Default: descending sequence (newest first)
+    sorted.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  }
+  return sorted;
+}
+
+function isPackSelected(p) {
+  if (!p) return false;
+  if (selectedPackDir && p.deckDir === selectedPackDir) return true;
+  if (selectedPackId && p.id === selectedPackId) return true;
+  return Boolean(p.active);
+}
+
+function renderQueueItemHtml(p) {
+  const sel = isPackSelected(p);
+  const dur = typeof p.totalDuration === 'number' ? fmt(p.totalDuration) : '';
+  const when = formatShortDate(p.updatedAt);
+  const agentName = p.agent || p.producer || 'Agent';
+  return '<button type="button" class="qitem' + (sel ? ' selected' : '') + '" ' +
+    'aria-current="' + (sel ? 'true' : 'false') + '" ' +
+    'data-pack-dir="' + esc(p.deckDir) + '" data-pack-id="' + esc(p.id) + '" ' +
+    'data-pack-kind="' + esc(p.kind) + '" data-pack-agent="' + esc(agentName) + '">' +
+      '<div class="qitem-top">' +
+        '<span class="qitem-kind kind-' + esc(p.kind) + '">' + esc(formatPackKind(p.kind)) + '</span>' +
+        '<span class="qitem-seq">' + esc(when || dur) + '</span>' +
+      '</div>' +
+      '<div class="qitem-title">' + esc(p.title) + '</div>' +
+      '<div class="qitem-meta">' +
+        '<span>' + esc(agentName) + '</span>' +
+        '<span>' + esc([p.sceneCount ? p.sceneCount + ' scenes' : '', dur].filter(Boolean).join(' · ')) + '</span>' +
+      '</div>' +
+    '</button>';
+}
+
+function renderQueuePane() {
+  const pane = $('queue-pane');
+  const ws = $('workspace');
+  const mainEl = $('app-main');
+  if (!pane || !ws) return;
+  if (!BRIDGE || !discoveredPacks.length) {
+    pane.hidden = true;
+    ws.classList.remove('has-queue');
+    if (mainEl) mainEl.classList.remove('has-queue');
+    return;
+  }
+
+  ws.classList.add('has-queue');
+  if (mainEl) mainEl.classList.add('has-queue');
+
+  // Compute category counts and unique agent options from full discovered list
+  const catCounts = new Map();
+  const agentsSet = new Set();
+  for (const p of discoveredPacks) {
+    catCounts.set(p.kind, (catCounts.get(p.kind) || 0) + 1);
+    agentsSet.add(p.agent || p.producer || 'Agent');
+  }
+  const orderedCats = ['all', 'pr_review', 'standup', 'architecture_doc', 'walkthrough'].filter(
+    (c) => c === 'all' || catCounts.has(c)
+  );
+  const agents = [...agentsSet].sort((a, b) => a.localeCompare(b));
+  if (queueFilter.agent !== 'all' && !agents.includes(queueFilter.agent)) {
+    queueFilter.agent = 'all';
+  }
+
+  const visible = getFilteredSortedPacks();
+  const activePack = discoveredPacks.find((p) => isPackSelected(p)) || null;
+  const activeVisible = activePack ? visible.some((p) => p.deckDir === activePack.deckDir) : true;
+
+  pane.innerHTML =
+    '<div class="queue-head">' +
+      '<span class="queue-title">Message Queue</span>' +
+      '<span class="queue-count" id="queue-count">' + visible.length + ' of ' + discoveredPacks.length + '</span>' +
+    '</div>' +
+    '<div class="queue-controls">' +
+      '<div class="queue-cats" role="group" aria-label="Filter queue by category">' +
+        orderedCats.map((c) => {
+          const cnt = c === 'all' ? discoveredPacks.length : (catCounts.get(c) || 0);
+          const lbl = c === 'all' ? 'All' : formatPackKind(c);
+          return '<button type="button" class="qcat-btn' + (queueFilter.category === c ? ' on' : '') +
+            '" data-qcat="' + esc(c) + '">' + esc(lbl) + ' (' + cnt + ')</button>';
+        }).join('') +
+      '</div>' +
+      '<div class="queue-selects">' +
+        '<select class="queue-select" id="queue-agent-filter" aria-label="Filter queue by agent">' +
+          '<option value="all"' + (queueFilter.agent === 'all' ? ' selected' : '') + '>All agents</option>' +
+          agents.map((ag) => '<option value="' + esc(ag) + '"' + (queueFilter.agent === ag ? ' selected' : '') + '>' + esc(ag) + '</option>').join('') +
+        '</select>' +
+        '<select class="queue-select" id="queue-sort" aria-label="Sort message queue">' +
+          '<option value="desc"' + (queueFilter.sort === 'desc' ? ' selected' : '') + '>Newest first &#8595;</option>' +
+          '<option value="asc"' + (queueFilter.sort === 'asc' ? ' selected' : '') + '>Oldest first &#8593;</option>' +
+          '<option value="category"' + (queueFilter.sort === 'category' ? ' selected' : '') + '>Category A&ndash;Z</option>' +
+          '<option value="duration"' + (queueFilter.sort === 'duration' ? ' selected' : '') + '>Duration &#8595;</option>' +
+        '</select>' +
+      '</div>' +
+    '</div>' +
+    (!activeVisible && activePack
+      ? '<div class="queue-pinned" id="queue-pinned-selection">' +
+          '<div class="queue-pinned-label">' +
+            '<span>Selected (outside filter)</span>' +
+            '<button type="button" class="queue-reset" id="queue-reset-btn">Show all</button>' +
+          '</div>' +
+          renderQueueItemHtml(activePack) +
+        '</div>'
+      : '') +
+    '<div class="queue-list" id="queue-list" role="listbox" aria-label="Pending agent sessions and packs">' +
+      (visible.length
+        ? visible.map((p) => renderQueueItemHtml(p)).join('')
+        : '<div class="queue-empty">No items match the current category/agent filter. Your active selection above is retained.</div>') +
+    '</div>';
+  pane.hidden = false;
+
+  pane.querySelectorAll('button[data-qcat]').forEach((b) => {
+    b.onclick = () => {
+      queueFilter.category = b.dataset.qcat;
+      persistQueueFilter();
+      renderQueuePane();
+    };
+  });
+  const agSel = $('queue-agent-filter');
+  if (agSel) {
+    agSel.onchange = () => {
+      queueFilter.agent = agSel.value;
+      persistQueueFilter();
+      renderQueuePane();
+    };
+  }
+  const sortSel = $('queue-sort');
+  if (sortSel) {
+    sortSel.onchange = () => {
+      queueFilter.sort = sortSel.value;
+      persistQueueFilter();
+      renderQueuePane();
+    };
+  }
+  const resetBtn = $('queue-reset-btn');
+  if (resetBtn) {
+    resetBtn.onclick = () => {
+      queueFilter.category = 'all';
+      queueFilter.agent = 'all';
+      persistQueueFilter();
+      renderQueuePane();
+    };
+  }
+  pane.querySelectorAll('button.qitem[data-pack-dir]').forEach((b) => {
+    b.onclick = async () => {
+      const targetDir = b.dataset.packDir;
+      const targetId = b.dataset.packId;
+      if (targetDir === selectedPackDir || !BRIDGE || !BRIDGE.selectPackUrl) return;
+      selectedPackDir = targetDir;
+      selectedPackId = targetId;
+      persistQueueFilter();
+      b.disabled = true;
+      try {
+        const resp = await fetch(BRIDGE.selectPackUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-canvas-token': BRIDGE.token },
+          body: JSON.stringify({ deckDir: targetDir, id: targetId }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        window.location.reload();
+      } catch (e) {
+        b.disabled = false;
+      }
+    };
+  });
+}
+
+async function loadHuds() {
+  if (!BRIDGE || !BRIDGE.hudsUrl) return;
+  try {
+    const resp = await fetch(BRIDGE.hudsUrl, { cache: 'no-store' });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (Array.isArray(data.huds)) {
+      discoveredHuds = data.huds;
+      renderHud();
+      syncStickyMedia();
+    }
+  } catch (e) {}
+}
+
 async function loadPacks() {
   if (!BRIDGE || !BRIDGE.packsUrl) return;
   try {
@@ -833,7 +1123,13 @@ async function loadPacks() {
     const data = await resp.json();
     if (Array.isArray(data.packs)) {
       discoveredPacks = data.packs;
-      renderHud();
+      const active = discoveredPacks.find((p) => p.active);
+      if (active) {
+        selectedPackDir = active.deckDir;
+        selectedPackId = active.id;
+      }
+      restoreQueueFilter();
+      renderQueuePane();
       syncStickyMedia();
     }
   } catch (e) {}
@@ -1638,16 +1934,18 @@ function renderHud() {
     ? allNodes.filter((n) => n.level === 'lead' || n.level === 'video' || n.state === 'bottleneck')
     : allNodes;
 
-  // Integrated single-row scrollable tab-header strip inside the same .hud container
-  const tabsHtml = (useLive && discoveredPacks.length)
+  // Top bar of the unified HUD container: Multi-HUD Browser Strip (browse across repos/HUDs)
+  const hudsBarHtml = (useLive && discoveredHuds.length)
     ? '<div class="hud-tabbar">' +
-        '<div class="hud-tabstrip" role="tablist" aria-label="Agent artifact packs">' +
-          discoveredPacks.map((p) => {
-            const dur = typeof p.totalDuration === 'number' ? fmt(p.totalDuration) : '';
-            const meta = [p.sceneCount ? p.sceneCount + ' scenes' : '', dur, p.issue ? '#' + p.issue : ''].filter(Boolean).join(' · ');
-            return '<button type="button" role="tab" aria-selected="' + (p.active ? 'true' : 'false') + '" class="hud-tab' + (p.active ? ' active' : '') + '" data-pack-dir="' + esc(p.deckDir) + '" data-pack-id="' + esc(p.id) + '" title="' + esc(p.title) + '">' +
-              '<div class="hud-tab-top"><span class="hud-tab-kind">' + esc(formatPackKind(p.kind)) + '</span><span class="hud-tab-meta">' + esc(meta) + '</span></div>' +
-              '<div class="hud-tab-name">' + esc(p.title) + '</div>' +
+        '<div class="hud-tabstrip" role="tablist" aria-label="Architect HUDs">' +
+          discoveredHuds.map((hudItem) => {
+            const meta = hudItem.packCount + ' item' + (hudItem.packCount === 1 ? '' : 's') +
+              (hudItem.latestUpdatedAt ? ' · ' + formatShortDate(hudItem.latestUpdatedAt) : '');
+            return '<button type="button" role="tab" aria-selected="' + (hudItem.active ? 'true' : 'false') +
+              '" class="hud-tab' + (hudItem.active ? ' active' : '') +
+              '" data-hud-root="' + esc(hudItem.packsRoot) + '" data-hud-id="' + esc(hudItem.id) + '" title="' + esc(hudItem.packsRoot) + '">' +
+              '<div class="hud-tab-top"><span class="hud-tab-kind">HUD</span><span class="hud-tab-meta">' + esc(meta) + '</span></div>' +
+              '<div class="hud-tab-name">' + esc(hudItem.name) + '</div>' +
             '</button>';
           }).join('') +
         '</div>' +
@@ -1657,7 +1955,7 @@ function renderHud() {
         '</div>' +
       '</div>'
     : (useLive
-      ? '<div class="hud-tabbar"><span class="hud-title" style="padding-bottom:10px;">A-HUD &middot; Live Landscape</span>' +
+      ? '<div class="hud-tabbar"><span class="hud-title" style="padding-bottom:10px;">Architect HUD &middot; Live Landscape</span>' +
           '<div class="hud-tabtools">' +
             '<span class="bridge-pill" data-bridge-pill>Live Copilot Bridge &middot; Ready</span>' +
             '<button type="button" class="hud-refresh" id="hud-refresh-btn"' + (telemetryLoading ? ' disabled' : '') + '>' + (telemetryLoading ? 'Refreshing…' : 'Refresh live') + '</button>' +
@@ -1689,7 +1987,7 @@ function renderHud() {
   }
 
   host.innerHTML =
-    tabsHtml +
+    hudsBarHtml +
     '<div class="hud-body" role="tabpanel">' +
       '<div class="hud-top">' +
         '<span class="hud-title">Architect HUD &middot; Oversight &amp; Agent Routing</span>' +
@@ -1759,17 +2057,17 @@ function renderHud() {
   if (BRIDGE) renderBridgePill(bridgeAgentStatus === 'standalone' ? 'ready' : bridgeAgentStatus);
 
   const refBtn = $('hud-refresh-btn');
-  if (refBtn) refBtn.onclick = () => { loadPacks(); loadTelemetry(true); };
+  if (refBtn) refBtn.onclick = () => { loadHuds(); loadPacks(); loadTelemetry(true); };
 
-  host.querySelectorAll('button[data-pack-dir]').forEach((b) => {
+  host.querySelectorAll('button[data-hud-root]').forEach((b) => {
     b.onclick = async () => {
-      if (b.classList.contains('active') || !BRIDGE || !BRIDGE.selectPackUrl) return;
+      if (b.classList.contains('active') || !BRIDGE || !BRIDGE.selectHudUrl) return;
       b.disabled = true;
       try {
-        const resp = await fetch(BRIDGE.selectPackUrl, {
+        const resp = await fetch(BRIDGE.selectHudUrl, {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-canvas-token': BRIDGE.token },
-          body: JSON.stringify({ deckDir: b.dataset.packDir, id: b.dataset.packId }),
+          body: JSON.stringify({ packsRoot: b.dataset.hudRoot, id: b.dataset.hudId }),
         });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         window.location.reload();
@@ -2344,7 +2642,10 @@ window.state = () => ({
   miniMediaVisible: !$('mini-media').hidden,
   bridgeConnected: Boolean(BRIDGE),
   bridgeAgentStatus,
+  hudCount: discoveredHuds.length,
   packCount: discoveredPacks.length,
+  selectedPackId,
+  queueFilter: { ...queueFilter },
   liveTelemetryMeasuredAt: liveTelemetry ? liveTelemetry.measuredAt : null,
   liveChatTarget,
   lastA2uiAction,
@@ -2356,6 +2657,7 @@ window.state = () => ({
   renderHud();
   renderAsk();
   connectBridgeEvents();
+  loadHuds();
   loadPacks();
   loadTelemetry(false);
   updateVoiceMeta();
