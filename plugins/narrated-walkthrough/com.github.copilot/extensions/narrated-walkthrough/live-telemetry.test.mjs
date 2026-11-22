@@ -146,6 +146,7 @@ test("collectLiveTelemetry produces 100% factual metrics and nodes from determin
             deckDir: path.join(tmp, "deck"),
             packMeta: { spec: "pr-353-review-walkthrough", commit: "oldsha1" },
             run: mockRun,
+            helpers: { issueQueue: "/mock/issue_queue.py", artifactsScript: "/mock/artifacts.py" },
         });
 
         assert.equal(tel.ok, true);

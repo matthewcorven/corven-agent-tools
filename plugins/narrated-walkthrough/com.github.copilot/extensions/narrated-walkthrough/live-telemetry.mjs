@@ -11,9 +11,11 @@ import { execFile } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const BOTTLENECK_READY_THRESHOLD = 5;
 export const BOTTLENECK_BLOCKED_THRESHOLD = 2;
@@ -248,15 +250,24 @@ async function firstExisting(candidates) {
     return null;
 }
 
-async function resolveHelperPaths(repoPath) {
+async function resolveHelperPaths(repoPath, helpersOverride) {
+    if (helpersOverride) {
+        return {
+            issueQueue: helpersOverride.issueQueue ?? null,
+            artifactsScript: helpersOverride.artifactsScript ?? null,
+        };
+    }
     const home = os.homedir();
+    const pluginsRoot = path.resolve(__dirname, "..", "..", "..", "..");
     const issueQueue = await firstExisting([
         path.join(home, ".copilot", "installed-plugins", "corven-agent-tools", "github-issues", "skills", "issue-work-queue", "scripts", "issue_queue.py"),
+        path.join(pluginsRoot, "github-issues", "skills", "issue-work-queue", "scripts", "issue_queue.py"),
         repoPath ? path.join(repoPath, ".github", "skills", "issue-work-queue", "scripts", "issue_queue.py") : null,
     ]);
     const artifactsScript = await firstExisting([
         repoPath ? path.join(repoPath, "scripts", "artifacts.py") : null,
         path.join(home, ".copilot", "installed-plugins", "corven-agent-tools", "playwright-report-retrieval", "scripts", "artifacts.py"),
+        path.join(pluginsRoot, "playwright-report-retrieval", "scripts", "artifacts.py"),
     ]);
     return { issueQueue, artifactsScript };
 }
@@ -269,6 +280,7 @@ export async function collectLiveTelemetry({
     deckDir,
     packMeta = null,
     run = defaultRun,
+    helpers,
 }) {
     const measuredAt = new Date().toISOString();
     const sources = [];
@@ -314,7 +326,7 @@ export async function collectLiveTelemetry({
         }
     }
 
-    const { issueQueue, artifactsScript } = await resolveHelperPaths(repoPath);
+    const { issueQueue, artifactsScript } = await resolveHelperPaths(repoPath, helpers);
     const packPrNumber = extractPackPrNumber(packMeta?.spec, timelineJson?.title || packMeta?.title);
 
     // 4. Run external deterministic probes in parallel
