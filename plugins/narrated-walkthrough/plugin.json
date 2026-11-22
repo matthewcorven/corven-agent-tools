@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "narrated-walkthrough",
+  "version": "0.1.0",
+  "description": "Turn findings, a change set or a proposal into a narrated, diagram-driven walkthrough whose spoken audio, slides, captions and scrubber all follow one pre-planned timeline, with narration synthesized by a local text-to-speech model and an enforced invitation to respond when work is left open.",
+  "author": {
+    "name": "Matthew Corven"
+  },
+  "license": "MIT",
+  "keywords": [
+    "narration",
+    "tts",
+    "audio",
+    "mermaid",
+    "timeline",
+    "walkthrough",
+    "local-models",
+    "presentation"
+  ]
+}

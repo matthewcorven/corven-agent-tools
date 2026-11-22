@@ -1,11 +1,12 @@
 # corven-agent-tools
 
-Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository distributes a dependency-driven GitHub issue-tracking skill, a decision-model skill, a source-control change-visualization plugin, a deterministic Squad model-resolver plugin, a Playwright report-retrieval plugin, and a GitHub Copilot BYOK model-metadata plugin, and is published as a plugin marketplace.
+Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository distributes a dependency-driven GitHub issue-tracking skill, a decision-model skill, a source-control change-visualization plugin, a visual-proposal skill, a deterministic Squad model-resolver plugin, a Playwright report-retrieval plugin, and a GitHub Copilot BYOK model-metadata plugin, and is published as a plugin marketplace.
 
 ## What's inside
 
 | Component | Location | Purpose |
 | --- | --- | --- |
+| `visual-proposal` skill | `plugins/visual-proposal/` | Outcome-first PRD/scope reset and architecture workshop: live Marp, local Mermaid/PlantUML, offline HTML, verbatim source prompt, authoring method and runnable golden example |
 | `issue-work-queue` skill | `plugins/github-issues/skills/issue-work-queue/SKILL.md` | Portable rules for a dependency-driven work queue: issue bodies' `## Depends On` / `## Blocked By` sections are the source of truth, and **the queue helper takes precedence over raw `gh issue list`** |
 | Queue helper | `plugins/github-issues/skills/issue-work-queue/scripts/issue_queue.py` | Computes the ready-vs-blocked queue (`queue` mode) and board counts (`status` mode) via the `gh` CLI |
 | Unit tests | `plugins/github-issues/skills/issue-work-queue/tests/test_issue_queue.py` | Stdlib `unittest` suite, run in CI |
@@ -18,12 +19,13 @@ Portable **Agent Plugins 1.0** tooling for AI coding agents. This repository dis
 | `squad-model-resolver` plugin | `plugins/squad-model-resolver/` | Deterministic model ID resolution MCP server (`resolve_model`, `resolve_for_agent`, `verify_spawn`) + thin aggressive skill for Squad agent spawns |
 | `playwright-report-retrieval` plugin | `plugins/playwright-report-retrieval/` | Two skills — canonical Playwright reporting + AI-driven E2E authoring standards, and the `e2e-artifacts` visual/E2E artifact standard — plus a retrieval/artifact CLI and MCP server (`fetch_report`, `list_failed_tests`, `create_artifact_run`, `find_artifact_runs`, `check_artifact_budget`) that downloads a CI HTML report by run ID or commit, deep-links to a test, and manages worktree-safe artifact runs under a warn-only budget |
 | `copilot-byok-metadata` plugin | `plugins/copilot-byok-metadata/` | MCP server + thin skill that reads the GitHub Copilot app's BYOK models, fetches context-window and reasoning-effort metadata from provider sources of truth (OpenRouter and local oMLX servers), and applies it to the app config interactively or automatically |
+| `narrated-walkthrough` plugin | `plugins/narrated-walkthrough/` | Narrated, diagram-driven walkthrough whose audio, slides, captions and scrubber follow one derived timeline, with local TTS, a version-pinned vendored Mermaid, and an enforced invitation to respond when work is left open |
 
 Requirements: `python3` (stdlib only) and an authenticated [`gh` CLI](https://cli.github.com/) for the issue-queue skill. The decision-model sender needs `OPENROUTER_API_KEY` in the environment.
 
 ## Format and compatibility
 
-Both plugins use the open Agent Plugins 1.0 format, compatible with multiple AI coding agents. Their `SKILL.md` skills are portable to clients that support Agent Plugins 1.0 and the Agent Skills format.
+The plugins use the open Agent Plugins 1.0 format, compatible with multiple AI coding agents. Their `SKILL.md` skills are portable to clients that support Agent Plugins 1.0 and the Agent Skills format.
 
 ## Install with GitHub Copilot
 
@@ -34,9 +36,11 @@ copilot plugin marketplace add matthewcorven/corven-agent-tools
 copilot plugin install github-issues@corven-agent-tools
 copilot plugin install use-decision-model@corven-agent-tools
 copilot plugin install change-learn@corven-agent-tools
+copilot plugin install visual-proposal@corven-agent-tools
 copilot plugin install squad-model-resolver@corven-agent-tools
 copilot plugin install playwright-report-retrieval@corven-agent-tools
 copilot plugin install copilot-byok-metadata@corven-agent-tools
+copilot plugin install narrated-walkthrough@corven-agent-tools
 ```
 
 The install source must be the qualified `plugin@marketplace` form — a bare `github-issues` is rejected with `Invalid plugin spec`.
@@ -60,6 +64,7 @@ You can also enable them declaratively in `.github/copilot/settings.json` (repos
   "enabledPlugins": {
     "github-issues@corven-agent-tools": true,
     "use-decision-model@corven-agent-tools": true,
+    "visual-proposal@corven-agent-tools": true,
     "squad-model-resolver@corven-agent-tools": true,
     "playwright-report-retrieval@corven-agent-tools": true,
     "copilot-byok-metadata@corven-agent-tools": true
@@ -82,6 +87,10 @@ After the GitHub repository is renamed, replace existing marketplace registratio
 ## Usage
 
 The skills are discovered automatically.
+
+For a diagram-first proposal, ask to "survey our docs and present the smallest useful release as a live
+Marp deck." The [visual-proposal plugin](plugins/visual-proposal/README.md) includes the decomposition
+method, an authentic verbatim prompt, and a runnable golden example. It is not limited to git diffs.
 
 For the issue queue, ask for queue status, "what's ready next", or "what's blocking X" — or invoke the helper directly. `<skill-dir>` is the directory containing the skill's `SKILL.md`:
 
@@ -150,6 +159,8 @@ References resolve to issue numbers or `[Task X.Y]` ids parsed from issue titles
 ## Squad model-resolver reference
 
 The `squad-model-resolver` plugin provides an MCP server and a thin skill that deterministically resolves model references into exact complete IDs for the harness `task` tool, and verifies spawned sessions.
+
+Tool availability and invocation permission are determined by the active host runtime; a project-local `.copilot/config.json` is not a valid preflight gate. For GitHub Copilot CLI, saved per-repository tool approvals are in `permissions-config.json` under the selected configuration directory (default `~/.copilot/permissions-config.json`; `COPILOT_HOME` or `--config-dir` can override it). The CLI's `~/.copilot/config.json` is internal application state. Do not inspect or change permission files to grant access; use the host's supported approval flow and report only observed availability/denial. See [Copilot CLI tool permissions](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/allowing-tools).
 
 ### MCP tools
 
@@ -276,6 +287,9 @@ corven-agent-tools/                         # Agent Plugins marketplace
 │   ├── Tools/                               # MCP tool registrations
 │   └── team/.squad/                         # Host's runtime agent-team definitions
 └── plugins/                                 # Independently installable plugins
+    ├── visual-proposal/                     # visual-proposal@corven-agent-tools
+    │   ├── plugin.json, README.md
+    │   └── skills/visual-proposal/          # Method, references and runnable golden deck
     ├── change-learn/                        # change-learn@corven-agent-tools
     │   ├── plugin.json, mcp.json, README.md
     │   ├── com.github.copilot/extensions/   # Copilot App canvas
@@ -315,7 +329,10 @@ python3 -m unittest discover -s plugins/squad-model-resolver/tests -v
 python3 -m unittest discover -s plugins/playwright-report-retrieval/tests -v
 python3 -m unittest discover -s plugins/copilot-byok-metadata/tests -v
 python3 -m unittest discover -s plugins/change-learn/skills/change-learn/tests -v
+python3 -m unittest discover -s plugins/visual-proposal/tests -v
 ```
+
+For the visual-proposal browser/build checks, follow its [development setup](plugins/visual-proposal/README.md#development).
 
 The change-learn MCP host builds with `dotnet build hosts/ChangeLearn.Host`.
 

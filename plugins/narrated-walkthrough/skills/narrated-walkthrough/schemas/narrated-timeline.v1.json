@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "narrated-timeline/v1",
+  "title": "narrated-timeline/v1",
+  "description": "Plan for a narrated walkthrough. Frozen to the smallest shape the player consumes: scenes, captions, derived offsets, optional disposition. `start` and `total_duration` are permitted but never required — they are derived from measured clip durations, and the invariant that start[n] == sum(duration[0..n-1]) is asserted by the test suite, not by this schema. Requiring them here would invite someone to author them, which silently kills the derived clock.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "scenes"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/scene" }
+    },
+    "tts": {
+      "description": "Speech endpoint configuration. Optional: --no-audio builds without it. When present, all three fields are required, because a silent fallback would aim requests at whatever happens to be listening on a port that belongs to someone else.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint", "model", "voice"],
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OpenAI-compatible /v1/audio/speech URL. No default is shipped."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Model id served by that endpoint. No default is shipped."
+        },
+        "voice": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Server-defined voice name. No default is shipped."
+        }
+      }
+    },
+    "total_duration": {
+      "description": "DERIVED. Written by the builder as the sum of scene durations. Never author this; a test asserts it equals the sum when present.",
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "mermaid_source": {
+      "description": "Path or URL for the Mermaid script. Must resolve offline by default: a relative path to a vendored copy is the expected value, and the builder refuses to run without one unless --cdn is passed explicitly. No network default is shipped.",
+      "type": "string",
+      "minLength": 1
+    },
+    "disposition": {
+      "description": "Set when the walkthrough ends on choices or unknowns. When present, the final scene must invite a reply, and the validator enforces that.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt", "options"],
+      "properties": {
+        "prompt": { "type": "string", "minLength": 1 },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "note": { "type": "string" },
+        "kind": {
+          "description": "Free-form label. Not validated today; do not attach meaning until something enforces it.",
+          "type": "string"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "mermaid", "narration", "audio", "captions", "duration"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique within the plan; the validator rejects duplicates."
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "mermaid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Mermaid source for this scene's one dominant diagram."
+        },
+        "narration": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Spoken text for the whole scene. Rejected if it ends in a broadcast sign-off."
+        },
+        "captions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "The same sentences as the narration, chunked for reading. Distributed evenly across the measured clip."
+        },
+        "audio": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo-relative path where the clip would live. A REFERENCE, not a committed artifact: build output is gitignored and the file's existence is deliberately not a schema condition."
+        },
+        "duration": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Measured clip length in seconds, written by the builder."
+        },
+        "start": {
+          "description": "DERIVED. Written by the builder as the running sum of previous durations. Never author this; a test asserts the cumulative invariant when present.",
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
