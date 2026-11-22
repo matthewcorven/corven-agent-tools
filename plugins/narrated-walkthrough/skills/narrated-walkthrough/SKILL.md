@@ -26,8 +26,9 @@ rule below exists to protect it.
 
 [`schemas/narrated-timeline.v1.json`](schemas/narrated-timeline.v1.json) is the
 executable shape: `title`, `scenes[]`, optional `tts`, optional `disposition`,
-and two **derived** fields (`start`, `total_duration`) that are permitted but
-never required. Closed at every level, so a speculative field fails immediately.
+optional `hud`, optional `a2ui`, and two **derived** fields (`start`,
+`total_duration`) that are permitted but never required. Closed at every level,
+so a speculative field fails immediately.
 
 The `$id` is the repo-relative `narrated-timeline/v1`, deliberately not a URL — a
 dead `$id` is worse than none, because consumers try to fetch it.
@@ -101,6 +102,24 @@ reply, consistently:
 
 Never end on "thanks for watching" when something is open — it closes a door
 that is actually still ajar. The validator fails the plan for it.
+
+## The HUD and A2UI choices
+
+Two optional blocks extend the deck without touching the clock:
+
+- **`hud`** — an Architect HUD above the slides: stat cards and trends, agent
+  nodes with a copyable `"Chat with <agent>"` handoff, and artifact links.
+  `oversight_default` selects the starting depth (`executive`, `lead`, `full`),
+  and only `full` shows artifact links. The sticky header collapses to a compact
+  Play/Pause and progress bar once the full controls scroll out of view.
+- **`a2ui`** — A2UI v1.0 messages (`createSurface`, `updateComponents`,
+  `updateDataModel`) that drive the action surface. Omit it and the player
+  derives a default stream from `disposition`; supply it when you need explicit
+  components. A chosen option dispatches an `a2ui:action` event and appears in
+  `window.state().lastA2uiAction`.
+
+Both are closed and optional, and neither substitutes for the disposition: a
+walkthrough that ends on open work still asks the question in its own words.
 
 `disposition` shape:
 

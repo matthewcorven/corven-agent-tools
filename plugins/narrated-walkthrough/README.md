@@ -26,8 +26,8 @@ slide, and in the chat reply that delivers it.
 | `narrated-walkthrough` skill | `skills/narrated-walkthrough/SKILL.md` | The method, the clock model, the disposition contract, verification protocol and traps |
 | Builder | `skills/narrated-walkthrough/scripts/build_narration.py` | Synthesizes missing clips, measures them, derives offsets, renders a single-file deck, serves it |
 | Authoring method | `skills/narrated-walkthrough/references/authoring-method.md` | Scene budgeting, narration for the ear, diagram contracts, disposition honesty |
-| Rendering + timing | `skills/narrated-walkthrough/references/rendering.md` | Why the clock is derived, seeking, captions, the ask panel, browser verification |
-| PR review walkthrough | `skills/narrated-walkthrough/references/pr-review-walkthrough.md` | Composing `change-learn`, code review, `playwright-report-retrieval`, `e2e-artifacts`, and PR verdict disposition |
+| Rendering + timing | `skills/narrated-walkthrough/references/rendering.md` | Why the clock is derived, seeking, captions, the HUD, A2UI choices, the ask panel, browser verification |
+| PR review walkthrough | `skills/narrated-walkthrough/references/pr-review-walkthrough.md` | Composing `change-learn`, code review, `playwright-report-retrieval`, `e2e-artifacts`, Architect HUD, and A2UI PR verdict choices |
 | Case study | `skills/narrated-walkthrough/references/case-study.md` | The session that produced it, the four defects found, the measurements it narrated |
 | Golden example | `skills/narrated-walkthrough/examples/golden/` | Three scenes, runnable end to end |
 | Schema | `skills/narrated-walkthrough/schemas/narrated-timeline.v1.json` | Executable plan contract, closed at every level |
@@ -50,9 +50,10 @@ delete any clip you want re-synthesized.
 ## The plan contract
 
 `narrated-timeline/v1` is frozen to what the player actually consumes:
-`title`, `scenes[]`, optional `tts`, optional `disposition`, plus the derived
-`start` and `total_duration`. It is `additionalProperties: false` at every level,
-so a speculative field fails immediately rather than lingering untested.
+`title`, `scenes[]`, optional `tts`, optional `disposition`, optional `hud`,
+optional `a2ui`, plus the derived `start` and `total_duration`. It is
+`additionalProperties: false` at every level, so a speculative field fails
+immediately rather than lingering untested.
 
 `start` and `total_duration` are permitted but never required — the builder
 writes them and the tests assert the cumulative invariant. Requiring them would
@@ -76,6 +77,24 @@ and refuses any narration that ends on a broadcast sign-off.
 
 The chat reply that accompanies the deck must ask the same question, offer the
 same options, and say that no answer is acceptable.
+
+## The HUD and A2UI choices
+
+Two optional blocks extend the deck without changing the clock contract:
+
+- `hud` — an Architect HUD above the slides with stat cards, trends, agent nodes
+  that offer a copyable chat handoff, and artifact links. `oversight_default`
+  picks the starting depth (`executive`, `lead`, `full`); artifact links appear
+  only at `full`. The header also collapses to a compact Play/Pause and progress
+  bar once the full controls scroll away.
+- `a2ui` — A2UI v1.0 messages (`createSurface`, `updateComponents`,
+  `updateDataModel`) that drive the action surface. Leave it out and the player
+  derives a default stream from `disposition`; supply it when you need explicit
+  components. A chosen option dispatches an `a2ui:action` event and appears in
+  `window.state().lastA2uiAction`.
+
+Both are closed and optional: an unknown key fails the plan contract, and neither
+replaces the disposition.
 
 ## Local speech
 

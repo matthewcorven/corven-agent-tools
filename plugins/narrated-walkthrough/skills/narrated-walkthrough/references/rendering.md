@@ -61,12 +61,27 @@ is the classic one-scene lag. Each cue carries `{t, end, text}` computed by
 evenly splitting a scene's measured duration. De-duplicate by text before
 touching the DOM.
 
+## The HUD and the A2UI action surface
+
+An optional `hud` block renders an Architect HUD above the slides: stat cards,
+agent nodes with a copyable `"Chat with <agent>"` handoff, and artifact links.
+`oversight_default` selects the starting depth (`executive`, `lead`, or `full`);
+`full` is the only depth that shows artifact links. The HUD is display-only — it
+adds no network calls and no required assets.
+
+An optional `a2ui` array carries A2UI v1.0 messages (`createSurface`,
+`updateComponents`, `updateDataModel`). When `a2ui` is absent, the player derives
+a default stream from `disposition`, so neither field is needed to keep the ask
+surface working. The action surface renders buttons from the A2UI components,
+exposes the raw payload in a drawer, and dispatches a chosen option as an
+`a2ui:action` event plus `window.state().lastA2uiAction`.
+
 ## The ask panel
 
-Rendered once from `DATA.disposition`. Each option is a button that copies its
-phrase so the listener can paste it into the chat; the panel also states that
-free-form answers and no answer are both fine. Copy failures are swallowed
-silently — the panel is an affordance, not a dependency.
+Rendered once from `DATA.disposition` or the A2UI message stream. Each option is
+a button that copies its phrase so the listener can paste it into the chat; the
+panel also states that free-form answers and no answer are both fine. Copy
+failures are swallowed silently — the panel is an affordance, not a dependency.
 
 ## Serving
 

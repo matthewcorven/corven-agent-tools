@@ -41,6 +41,44 @@ the HUD, the sticky header automatically reveals a minimal Play/Pause toggle and
 compact progress bar; scrolling back near the top hides the minimal controls and
 returns the uncompressed bar cleanly in place.
 
+## Architect HUD and A2UI action surface
+
+A PR review is where the optional HUD earns its place. Populate `hud` in the plan
+when the reviewer needs oversight rather than only narration:
+
+```json
+"hud": {
+  "summary": "Three blocking findings, all in the sync path; CI green.",
+  "oversight_default": "lead",
+  "stats": [
+    { "label": "Verdict", "value": "Request changes", "trend": "2 blocking", "tone": "warn" },
+    { "label": "CI", "value": "12/12", "trend": "green", "tone": "ok" }
+  ],
+  "nodes": [
+    { "id": "reviewer", "name": "Reviewer", "role": "lead", "level": "lead",
+      "summary": "Owns the verdict", "chat_prompt": "Review the blocking findings with me." }
+  ],
+  "artifacts": [
+    { "label": "PR #353", "url": "https://github.com/owner/repo/pull/353" }
+  ]
+}
+```
+
+The HUD renders three oversight depths (`executive`, `lead`, `full`), one card
+per agent node with a copyable chat handoff, and artifact links only at full
+depth. Set `oversight_default` to the depth the reviewer should land on.
+
+The disposition is the same choice set, expressed as A2UI v1.0. Omit `a2ui` and
+the player derives a default message stream from `disposition`; supply `a2ui`
+when you need explicit components or an `updateDataModel` message. Either way the
+action surface renders the buttons from the A2UI JSON and exposes the raw payload
+in an inspectable drawer. Dispatched actions surface as an `a2ui:action` event
+and in `window.state().lastA2uiAction`, so a verification script can assert that
+the chosen option reached the page.
+
+Both fields are optional and closed: an unknown key fails the plan contract.
+`hud` never replaces the disposition — the verdict still has to be asked for.
+
 ## Voice & Hygiene Rules
 
 - **Consistent speaker across every scene:** pin a real server voice (e.g.
