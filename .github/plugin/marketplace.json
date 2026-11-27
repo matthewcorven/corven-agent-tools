@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Corven Agent Plugins 1.0 tooling",
-    "version": "0.23.2"
+    "version": "0.23.3"
   },
   "plugins": [
     {
@@ -99,8 +99,8 @@
     {
       "name": "use-decision-model",
       "source": "plugins/use-decision-model",
-      "version": "0.1.0",
-      "description": "use-decision-model skill: call a decision model as a tool for typed noul/choice/score judgments",
+      "version": "0.1.1",
+      "description": "use-decision-model skill: call a decision model as a tool for typed noul/choice/score judgments on variable data, text, and images",
       "keywords": [
         "decision-models",
         "typed-questions",

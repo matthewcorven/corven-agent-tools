@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "use-decision-model",
-  "version": "0.1.0",
-  "description": "Use decision models as typed tools: author a state plus typed questions (noul/choice/score), send them to a decisions endpoint, and read back typed numerical answers an agent can threshold, rank, or route on.",
+  "version": "0.1.1",
+  "description": "Use decision models as typed tools: an agent authors a state plus typed questions (noul/choice/score) over text or images, sends them to a decisions endpoint, and reads back typed numerical answers it can threshold, rank, or route on.",
   "author": {
     "name": "Matthew Corven"
   },
