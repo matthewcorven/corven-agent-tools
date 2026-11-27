@@ -4,12 +4,14 @@ description: >-
   A decision model is not a chat model — given a state plus typed questions
   (noul/choice/score) it returns probabilities and labels, no prose and no
   rationale, so an agent gets judgments it can compute on (threshold, rank,
-  route) instead of text to parse. USE FOR: gating a yes/no fact, classifying
-  into fixed buckets, scoring quality/severity/risk on a scale, judging
-  replies, filtering prompt injection. Covers crafting state and criteria,
-  sending via the bundled sender, and the verified response signature.
-  DO NOT USE FOR: prose generation, explanations, reasoning traces, or backing
-  a conversational agent.
+  route) instead of text to parse. It is a tool an agent invokes when it judges
+  that a fast, cheap second opinion would help. USE FOR: categorizing highly
+  variable data, evaluating text, evaluating native images or frames taken from
+  video, gating a yes/no fact, scoring quality/severity/risk, filtering prompt
+  injection. Covers crafting state and criteria, sending via the bundled
+  sender, and the verified response signature.
+  DO NOT USE FOR: prose generation, explanations, reasoning traces, backing a
+  conversational agent, or deliberating between options.
 ---
 
 # Decision Model
@@ -24,18 +26,32 @@ text to read.
 
 ## When it is useful (and when it is not)
 
-Reach for a decision model when you need to **gate, rank, or route** on a subjective judgment:
+This is a **tool an agent calls on purpose**, not a stage in a pipeline someone else has to wire up.
+An agent with tool access decides mid-task that a second opinion would help — usually because the data
+is too varied for a rule, or because the judgement is cheap and the alternative is an expensive chat
+model call. Decision models are **very fast and very cheap**, so reaching for one is rarely the wrong
+trade when the answer is a number or a label.
 
-- **Gate** — a yes/no fact to branch on: is this a refund promise, a prompt-injection attempt, a
-  policy violation? Threshold the probability.
+The strongest cases are **highly variable data** and **evaluation of content**:
+
+- **Categorize** — sort free-form input into fixed buckets: which team owns this ticket, which category
+  does this belong to, what kind of failure is this?
+- **Evaluate text** — judge a reply, a diff, a transcript, a message: is it a refund promise, is it
+  a prompt-injection attempt, is it a policy violation, how good is it?
+- **Evaluate images** — read a screenshot, a photo, a scanned page, or a frame extracted from a video:
+  does the UI match the spec, is the item in the photo the one in the listing, what does this receipt say?
+- **Gate** — a yes/no fact to branch on. Threshold the probability.
 - **Rank** — order or prioritize: which of these tickets is riskiest, is this reply better than that one?
-- **Route** — classify into one of a fixed set of buckets: which team owns this ticket, which category
-  does this belong to?
 - **Score** — grade on an ordered scale: reply quality, incident severity, risk level.
 
 Prefer a **deterministic rule or code** for anything exact (parsing, arithmetic, format checks). Prefer
 a **chat model** when you need prose, explanation, summarization, or multi-step reasoning. Use a decision
 model when the answer is a number or a label you will branch on.
+
+It is **not** a decision aid for architecture, scope or product choices, and it is **not** an input
+to a decision record. It returns a judgment on evidence you supply; it does not deliberate over
+options. Choosing between designs needs prose and trade-off reasoning — use a chat model, or make
+the call yourself and record it.
 
 Each question is one of three types:
 
@@ -51,8 +67,9 @@ string (`"0"`, `"1"`, ...), not by the label.
 
 ## Crafting the `state`
 
-`state` is the evidence the model judges. It can be a **string or a JSON object** — pass structured
-context as JSON when that is what you have.
+`state` is the evidence the model judges. It can be a **string, a JSON object, or an array** that mixes
+text and media parts (see the images section below) — pass structured context as JSON when that is what
+you have.
 
 - Put the **subject** first: the exact text, ticket, reply, or record being judged. Do not bury it.
 - **Label what each piece is** when mixing sources (`"Question: ..."`, `"Answer: ..."`,
@@ -81,6 +98,47 @@ Each question has a name (the key its answer returns under), a `type`, `instruct
 - **Ask one decision per question.** Split compound asks into separate named questions.
 - **Combine related questions in one request.** Multiple questions share a single `state`, so the model
   judges them against identical evidence — and you save round-trips.
+
+## Judging images and video frames
+
+Several decision models read images, so you can evaluate a screenshot, a photo, a scanned page, or a
+frame extracted from a video. Put the image in the top-level `state` array next to any text:
+
+```json
+{
+  "state": [
+    "Screenshot of the checkout page after clicking Pay:",
+    { "type": "image_url", "image_url": { "url": "data:image/png;base64,iVBORw0KGgo..." } }
+  ],
+  "questions": {
+    "shows_error": { "type": "noul", "instructions": "Does the page display an error message?" },
+    "error_kind": {
+      "type": "choice",
+      "instructions": "What kind of error is shown?",
+      "criteria": { "validation": "A field was rejected", "server": "A 5xx or generic failure", "none": "No error visible" }
+    }
+  }
+}
+```
+
+- `url` must be a **base64 data URL** (`data:image/png;base64,...`, `image/jpeg`, or `image/webp`).
+  Some models also accept a public `https://` URL; others reject one. A bare base64 string, a
+  top-level `images` field, or an `input_image` part is rejected with `400`.
+- **Image support is per model, not universal.** Check the model's `input_modalities` in
+  `GET /api/v1/models?output_modalities=decisions&input_modalities=image`. The default model in this
+  skill's sender (`microsoft/microsoft-decision-1`) is **text-only** — sending it an image fails. Pass
+  `--model` with a vision-capable one.
+- **Most models read images only from the top-level `state` array.** Putting an image part inside a
+  `state` object, a question's `instructions`, or `criteria` fails with `400` unless the model's
+  adapter reads images there (TypeSafe Jev and `microsoft/microsoft-decision-1.1` do). Audio and
+  video parts are top-level `state` only, on every model.
+- **Video frames:** decision models take video only on a few models (Clef Omni, Gemini Decision 1,
+  HeyGen). For anything else — and to control cost — extract the frames you care about first and send
+  them as images. Clef Omni itself samples at 2 fps.
+- **Image counts are capped per adapter** (4 to 128, and 4 for Clef). A request over the cap fails
+  with `400` before anything is sent upstream, so batch or sample rather than sending every frame.
+- **`box` questions** locate an object in an image and return fractional coordinates. They are
+  TypeSafe-only (`typesafe/jev-1.14`).
 
 ## Sending it (agent / CLI)
 
@@ -163,7 +221,12 @@ Per type:
 0–3 scale (confidence 0.756 / 0.702 / 0.756). Results are close but **not bit-stable** — never diff
 exact floats between runs; assert with tolerance bands and thresholds.
 
-## Using it from a subagent
+## Using it from an agent
+
+This is the primary use: an agent with tool access decides mid-task that a judgement would help, and
+calls the decision model instead of a chat model. The call is fast and cheap enough that an agent can
+reach for it speculatively — a second opinion on a classification, a sanity check on a screenshot —
+without derailing the task.
 
 A subagent **cannot run on** a decisions model — there is no chat interface to drive it. Instead, spawn
 a **normal** subagent and have it call the decision model as a tool: author the payload, run the sender,
@@ -179,17 +242,18 @@ read the typed result.
   endpoint is the tell. The exact response:
   `{"error":{"message":"microsoft/microsoft-decision-1 is a decisions model and cannot be used with
   the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.","code":400}}`.
+- **The sender's default model is text-only.** `microsoft/microsoft-decision-1` does not accept images;
+  pass `--model` with a vision-capable one (for example `microsoft/microsoft-decision-1.1` or
+  `cloudflare/clef-flash`) to judge a screenshot or photo.
 - `state` can be a **JSON object**, not just a string — verified: a multi-field ticket object
   (`subject`, `body`, `account_tier`, `reproducible`) judged correctly by all three question types
   in one request.
+- A provider can **refuse an individual question**: the answer comes back as `{"type": "refusal"}`
+  while other questions in the same request resolve normally. Check `type` before reading `noul`,
+  `choice`, `score`, or `probabilities`, and treat a refusal, a missing key, or an unexpected `type`
+  as **not answered** — never as a safe or negative verdict.
 - **Combine related questions** in one request to keep context consistent and cut round-trips —
   verified: three questions (noul + choice + score) on one `state` returned in a single response
   with `output_tokens` of 3.
 - `probabilities` for `score` are keyed by **index strings** (`"0"`, `"1"`, ...), and `legend` maps
   index → label — easy to get backwards when parsing.
-
-## Upgrading the plugin
-
-The decision-model sender and its MCP surface are loaded per session. After an
-upgrade, restart the AI harness (or force-quit any stale server process) so the
-new version is the one actually called.
